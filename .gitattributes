@@ -1,0 +1,12 @@
+* text=auto
+
+# Windows scripts: normalize in Git, check out with CRLF.
+*.ahk text eol=crlf
+*.ps1 text eol=crlf
+
+# Documentation and repository configuration
+*.md text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+.editorconfig text eol=lf
+LICENSE text eol=lf

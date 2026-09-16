@@ -1,0 +1,19 @@
+# Local settings, browser registrations and video metadata
+/settings.ini
+/reaction_selectors.json
+/video_metadata_cache.json
+
+# Temporary files used for atomic saves
+/settings.ini.new
+/reaction_selectors.json.new
+/video_metadata_cache.json.*.new
+
+# Local editor and OS files
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
