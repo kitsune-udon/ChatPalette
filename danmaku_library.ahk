@@ -1,44 +1,26 @@
-﻿; Shared text presets are independent of channel detection.
-GetDanmakuItems(common, profile) {
+﻿GetDanmakuItems(common, profile) {
     return common ? SharedDanmakuItems : (profile ? profile.Items : [])
 }
-
-SetDanmakuItem(items, index, item) {
-    if index
-        items[index] := item
-    else
-        items.Push(item)
+ItemSlot(item) {
+    return item.HasOwnProp("Slot") ? item.Slot : 0
 }
-
-DuplicateDanmakuItem(items, index) {
-    item := items[index]
-    items.InsertAt(index + 1, {Name: item.Name "（コピー）", Text: item.Text})
-}
-
-ReorderDanmakuItem(items, index, other) {
-    if index < 1 || other < 1 || index > items.Length || other > items.Length
-        return false
-    temp := items[index]
-    items[index] := items[other]
-    items[other] := temp
-    return true
-}
-
-CreateLibraryUndoSnapshot(targets, scope) {
-    changes := []
-    for items in targets {
-        before := []
-        for item in items
-            before.Push({Name: item.Name, Text: item.Text})
-        changes.Push({Target: items, Before: before})
+NormalizeLibrarySlots(items) {
+    used := Map()
+    for item in items {
+        slot := ItemSlot(item)
+        if slot < 1 || slot > 2 || used.Has(slot)
+            slot := 0
+        item.Slot := slot
+        if slot
+            used[slot] := true
     }
-    return {Changes: changes, Scope: scope}
 }
-
-RestoreLibraryUndoSnapshot(snapshot) {
-    for change in snapshot.Changes {
-        change.Target.Length := 0
-        for item in change.Before
-            change.Target.Push({Name: item.Name, Text: item.Text})
-    }
+AssignItemSlot(items, index, slot) {
+    if !IsInteger(index) || !IsInteger(slot) || index < 1 || index > items.Length || slot < 0 || slot > 2
+        throw Error("キーの割当が正しくありません。")
+    for i, item in items
+        if i = index
+            item.Slot := slot
+        else if slot && ItemSlot(item) = slot
+            item.Slot := 0
 }

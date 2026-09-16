@@ -1,26 +1,14 @@
 ﻿param([string]$SelectorsPath = (Join-Path $PSScriptRoot 'data\reaction_selectors.json'))
+. (Join-Path $PSScriptRoot 'browser_uia.ps1')
 . (Join-Path $PSScriptRoot 'reaction_store.ps1')
 # Reaction adapter: UI discovery and execution are separate from transport and UI.
 # Registration is explicit and read-only with respect to the YouTube page.
 $script:ReactionSelectorsPath = $SelectorsPath
 $script:BrowserReactionSelectors = Read-ReactionSelectors $SelectorsPath
-$script:LastReactionInvocationAt = [DateTime]::MinValue
+$script:ReactionRecordCache = $null
 $script:ReactionElementCache = @{}
 $script:ReactionPlans = @()
 $script:ReactionAliases = @('heart|ハート|[❤♥]', 'smil|grin|happy|笑|😀|😁|😄|😊', 'party|celebrat|tada|お祝い|祝|🎉', 'surpris|shock|astonish|flushed|open[_ -]?mouth|\bwow\b|驚|びっくり|赤面|赤らめ|😮|😲|😯|😳', '100|hundred|perfect|💯')
-
-function Get-BrowserProcessName([long]$WindowHandle) {
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
-    return (Get-Process -Id $root.Current.ProcessId).ProcessName
-}
-
-function Test-ElementWindow($Element, [long]$WindowHandle) {
-    for ($depth = 0; $depth -lt 45 -and $null -ne $Element; $depth++) {
-        if ($Element.Current.NativeWindowHandle -eq $WindowHandle) { return $true }
-        $Element = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($Element)
-    }
-    return $false
-}
 
 function Test-ReactionForeground([long]$WindowHandle) {
     return Test-ElementWindow ([System.Windows.Automation.AutomationElement]::FocusedElement) $WindowHandle
@@ -193,7 +181,15 @@ function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
 }
 
 function Get-ReactionRecord($Control) {
-    $info = $Control.Current
+    if ($null -eq $script:ReactionRecordCache) {
+        $script:ReactionRecordCache = [System.Windows.Automation.CacheRequest]::new()
+        foreach ($property in @('NameProperty','AutomationIdProperty','ClassNameProperty','ControlTypeProperty','IsOffscreenProperty','IsEnabledProperty')) {
+            $script:ReactionRecordCache.Add([System.Windows.Automation.AutomationElement]::$property)
+        }
+    }
+    # Refresh all attributes together; never reuse a previous property snapshot.
+    $snapshot = $Control.GetUpdatedCache($script:ReactionRecordCache)
+    $info = $snapshot.Cached
     return @{Element=$Control; Name=$info.Name; Id=$info.AutomationId; Class=$info.ClassName;
         Type=$info.ControlType.Id; Hidden=$info.IsOffscreen; Enabled=$info.IsEnabled;
         RuntimeId=($Control.GetRuntimeId() -join ',')}
@@ -239,7 +235,6 @@ function Invoke-ReactionRequest($Request) {
         $video = Read-BrowserVideoId ([long]$Request.Window)
         $reply.Video = $video
         if (-not $video) { return $reply }
-        if ($Request.Mode -eq 'reaction_context') { $reply.State = 'ok'; return $reply }
         if ($video -cne $Request.Video) { $reply.State = 'changed'; return $reply }
         if ($Request.Mode -eq 'reaction_capture') { return Register-ReactionSelectors $Request $reply }
         $browser = Get-BrowserProcessName ([long]$Request.Window)
@@ -252,7 +247,6 @@ function Invoke-ReactionRequest($Request) {
         }
         if ($Request.Mode -eq 'reaction_check') { $reply.State = 'ready'; return $reply }
         if ($Request.Mode -ne 'reaction_send' -or $Request.Reaction -notmatch '^[1-5]$') { return $reply }
-        if (([DateTime]::UtcNow - $script:LastReactionInvocationAt).TotalMilliseconds -lt 25) { $reply.State = 'cooldown'; return $reply }
         $target = $group.Elements[([int]$Request.Reaction - 1)]
         if (-not (Test-ReactionForeground ([long]$Request.Window))) {
             $reply.State = 'wrong_window'; return $reply
@@ -264,7 +258,6 @@ function Invoke-ReactionRequest($Request) {
             $reply.State = 'unsupported'; return $reply
         }
         # Never retry after invocation, even if the provider throws or the pipe breaks.
-        $script:LastReactionInvocationAt = [DateTime]::UtcNow
         $reply.State = 'unknown'
         $pattern.Invoke()
         $reply.State = 'operated'

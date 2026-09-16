@@ -1,5 +1,8 @@
 ﻿. (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+ . (Join-Path $release 'input_target.ps1')
+if (!(Get-Command Test-ElementWindow -ErrorAction SilentlyContinue)) { throw 'Standalone input target lacks window validation' }
+if (Get-Variable BrowserReactionSelectors -Scope Script -ErrorAction SilentlyContinue) { throw 'Input target initialized reaction registration' }
 . (Join-Path $release 'browser_worker.ps1') -Library
 $script:checks = 0
 function Assert($value, $label) { if (!$value) { throw $label }; $script:checks++ }
@@ -79,7 +82,9 @@ Assert ((Get-YouTubeInputKind @($record,
 $script:video = 'abcdefghijk'
 $script:kind = 'comment'
 function Read-BrowserVideoId($WindowHandle) { return $script:video }
-function Get-FocusedYouTubeInput($WindowHandle) { return $script:kind }
+function Get-FocusedYouTubeInput($WindowHandle, [ref]$VerifiedElement) { $VerifiedElement.Value = "original"; return $script:kind }
+function Test-FocusedInputIdentity($VerifiedElement, $WindowHandle) { return $VerifiedElement -eq $script:focusedId -and !!$script:kind }
+$script:focusedId = "original"
 function Fetch-Metadata($Video) { throw 'Input verification must not fetch metadata' }
 function Verify($video) { Invoke-WorkerRequest @{Mode='verify_input'; Seq=1; Window=123; Video=$video} }
 Assert ((Verify '').State -eq 'ok') 'manual mode still verifies target'
@@ -89,4 +94,13 @@ $script:kind = ''
 Assert ((Verify '').State -eq 'wrong_input') 'unknown focus rejected'
 $script:video = ''
 Assert ((Verify '').State -eq 'unavailable') 'non YouTube target rejected'
+$script:video = 'abcdefghijk'
+$script:kind = 'chat'
+$script:reads = 0
+function Read-BrowserVideoId($WindowHandle) {
+    $script:reads++
+    if ($script:reads -eq 2) { $script:focusedId = 'another-editable-field' }
+    return $script:video
+}
+Assert ((Verify '').State -eq 'wrong_input') 'focus changed during final URL read is rejected even if new field is editable'
 Write-Output "PASS: $script:checks input checks; no real UI or network used."

@@ -52,11 +52,11 @@ Windows PowerShell 5.1で日本語を含むスクリプトを確実に読める�
 ## リリース前の確認
 
 1. 配布予定のコードを新しいフォルダーへコピーし、INI・JSONを置かずに起動する。
-2. 空のホーム・投稿者管理・各設定タブが表示され、サンプルが生成されないことを確認する。
-3. 最初の投稿者と弾幕を追加し、保存・再起動で内容が維持されることを確認する。
-4. 最後の投稿者の削除と取り消し、投稿者0件での共通弾幕編集を確認する。
-5. 投稿者別・共通の未保存変更、切り替え制約、保存失敗時の保持を確認する。
-6. リアクションはまず登録と「送信せずに検出を確認」で確認する。送信を伴う確認は明示的に行う。
+2. 空のパレット・管理画面が表示され、サンプルが生成されないことを確認する。
+3. 最初の配信者と弾幕を追加し、保存・再起動で内容が維持されることを確認する。
+4. 最後の配信者の削除と取り消し、配信者0件での共通弾幕編集を確認する。
+5. 入力対象と編集対象の独立、動画変更時の入力拒否、並べ替え後のキー割当、複数段階の取り消し、保存失敗時の保持を確認する。
+6. リアクションはまず登録と「② 送らずに確認」で確認する。送信を伴う確認は明示的に行う。
 7. 配布物に個人データ・一時ファイルが入っていないことを確認する。
 
 ## 自動テスト
@@ -69,7 +69,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
 
 AutoHotkeyを標準外の場所に置いている場合は `-AutoHotkeyPath '実行ファイルの絶対パス'` を指定します。各テストは新しい一時実行フォルダーを作り、固定データまたは空状態で検証します。実際の入力・リアクション操作・ネットワーク取得は代替処理で置き換えます。利用者の `data/` を読み書きしません。一括実行後の一時ファイルは成功・失敗のどちらでも削除します。
 
-自動テストは入力欄の分類規則・拒否条件を検証します。ブラウザーごとの実画面の互換性検証は別途必要です。
+自動テストはサービスのGUI非依存、ライブラリ保存による他設定の保護、配信者の単一判別と確定済み動画の検証、入力欄の分類規則・拒否条件を検証します。ブラウザーごとの実画面の互換性検証は別途必要です。
+
+`test-review-regressions.ps1` は診断・結果保持・設定破損の回帰、`test-viewports.ps1` は小さい表示領域・フォーカス追従・進捗描画を独立した初期状態で検証します。配置の単体検証は `LayoutPalette`／`LayoutManagement`、実際のリサイズ検証は `ResizePalette`／`ResizeManagement` と `PanelViewport` を通します。
 
 ## 配布ZIPを作る
 
@@ -79,7 +81,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.
 
 `dist/ChatPalette-バージョン.zip` を作成します。既存の同名ZIPは上書きしません。コード・文書・固定テストデータ・開発設定を明示的に収集し、個人の `data/`・`.git/`・テスト実行ファイルは収集しません。ZIP内の `SHA256SUMS` で内容のハッシュを確認できます。
 
-更新時は `VERSION` と `CHANGELOG.md` を更新します。GitへのコミットやGitHubへのアップロードは、このスクリプトでは行いません。
+更新時は `VERSION`、`CHANGELOG.md`、`README.md` のバージョン表記を更新し、番号が一致することを確認します。GitへのコミットやGitHubへのアップロードは、このスクリプトでは行いません。
 
 判別方式・キャッシュ・通信の詳細は[設計資料](architecture.md)を参照してください。
 
@@ -89,9 +91,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.
 
 ## 名前の規則
 
-- ファイル名は担当を示す。`settings_store.ahk` はファイル入出力、`settings_service.ahk` は設定の確定、`worker_client.ahk` は常駐処理への通信を担当する。
+- ファイル名は担当を示す。`settings_store.ahk` はファイル入出力、`settings_service.ahk` は共通設定の確定、`worker_client.ahk` は常駐処理への通信を担当する。
 - PowerShellの `browser_worker.ps1` は常駐処理の入口、`reaction_automation.ps1` はリアクション操作を担当する。
-- 弾幕の識別子には `Danmaku`、全投稿者で共有するデータには `Shared`、投稿者別のデータには `Profile` を用いる。
-- `SelectedProfileIndex` は配列の選択位置、`TargetBrowserHwnd` は入力先ウィンドウ、`ActiveReactionJob` は実行中の処理を表す。
-- 操作は `Insert`、`Delete`、`Commit`、`Read` などで目的を示す。`UndoLibraryChange` は削除だけでなく移動も取り消す。
+- 弾幕の識別子には `Danmaku`、全配信者で共有するデータには `Shared`、配信者別のデータには `Profile` を用いる。
+- `InputProfileIndex` は入力用の配信者選択、`EditProfileIndex` は管理画面の編集対象、`TargetBrowserHwnd` は入力先ウィンドウ、`ActiveReactionJob` は実行中の処理を表す。
+- 操作は `Insert`、`Delete`、`Commit`、`Read` などで目的を示す。`UndoLibraryChange` は弾幕・配信者の変更履歴を1件取り消す。
 - 保存ファイルは `settings.ini`、`reaction_selectors.json`、`video_metadata_cache.json`。保存先は `data/`。
+
+### 命名・責務分離の回帰確認
+
+自動テストでは、表示文言を変更した状態の配置、既存INIキー名の読み書き、汎用通知とリアクション結果の独立、`browser_context` がリアクション処理・メタデータ取得を経由しないことを確認します。キー検証モジュールもGUI非依存の検査対象です。

@@ -26,9 +26,13 @@ function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
 function Request([string]$Mode, [string]$Expected = 'abcdefghijk', [string]$Reaction = '1') {
     return Invoke-WorkerRequest @{Mode=$Mode; Video=$Expected; Reaction=$Reaction; Window='123'; Seq='1'}
 }
-Assert ((Request 'reaction_context').State -eq 'ok') 'context does not require channel mapping'
+Assert ((Request 'reaction_status').State -eq 'not_registered' -and $script:invocations -eq 0) 'status reports absent registration without invoking'
+Assert ((Request 'browser_context').State -eq 'ok') 'context does not require channel mapping'
 Assert ((Request 'reaction_send').State -eq 'not_registered') 'unregistered blocks'
 $script:BrowserReactionSelectors['fixture'] = @{tokens=@()}
+$script:menu = $false
+Assert ((Request 'reaction_status').State -eq 'configured' -and $script:invocations -eq 0) 'saved registration status does not need open menu or invoke'
+$script:menu = $true
 Assert ((Request 'reaction_check').State -eq 'ready' -and $script:invocations -eq 0) 'check never invokes'
 Assert ((Request 'reaction_capture' 'ABCDEFGHIJK').State -eq 'changed') 'capture rejects changed video'
 Assert ((Request 'reaction_send' 'ABCDEFGHIJK').State -eq 'changed') 'send rejects changed video'
@@ -43,12 +47,11 @@ Assert ((Request 'reaction_send').State -eq 'menu_closed') 'disabled target bloc
 $script:target.Current.IsEnabled = $true
 Assert ((Request 'reaction_send' 'abcdefghijk' '6').State -eq 'unavailable') 'unknown reaction blocks'
 Assert ((Request 'reaction_send').State -eq 'operated' -and $script:invocations -eq 1) 'one operation'
-Assert ((Request 'reaction_send').State -eq 'cooldown' -and $script:invocations -eq 1) 'repeat cooldown'
-$script:LastReactionInvocationAt = [DateTime]::MinValue
+Assert ((Request 'reaction_send').State -eq 'operated' -and $script:invocations -eq 2) '待機なし does not impose hidden cooldown'
 $script:throwOnInvoke = $true
-Assert ((Request 'reaction_send').State -eq 'unknown' -and $script:invocations -eq 2) 'uncertain completion never retries'
+Assert ((Request 'reaction_send').State -eq 'unknown' -and $script:invocations -eq 3) 'uncertain completion never retries'
 $script:video = ''
-Assert ((Request 'reaction_send').State -eq 'unavailable' -and $script:invocations -eq 2) 'unreadable URL blocks'
+Assert ((Request 'reaction_send').State -eq 'unavailable' -and $script:invocations -eq 3) 'unreadable URL blocks'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $script:fakeButtons = @()
@@ -117,3 +120,18 @@ Assert ($terms.Count -eq 5) 'lookup has five registered alternatives'
 $customTerms = $terms[2].GetConditions()
 Assert ($customTerms[1].Value -eq 50026) 'lookup retains captured Custom control type'
 Write-Output 'PASS: corrupt registration and Custom control lookup checks'
+
+# Generic context must not dispatch into reaction automation or metadata lookup.
+$script:video = 'abcdefghijk'
+$oldReactionHandler = ${function:Invoke-ReactionRequest}
+$oldResolver = ${function:Resolve-Video}
+try {
+    function Invoke-ReactionRequest($Request) { throw 'Context entered reaction handler' }
+    function Resolve-Video($Video) { throw 'Context fetched metadata' }
+    $context = Invoke-WorkerRequest @{Mode='browser_context'; Window=123; Seq=7}
+    Assert ($context.State -eq 'ok' -and $context.Video -ceq $script:video) 'generic context bypasses reactions and metadata'
+} finally {
+    Set-Item Function:Invoke-ReactionRequest $oldReactionHandler
+    Set-Item Function:Resolve-Video $oldResolver
+}
+Write-Output 'PASS: generic browser context is independent of reactions and metadata'

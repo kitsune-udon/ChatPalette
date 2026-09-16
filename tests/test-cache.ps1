@@ -10,6 +10,7 @@ $saved = @{tokens=$tokens}
 $elements = @(foreach ($i in 1..5) {
     $control = [pscustomobject]@{Id=$i;Current=[pscustomobject]@{
         Name="reaction$i";AutomationId="id$i";ClassName='reaction';ControlType=[pscustomobject]@{Id=50000};IsOffscreen=$false;IsEnabled=$true}}
+    $control | Add-Member ScriptMethod GetUpdatedCache { param($request) return [pscustomobject]@{Cached=$this.Current} }
     $control | Add-Member ScriptMethod GetRuntimeId { return @($this.Id) }
     $control
 })

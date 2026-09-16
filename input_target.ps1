@@ -1,4 +1,5 @@
-﻿# Pure classification of a focused editable element and its bounded ancestry.
+﻿. (Join-Path $PSScriptRoot 'browser_uia.ps1')
+# Pure classification of a focused editable element and its bounded ancestry.
 function Get-YouTubeInputKind($Records) {
     if (!$Records -or $Records.Count -eq 0) { return '' }
     $field = $Records[0]
@@ -39,7 +40,8 @@ function Get-InputRecord($Element, [bool]$Focused) {
         Focused=$info.HasKeyboardFocus; Enabled=$info.IsEnabled; Hidden=$info.IsOffscreen; Editable=$editable}
 }
 
-function Get-FocusedYouTubeInput([long]$WindowHandle) {
+function Get-FocusedYouTubeInput([long]$WindowHandle, [ref]$VerifiedElement) {
+    $VerifiedElement.Value = $null
     $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
     if ($null -eq $focused -or !(Test-ElementWindow $focused $WindowHandle)) { return '' }
     $records = @()
@@ -54,5 +56,17 @@ function Get-FocusedYouTubeInput([long]$WindowHandle) {
     $latest = [System.Windows.Automation.AutomationElement]::FocusedElement
     if ($null -eq $latest -or ![System.Windows.Automation.Automation]::Compare($focused, $latest)) { return '' }
     if (!(Test-ElementWindow $latest $WindowHandle)) { return '' }
+    $VerifiedElement.Value = $focused
     return $kind
+}
+
+
+# Revalidate the exact element after the final URL read; a second editable field is not equivalent.
+function Test-FocusedInputIdentity($VerifiedElement, [long]$WindowHandle) {
+    if ($null -eq $VerifiedElement) { return $false }
+    $latest = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($null -eq $latest -or ![System.Windows.Automation.Automation]::Compare($VerifiedElement, $latest)) { return $false }
+    if (!(Test-ElementWindow $latest $WindowHandle)) { return $false }
+    $record = Get-InputRecord $latest $true
+    return $record.Focused -and $record.Enabled -and !$record.Hidden -and $record.Editable
 }

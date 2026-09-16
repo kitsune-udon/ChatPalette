@@ -1,21 +1,13 @@
 ﻿; Feature module. The worker adapter is in reaction_automation.ps1.
 InitReactions() {
     InstallKeybdHook()
-    global ReactionDefault, ReactionShortcut, ActiveReactionJob, ReactionChoice, ReactionScope
-    global ReactionInfo, ReactionKeyControl, FeatureTabs, ReactionNames
-    global ReactionCount, ReactionCountChoice
-    global ReactionInterval, ReactionIntervalChoice
+    global DefaultReactionKind, ReactionShortcut, ActiveReactionJob
+    global DefaultReactionCount
+    global DefaultReactionIntervalMs
     ActiveReactionJob := 0
-    global ReactionLastDetail := "", ReactionExecutionStatus := {Phase: "idle", Message: "", Final: false}
-    global HasUnsavedReactionSettings := false, ReactionSettingsInfo := 0, ReactionLastResult := "まだ実行していません。"
-    global HasUnsavedProfileReaction := false, HasUnsavedSharedReaction := false
-    global ProfileReactionDraft := 0, SharedReactionDraft := 0
+    global ReactionExecutionStatus := {Phase: "idle", Message: "", Final: false}
+    global LastReactionResult := {Message:"まだ実行していません。",Detail:"",Completed:0,Total:0,Mode:"",Reason:"idle"}
     global ReactionApplied := ""
-    global ReactionOverlay := 0, ReactionOverlayText := 0
-    global ReactionStatusFinal := false
-    ReactionChoice := 0
-    ReactionInfo := 0
-    ReactionNames := ["❤️ ハート", "😁 笑顔", "🎉 お祝い", "😲 驚き", "💯 100点"]
     try SetReactionHotkey(ReactionShortcut)
     catch {
         ReactionShortcut := ReactionDefaults.Shortcut
@@ -27,177 +19,42 @@ InitReactions() {
     global ReactionsInitialized := true
 }
 
-ReactionHotkeyContext(*) {
-    return IsBrowser(WinExist("A"))
-}
-
-ShortcutBlocked() {
-    if ProfileManagerActive {
-        ToolTip("投稿者・チャンネル管理を閉じてから実行してください。")
-        SetTimer(() => ToolTip(), -2500)
-        return true
-    }
-    if !IsBrowserOperationBusy && !DanmakuEditorWindow && !ActiveReactionJob
-        return false
-    message := ActiveReactionJob ? "リアクション処理中です。Escで停止してから押してください。"
-        : (IsBrowserOperationBusy ? "前の処理を確認中です。完了後にもう一度押してください。" : "編集中です。編集画面を閉じてください。")
-    ToolTip(message)
-    SetTimer(() => ToolTip(), -2500)
-    return true
-}
-
-WaitShortcutRelease(keys) {
-    for key in keys {
-        if !KeyWait(key, "T2") {
-            ToolTip("キーを離してから、もう一度押してください。")
-            SetTimer(() => ToolTip(), -2500)
-            return false
-        }
-    }
-    return true
-}
-
-SetReactionHotkey(key, enabled := true) {
-    if enabled && IsReservedReactionKey(key)
-        throw Error("パネル・弾幕用のキーは指定できません。")
-    HotIf(ReactionHotkeyContext)
-    try {
-        if enabled
-            Hotkey(key, QueueQuickReaction, "T1 On")
-        else
-            Hotkey(key, "Off")
-    } finally {
-        HotIf()
-    }
-}
-
-IsReservedReactionKey(key) {
-    plain := StrLower(RegExReplace(key, "[!^+]", ""))
-    return InStr(key, "^") && InStr(key, "!") && !InStr(key, "+") && (plain = "1" || plain = "2" || plain = "3" || plain = "4" || plain = "q")
-}
-
-ResetReactionKey(*) {
-    ReactionKeyControl.Value := ReactionDefaults.Shortcut
-    CaptureSharedReactionEdits()
-}
-CaptureSharedReactionEdits(*) {
-    global HasUnsavedReactionSettings := true, HasUnsavedSharedReaction := true
-    UpdateSharedDraftFromControls()
-    UpdateReactionSettingsInfo()
-}
-
-CaptureProfileReactionEdits(*) {
-    if !ProfileReactionDraft
-        return
-    global HasUnsavedReactionSettings := true, HasUnsavedProfileReaction := true
-    UpdateProfileDraftFromControls()
-    UpdateReactionSettingsInfo()
-}
-
-SaveProfileReactionEdits(*) {
-    global HasUnsavedProfileReaction, HasUnsavedReactionSettings
-    if IsBrowserOperationBusy || ActiveReactionJob
-        return
-    if !ProfileReactionDraft || ProfileReactionDraft.Profile != Profiles[SelectedProfileIndex] {
-        ProfileSettingsInfo.Text := "編集対象が変わりました。変更を戻してから編集し直してください。"
-        return
-    }
-    try CommitProfileReactionDraft(ProfileReactionDraft, Profiles[SelectedProfileIndex])
-    catch as failure {
-        ProfileSettingsInfo.Text := "保存できませんでした。" failure.Message
-        return
-    }
-    BeginProfileReactionDraft()
-    RefreshReactionUI()
-}
-
-DiscardProfileReactionEdits(*) {
-    BeginProfileReactionDraft()
-    RefreshReactionUI()
-}
-
-ReactionKeyLabel() {
-    return (InStr(ReactionShortcut, "^") ? "Ctrl＋" : "")
-        . (InStr(ReactionShortcut, "!") ? "Alt＋" : "")
-        . (InStr(ReactionShortcut, "+") ? "Shift＋" : "")
-        . StrUpper(RegExReplace(ReactionShortcut, "[!^+]", ""))
-}
-
-DiscardSharedReactionEdits(*) {
-    BeginSharedReactionDraft()
-    ReactionDefaultChoice.Choose(ReactionDefault)
-    ReactionKeyControl.Value := ReactionShortcut
-    for i, value in ReactionCounts
-        if value = ReactionCount
-            ReactionCountChoice.Choose(i)
-    for i, value in ReactionIntervals
-        if value = ReactionInterval
-            ReactionIntervalChoice.Choose(i)
-    if !HasUnsavedProfileReaction
-        RefreshReactionUI()
-    UpdateReactionSettingsInfo()
-}
-
 QueueQuickReaction(*) {
     global ActiveReactionJob
     if ShortcutBlocked()
         return
-    if HasUnsavedReactionSettings {
-        SetReactionStatus("未保存の変更があります。Ctrl＋Alt＋Qで設定画面を開き、保存するか変更を戻してください。", true)
-        ShowReactionProgress()
-        return
-    }
     ActiveReactionJob := {Mode: "queued", Cancelled: false, Window: WinExist("A")}
     SetReactionStatus("ショートカットを受け付けました。キーを離してください。", false, "queued")
     ShowReactionProgress()
     SetTimer(QuickReaction, -1)
 }
 
-SaveSharedReactionEdits(*) {
-    global ReactionDefault, ReactionShortcut, ReactionCount, ReactionInterval, HasUnsavedReactionSettings, HasUnsavedSharedReaction
-    if IsBrowserOperationBusy || ActiveReactionJob
-        return
-    try CommitSharedReactionDraft(SharedReactionDraft)
-    catch as failure {
-        CommonSettingsInfo.Text := "保存できませんでした。" failure.Message
-        return
-    }
-    HasUnsavedSharedReaction := false
-    HasUnsavedReactionSettings := HasUnsavedProfileReaction
-    if !HasUnsavedProfileReaction
-        RefreshReactionUI()
-    UpdateReactionSettingsInfo()
-    CommonSettingsInfo.Text := "共通のリアクション設定を保存しました。"
-}
-
-ScheduleReaction(mode, delay) {
+ScheduleReaction(mode, delay, options := 0) {
     global ActiveReactionJob
     if IsBrowserOperationBusy || DanmakuEditorWindow || ActiveReactionJob
-        return
-    if mode = "reaction_send" && HasUnsavedReactionSettings {
-        SetReactionStatus("設定を保存するか、変更を戻してから実行してください。", true)
-        return
-    }
+        return false
     if !IsBrowser(TargetBrowserHwnd) {
         ReactionNotice("wrong_window")
-        return
+        return false
     }
-    context := RequestBrowserOperation(TargetBrowserHwnd, "reaction_context")
+    context := RequestBrowserOperation(TargetBrowserHwnd, "browser_context")
     if context.State != "ok" {
         ReactionNotice(context.State)
-        return
+        return false
     }
-    choice := mode = "reaction_send" ? ResolveReactionChoice(TargetBrowserHwnd, context.Video) : ReactionChoice.Value
+    choice := options ? options.Reaction : DefaultReactionKind
+    global ReactionApplied := "適用：" (options ? "今回の設定" : "共通設定") " / " ReactionNames[choice]
     if !choice
-        return
+        return false
     ActiveReactionJob := {Mode: mode, Window: TargetBrowserHwnd, Video: context.Video,
-        Choice: choice, Remaining: delay, Total: ReactionCount,
-        Completed: 0, Cancelled: false, Interval: ReactionInterval}
-    MainWindow.Hide()
+        Choice: choice, Remaining: delay, Total: options ? options.Count : DefaultReactionCount,
+        Completed: 0, Cancelled: false, Interval: options ? options.Interval : DefaultReactionIntervalMs}
+    PaletteWindow.Hide()
     WinActivate("ahk_id " TargetBrowserHwnd)
     SetReactionStatus(mode = "reaction_capture" ? "登録待機中：YouTubeの♡にマウスを重ねてください。Escで中止。" : delay "秒後に開始します。♡のメニューを開いてください。")
     ShowReactionProgress()
     SetTimer(ReactionCountdown, 1000)
+    return true
 }
 
 ReactionCountdown() {
@@ -207,8 +64,9 @@ ReactionCountdown() {
         return
     }
     if !WinActive("ahk_id " ActiveReactionJob.Window) {
+        stoppedJob := ActiveReactionJob
         CancelReaction()
-        ReactionNotice("wrong_window")
+        ReactionNotice("wrong_window","","",stoppedJob)
         return
     }
     ActiveReactionJob.Remaining--
@@ -230,7 +88,7 @@ ReactionCountdown() {
         if job.Cancelled {
             SetReactionStatus("登録・確認を中止しました。", true)
         } else if ShouldWaitForRegistration(job, reply) {
-            global ReactionLastDetail := reply.HasOwnProp("Detail") ? reply.Detail : ""
+            job.Detail := reply.HasOwnProp("Detail") ? reply.Detail : ""
             SetReactionStatus("登録待機中：♡のメニューを開き、マウスをその上に置いてください。Escで中止。")
             SetTimer(ReactionCountdown, -1000)
             return
@@ -260,20 +118,12 @@ CancelReaction(*) {
             return
         }
         if ActiveReactionJob.HasOwnProp("Completed")
-            SetReactionStatus("中止しました。操作済み " ActiveReactionJob.Completed " / " ActiveReactionJob.Total " 回。", true)
+            SetReactionStatus("中止しました。操作済み " ActiveReactionJob.Completed " / " ActiveReactionJob.Total " 回。", true,"","",ActiveReactionJob,"cancelled")
         else
-            SetReactionStatus("中止しました。", true)
+            SetReactionStatus("中止しました。", true,"","",ActiveReactionJob,"cancelled")
     }
     ActiveReactionJob := 0
     ToolTip()
-}
-
-IsReactionCount(value) {
-    for count in ReactionCounts {
-        if value = count
-            return true
-    }
-    return false
 }
 
 ReactionSendNext() {
@@ -283,17 +133,53 @@ ReactionSendNext() {
     job := ActiveReactionJob
     if job.Cancelled || !WinActive("ahk_id " job.Window) {
         CancelReaction()
-        SetReactionStatus("操作先が変わったため停止しました。操作済み " job.Completed " / " job.Total " 回。", true)
+        SetReactionStatus("操作先が変わったため停止しました。操作済み " job.Completed " / " job.Total " 回。", true,"","",job,"wrong_window")
         return
     }
     try {
-        reply := RequestBrowserOperation(job.Window, "reaction_send", job.Video, "Reaction=" job.Choice "`n")
-        ApplyReactionResult(job, reply)
+        while ActiveReactionJob = job && !job.Cancelled {
+            if !WaitReactionInterval(job)
+                return
+            if !WinActive("ahk_id " job.Window) {
+                CancelReaction()
+                ReactionNotice("wrong_window","","",job)
+                return
+            }
+            job.StartedAt := ReactionClockMs()
+            reply := RequestBrowserOperation(job.Window, "reaction_send", job.Video, "Reaction=" job.Choice "`n")
+            if ActiveReactionJob != job
+                return
+            ApplyReactionResult(job, reply)
+        }
     } catch as operationError {
         SetTimer(ReactionSendNext, 0)
         ActiveReactionJob := 0
-        ReactionNotice("unknown", operationError.Message)
+        ReactionNotice("unknown", operationError.Message,"",job)
     }
+}
+
+ReactionClockMs() {
+    static frequency := 0
+    if !frequency
+        DllCall("QueryPerformanceFrequency", "Int64*", &frequency)
+    DllCall("QueryPerformanceCounter", "Int64*", &counter := 0)
+    return counter * 1000 / frequency
+}
+
+ReactionWaitRemaining(job, now) {
+    return job.Interval = 0 || !job.HasOwnProp("StartedAt") ? 0 : Max(0, job.StartedAt + job.Interval - now)
+}
+
+WaitReactionInterval(job) {
+    ; Always pump cancellation, including 待機なし. Never queue concurrent requests.
+    Sleep(-1)
+    while ActiveReactionJob = job && !job.Cancelled {
+        remaining := ReactionWaitRemaining(job, ReactionClockMs())
+        if remaining <= 0
+            return true
+        Sleep(Min(10, Ceil(remaining)))
+    }
+    return false
 }
 
 ApplyReactionResult(job, reply) {
@@ -301,7 +187,7 @@ ApplyReactionResult(job, reply) {
     if reply.State != "operated" {
         SetTimer(ReactionSendNext, 0)
         ActiveReactionJob := 0
-        ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "", " 操作済み " job.Completed " / " job.Total " 回で停止。")
+        ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "", " 操作済み " job.Completed " / " job.Total " 回で停止。",job)
         return
     }
     if !job.HasOwnProp("FirstOperationAt") {
@@ -314,15 +200,11 @@ ApplyReactionResult(job, reply) {
     progress := ReactionApplied "`n操作済み " job.Completed " / " job.Total " 回" job.Measurement
     if job.Cancelled || job.Completed >= job.Total {
         ActiveReactionJob := 0
-        SetReactionStatus(progress "。" (job.Cancelled ? "中止しました。" : "完了しました。") " YouTube側の受理回数は未確認です。", true)
-        ToolTip(ReactionExecutionStatus.Message)
-        SetTimer(() => ToolTip(), -4000)
+        SetReactionStatus(progress "。" (job.Cancelled ? "中止しました。" : "完了しました。") " YouTube側の受理回数は未確認です。", true,"","",job,job.Cancelled ? "cancelled" : "completed")
         return
     }
     SetReactionStatus(progress "。実行中：Escで停止。")
-    ToolTip(ReactionExecutionStatus.Message)
-    ; One-shot scheduling: no queued requests and no catch-up burst.
-    SetTimer(ReactionSendNext, -job.Interval)
+    ; The serial loop schedules against this operation's start, not its completion.
 }
 
 QuickReaction(*) {
@@ -338,18 +220,19 @@ QuickReaction(*) {
             return
         if ActiveReactionJob != queuedJob || queuedJob.Cancelled || !WinActive("ahk_id " hwnd)
             return
-        context := RequestBrowserOperation(hwnd, "reaction_context")
+        context := RequestBrowserOperation(hwnd, "browser_context")
         if ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         if context.State != "ok" || !WinActive("ahk_id " hwnd) {
             ReactionNotice("unavailable")
             return
         }
-        choice := ResolveReactionChoice(hwnd, context.Video)
+        choice := DefaultReactionKind
+        global ReactionApplied := "適用：共通設定 / " ReactionNames[choice]
         if !choice || ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         ActiveReactionJob := {Mode: "reaction_send", Window: hwnd, Video: context.Video,
-            Choice: choice, Total: ReactionCount, Completed: 0, Cancelled: false, Interval: ReactionInterval}
+            Choice: choice, Total: DefaultReactionCount, Completed: 0, Cancelled: false, Interval: DefaultReactionIntervalMs}
         batchStarted := true
         ReactionSendNext()
     } catch as operationError {
@@ -364,39 +247,16 @@ QuickReaction(*) {
     }
 }
 
-ResolveReactionChoice(hwnd, video) {
-    global ReactionApplied
-    ReactionApplied := "適用：共通設定 / " ReactionNames[ReactionDefault]
-    if !AutoMode && GetSelectedProfile() {
-        choice := Profiles[SelectedProfileIndex].Reaction ? Profiles[SelectedProfileIndex].Reaction : ReactionDefault
-        ReactionApplied := "適用：" Profiles[SelectedProfileIndex].Name " / " ReactionNames[choice]
-        return choice
-    }
-    overrides := false
-    for profile in Profiles
-        overrides := overrides || profile.Reaction > 0
-    if !overrides
-        return ReactionDefault
-    DetectedChannel := ResolveBrowserChannel(hwnd)
-    if DetectedChannel.State != "ok" {
-        ReactionNotice("unavailable")
-        return 0
-    }
-    if !(DetectedChannel.Video == video) {
-        ReactionNotice("changed")
-        return 0
-    }
-    match := ChannelIndex.Get(DetectedChannel.Channel, 0)
-    choice := match > 0 && Profiles[match].Reaction ? Profiles[match].Reaction : ReactionDefault
-    ReactionApplied := "適用：" (match > 0 ? Profiles[match].Name : "共通設定") " / " ReactionNames[choice]
-    return choice
-}
-
-; Execution status is owned here; controls are output only.
-SetReactionStatus(message, final := false, phase := "") {
-    global ReactionExecutionStatus, ReactionLastResult
+SetReactionStatus(message, final := false, phase := "", detail := "", job := 0, reason := "") {
+    global ReactionExecutionStatus, LastReactionResult
     ReactionExecutionStatus := {Phase: phase != "" ? phase : (final ? "finished" : "running"), Message: message, Final: final}
-    if final
-        ReactionLastResult := message
-    RenderReactionStatus(message, final)
+    if final {
+        if !job && ActiveReactionJob
+            job := ActiveReactionJob
+        LastReactionResult := {Message:message, Detail:detail,
+            Completed:job && job.HasOwnProp("Completed") ? job.Completed : 0,
+            Total:job && job.HasOwnProp("Total") ? job.Total : 0,
+            Mode:job && job.HasOwnProp("Mode") ? job.Mode : "", Reason:reason != "" ? reason : "finished", FinishedAt:FormatTime(,"yyyy/MM/dd HH:mm:ss")}
+    }
+    RenderReactionStatus()
 }
