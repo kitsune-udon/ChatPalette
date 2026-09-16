@@ -1,13 +1,13 @@
 ﻿$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$browser = [IO.File]::ReadAllText((Join-Path $release 'browser_service.ahk'))
+$browser = [IO.File]::ReadAllText((Join-Path $release 'src\browser\browser_service.ahk'))
 $browser = [regex]::Replace($browser, '(?ms)^IsBrowser\(hwnd\) \{.*?^\}', 'IsBrowser(hwnd) {`n    return hwnd = 123`n}'.Replace('`n',"`r`n"))
-[IO.File]::WriteAllText((Join-Path $release 'browser_service.ahk'),$browser,[Text.UTF8Encoding]::new($true))
-$worker = [IO.File]::ReadAllText((Join-Path $release 'worker_client.ahk')).Replace('SendWorkerRequest(hwnd,','UnusedRealWorkerRequest(hwnd,')
-[IO.File]::WriteAllText((Join-Path $release 'worker_client.ahk'),$worker,[Text.UTF8Encoding]::new($true))
-$reaction = [IO.File]::ReadAllText((Join-Path $release 'reaction_controller.ahk')).Replace('WinActive("ahk_id " job.Window)','ReviewWindowActive(job.Window)')
-[IO.File]::WriteAllText((Join-Path $release 'reaction_controller.ahk'),$reaction,[Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText((Join-Path $release 'src\browser\browser_service.ahk'),$browser,[Text.UTF8Encoding]::new($true))
+$worker = [IO.File]::ReadAllText((Join-Path $release 'src\browser\worker_client.ahk')).Replace('SendWorkerRequest(hwnd,','UnusedRealWorkerRequest(hwnd,')
+[IO.File]::WriteAllText((Join-Path $release 'src\browser\worker_client.ahk'),$worker,[Text.UTF8Encoding]::new($true))
+$reaction = [IO.File]::ReadAllText((Join-Path $release 'src\reactions\reaction_controller.ahk')).Replace('WinActive("ahk_id " job.Window)','ReviewWindowActive(job.Window)')
+[IO.File]::WriteAllText((Join-Path $release 'src\reactions\reaction_controller.ahk'),$reaction,[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
 global ReviewChecks := 0, ReviewFocusCalls := 0, ReviewFocusChanges := true

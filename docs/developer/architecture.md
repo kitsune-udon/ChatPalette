@@ -20,40 +20,62 @@ ChatPaletteの入口は `main.ahk`。Ctrl＋Alt＋Qで入力用パレットを�
 
 自動判別が失敗・チャンネル未連携の場合、以前の配信者の弾幕をパレットへ表示しない。実行時にも入力先を再検証する。削除等の確定時は入力用・編集用の選択をIDから引き直し、見つからなければ0にする。次の配列要素へ暗黙に切り替えない。
 
+## ファイル配置
+
+起動入口の `main.ahk` と `VERSION` はトップに置き、実装は `src/` にまとめる。フォルダー構成を保ったまま配布する。
+
+| ディレクトリ | 役割 |
+|---|---|
+| `src/app/` | 起動・終了、設定の復旧 |
+| `src/ui/` | 共通表示処理、ヘルプ、診断、進捗 |
+| `src/ui/palette/` | 入力用パレット |
+| `src/ui/management/` | 管理画面と編集ダイアログ |
+| `src/library/` | 弾幕・配信者の管理 |
+| `src/input/` | 弾幕入力の制御と実行 |
+| `src/reactions/` | リアクション実行の制御 |
+| `src/shortcuts/` | キーの検証・登録・呼び出し |
+| `src/settings/` | 設定の定義・検証・保存 |
+| `src/browser/` | ブラウザー連携、名前付きパイプ、PowerShellワーカー |
+| `data/` | 利用者の設定・キャッシュ。Git・配布対象外 |
+| `tests/` | 独立した環境での回帰テスト |
+| `scripts/` | 開発・配布用の処理 |
+
+AHKの実行基準はトップの `main.ahk` とする。PowerShell内のモジュール読み込みは各ファイルの `$PSScriptRoot` を基準にし、既定のデータ保存先はプロジェクト直下の `data/` とする。カレントディレクトリに依存させない。
+
 ## モジュール
 
 - `main.ahk`：初期化、モジュールの接続、常駐キーとトレイの登録。
-- `palette_controller.ahk`：パレット呼び出し、自動判別の適用、画面更新の調整。
-- `browser_service.ahk`：ブラウザー要求、同時実行の抑止、画面待機の開始・終了、入力直前の検証。通信自体は `worker_client.ahk` が担当する。
-- `palette_view.ahk`：入力用パレットの構築・表示・イベント。本文を直接入力せず、入力コントローラーへ依頼する。
-- `management_view.ahk`：管理画面の構築、表示内容の更新、各タブの配置。
-- `management_dialogs.ahk`：弾幕編集・移動、キー編集、チャンネル連携のダイアログ。保存・キャンセルの寿命を管理し、確定時はサービスへ依頼する。
-- `help_view.ahk`：目的別の使い方画面。
-- `management_controller.ahk`：編集対象の変更、保存、標準設定の読み込み、ブラウザー照会、配信者操作の調整。編集中の配信者をIDで選び直す。
-- `library_service.ahk`：弾幕・配信者の追加・編集・複製・並べ替え・移動・削除・チャンネル連携、保存、履歴。GUIと編集用の選択状態に依存しない。
-- `danmaku_library.ahk`：弾幕スコープとキー枠の取得・正規化・一意な割当。
-- `profile_service.ahk`：配信者ID、入力用選択の保存、チャンネル索引。管理画面の選択を扱わない。
-- `input_controller.ahk`：配信者・キー枠を一度だけ解決し、本文・ウィンドウ・動画IDを確定して入力処理へ渡す。
-- `text_input.ahk`：確定済みの本文を入力直前に再検証し、`SendText` で入力する。配信者を再判別しない。
-- `shortcut_controller.ahk`：キー解放待ち、編集・実行中の抑止、弾幕入力の呼び出し。
-- `shortcut_policy.ahk`：キーの検証・正規化・予約キー判定。GUI・登録処理に依存しない。
-- `shortcut_bindings.ahk`：実行時のキー登録・解除とブラウザー限定条件。設定保存時のロールバックからも利用する。
-- `reaction_controller.ahk`：リアクションの登録・確認・実行、開始待ち、回数・間隔・停止、実行状態。
-- `reaction_feedback.ahk`：進捗画面の初期化と表示。文言・終了状態は `ReactionExecutionStatus` から取得する。汎用の `PaletteStatusControl` の表示を実行状態として読み戻さない。
-- `window_presenter.ahk`：独自GUIの表示順序を統一。非表示でサイズ確定 → 配置・スクロール調整 → 表示・再描画。スクロールバーの変化で表示領域が変わった場合は表示前に再調整する。表示中の画面は隠し直さず、アクティブ化の有無を引数で指定する。
-- `ui_runtime.ahk`：通信待機中の画面制御、編集ダイアログの状態、操作案内。
-- `settings_store.ahk`：INIの読み書き・形式移行。長文・引用符・文字コードを保持する。
-- `settings_service.ahk`：設定スナップショット、共通設定の検証・確定、キー登録のロールバック。
-- `settings_schema.ahk`：選択肢・標準設定、`CreateReactionOptions` による明示的なリアクション設定値の生成。
-- `app_lifecycle.ahk`：データ配置と起動時の設定復旧。
-- `diagnostics.ahk`：診断スナップショット、画面、コピー。
-- `panel_viewport.ahk`：診断画面のスクロール・フォーカス追従。
-- `worker_client.ahk`：補助プロセス、名前付きパイプ、要求・応答、タイムアウト。GUIに依存しない。
-- `browser_worker.ps1`：動画ID取得と要求の振り分け。
-- `browser_uia.ps1`：共通のUI Automation処理とウィンドウ所属確認。リアクション登録を読み込まない。
-- `input_target.ps1`：フォーカスされた入力欄と祖先の検証。共通UIAモジュールだけで単独読み込みできる。
-- `reaction_automation.ps1` / `reaction_store.ps1`：リアクションの検出・操作と登録情報の検証・保存。
-- `video_metadata.ps1`：YouTube oEmbedと動画情報キャッシュ。
+- `src/ui/palette/palette_controller.ahk`：パレット呼び出し、自動判別の適用、画面更新の調整。
+- `src/browser/browser_service.ahk`：ブラウザー要求、同時実行の抑止、画面待機の開始・終了、入力直前の検証。通信自体は `src/browser/worker_client.ahk` が担当する。
+- `src/ui/palette/palette_view.ahk`：入力用パレットの構築・表示・イベント。本文を直接入力せず、入力コントローラーへ依頼する。
+- `src/ui/management/management_view.ahk`：管理画面の構築、表示内容の更新、各タブの配置。
+- `src/ui/management/management_dialogs.ahk`：弾幕編集・移動、キー編集、チャンネル連携のダイアログ。保存・キャンセルの寿命を管理し、確定時はサービスへ依頼する。
+- `src/ui/help_view.ahk`：目的別の使い方画面。
+- `src/ui/management/management_controller.ahk`：編集対象の変更、保存、標準設定の読み込み、ブラウザー照会、配信者操作の調整。編集中の配信者をIDで選び直す。
+- `src/library/library_service.ahk`：弾幕・配信者の追加・編集・複製・並べ替え・移動・削除・チャンネル連携、保存、履歴。GUIと編集用の選択状態に依存しない。
+- `src/library/danmaku_library.ahk`：弾幕スコープとキー枠の取得・正規化・一意な割当。
+- `src/library/profile_service.ahk`：配信者ID、入力用選択の保存、チャンネル索引。管理画面の選択を扱わない。
+- `src/input/input_controller.ahk`：配信者・キー枠を一度だけ解決し、本文・ウィンドウ・動画IDを確定して入力処理へ渡す。
+- `src/input/text_input.ahk`：確定済みの本文を入力直前に再検証し、`SendText` で入力する。配信者を再判別しない。
+- `src/shortcuts/shortcut_controller.ahk`：キー解放待ち、編集・実行中の抑止、弾幕入力の呼び出し。
+- `src/shortcuts/shortcut_policy.ahk`：キーの検証・正規化・予約キー判定。GUI・登録処理に依存しない。
+- `src/shortcuts/shortcut_bindings.ahk`：実行時のキー登録・解除とブラウザー限定条件。設定保存時のロールバックからも利用する。
+- `src/reactions/reaction_controller.ahk`：リアクションの登録・確認・実行、開始待ち、回数・間隔・停止、実行状態。
+- `src/ui/reaction_feedback.ahk`：進捗画面の初期化と表示。文言・終了状態は `ReactionExecutionStatus` から取得する。汎用の `PaletteStatusControl` の表示を実行状態として読み戻さない。
+- `src/ui/window_presenter.ahk`：独自GUIの表示順序を統一。非表示でサイズ確定 → 配置・スクロール調整 → 表示・再描画。スクロールバーの変化で表示領域が変わった場合は表示前に再調整する。表示中の画面は隠し直さず、アクティブ化の有無を引数で指定する。
+- `src/ui/ui_runtime.ahk`：通信待機中の画面制御、編集ダイアログの状態、操作案内。
+- `src/settings/settings_store.ahk`：INIの読み書き・形式移行。長文・引用符・文字コードを保持する。
+- `src/settings/settings_service.ahk`：設定スナップショット、共通設定の検証・確定、キー登録のロールバック。
+- `src/settings/settings_schema.ahk`：選択肢・標準設定、`CreateReactionOptions` による明示的なリアクション設定値の生成。
+- `src/app/app_lifecycle.ahk`：データ配置と起動時の設定復旧。
+- `src/ui/diagnostics.ahk`：診断スナップショット、画面、コピー。
+- `src/ui/panel_viewport.ahk`：診断画面のスクロール・フォーカス追従。
+- `src/browser/worker_client.ahk`：補助プロセス、名前付きパイプ、要求・応答、タイムアウト。GUIに依存しない。
+- `src/browser/browser_worker.ps1`：動画ID取得と要求の振り分け。
+- `src/browser/browser_uia.ps1`：共通のUI Automation処理とウィンドウ所属確認。リアクション登録を読み込まない。
+- `src/browser/input_target.ps1`：フォーカスされた入力欄と祖先の検証。共通UIAモジュールだけで単独読み込みできる。
+- `src/browser/reaction_automation.ps1` / `src/browser/reaction_store.ps1`：リアクションの検出・操作と登録情報の検証・保存。
+- `src/browser/video_metadata.ps1`：YouTube oEmbedと動画情報キャッシュ。
 
 `ActiveEditorDialog` は表示中の管理画面ではなく、入力を抑止する編集中ダイアログの情報を保持する。実際のダイアログ名で案内し、終了時には開始前のウィンドウ有効状態を復元する。
 

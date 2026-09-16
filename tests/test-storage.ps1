@@ -1,6 +1,6 @@
 ﻿. (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-. (Join-Path $release 'reaction_store.ps1')
+. (Join-Path $release 'src\browser\reaction_store.ps1')
 $tokens = @(1..5 | ForEach-Object { [pscustomobject]@{name="reaction$_"; id="id$_"; class='button'; type=50000} })
 $script:BrowserReactionSelectors = @{fixture=[pscustomobject]@{browser='fixture'; groupClass='old'; tokens=$tokens}}
 $old = $script:BrowserReactionSelectors['fixture']
@@ -35,7 +35,7 @@ if ($loaded.Count -ne 1 -or !$loaded.ContainsKey('fixture')) { throw 'Invalid en
 $CachePath = Join-Path $release 'cache.json'
 $script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 $script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)
-. (Join-Path $release 'video_metadata.ps1')
+. (Join-Path $release 'src\browser\video_metadata.ps1')
 $script:fetches = 0
 function Fetch-Metadata($Video) { $script:fetches++; return @{Author='fixture'; Channel='/channel/test'; Time=[DateTime]::UtcNow} }
 $null = Resolve-Video 'abcdefghijk'

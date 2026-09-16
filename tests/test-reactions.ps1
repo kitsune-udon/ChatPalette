@@ -1,7 +1,7 @@
 ﻿$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-. "$release\browser_worker.ps1" -Library
+. "$release\src\browser\browser_worker.ps1" -Library
 $script:checks = 0
 function Assert($condition, $label) { if (-not $condition) { throw "FAIL: $label" }; $script:checks++ }
 $script:video = 'abcdefghijk'

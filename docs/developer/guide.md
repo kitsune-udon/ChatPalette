@@ -4,13 +4,13 @@
 
 ## 実行構成
 
-入口は `main.ahk`。AutoHotkey v2からWindows PowerShellの `powershell.exe` を起動し、`browser_worker.ps1` が `reaction_automation.ps1` を読み込みます。ブラウザー操作はWindows UI Automationを利用します。
+入口は `main.ahk`。AutoHotkey v2からWindows PowerShellの `powershell.exe` を起動し、`src/browser/browser_worker.ps1` が `src/browser/reaction_automation.ps1` を読み込みます。ブラウザー操作はWindows UI Automationを利用します。
 
 PowerShell 7への切り替えは実装していません。ブラウザーの起動やYouTubeへのログインは利用者が行います。
 
 ## 配布に含めるもの
 
-- プロジェクト直下のすべての `.ahk`・`.ps1` と `VERSION`（同じフォルダー構成を維持）
+- トップの `main.ahk`・`VERSION` と `src/` 内のソース一式（サブフォルダー構成を維持）
 - `README.md`、`LICENSE`、`docs/` 一式
 - ソース配布の場合は `.gitignore`、`.gitattributes`、`.editorconfig`
 
@@ -91,8 +91,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.
 
 ## 名前の規則
 
-- ファイル名は担当を示す。`settings_store.ahk` はファイル入出力、`settings_service.ahk` は共通設定の確定、`worker_client.ahk` は常駐処理への通信を担当する。
-- PowerShellの `browser_worker.ps1` は常駐処理の入口、`reaction_automation.ps1` はリアクション操作を担当する。
+- ファイル名は担当を示す。`src/settings/settings_store.ahk` はファイル入出力、`src/settings/settings_service.ahk` は共通設定の確定、`src/browser/worker_client.ahk` は常駐処理への通信を担当する。
+- PowerShellの `src/browser/browser_worker.ps1` は常駐処理の入口、`src/browser/reaction_automation.ps1` はリアクション操作を担当する。
 - 弾幕の識別子には `Danmaku`、全配信者で共有するデータには `Shared`、配信者別のデータには `Profile` を用いる。
 - `InputProfileIndex` は入力用の配信者選択、`EditProfileIndex` は管理画面の編集対象、`TargetBrowserHwnd` は入力先ウィンドウ、`ActiveReactionJob` は実行中の処理を表す。
 - 操作は `Insert`、`Delete`、`Commit`、`Read` などで目的を示す。`UndoLibraryChange` は弾幕・配信者の変更履歴を1件取り消す。

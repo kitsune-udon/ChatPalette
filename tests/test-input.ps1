@@ -1,9 +1,9 @@
 ﻿. (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
- . (Join-Path $release 'input_target.ps1')
+ . (Join-Path $release 'src\browser\input_target.ps1')
 if (!(Get-Command Test-ElementWindow -ErrorAction SilentlyContinue)) { throw 'Standalone input target lacks window validation' }
 if (Get-Variable BrowserReactionSelectors -Scope Script -ErrorAction SilentlyContinue) { throw 'Input target initialized reaction registration' }
-. (Join-Path $release 'browser_worker.ps1') -Library
+. (Join-Path $release 'src\browser\browser_worker.ps1') -Library
 $script:checks = 0
 function Assert($value, $label) { if (!$value) { throw $label }; $script:checks++ }
 function Field([string]$Id, [string]$Name = '') {

@@ -1,4 +1,4 @@
-﻿param([string]$PipeName, [int]$ParentProcessId, [string]$CachePath, [switch]$Library, [string]$DataDirectory = (Join-Path $PSScriptRoot 'data'))
+﻿param([string]$PipeName, [int]$ParentProcessId, [string]$CachePath, [switch]$Library, [string]$DataDirectory = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'data'))
 $ErrorActionPreference = 'Stop'
 $script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 $script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)

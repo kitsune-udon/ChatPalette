@@ -2,7 +2,7 @@
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
-foreach ($module in @('shortcut_policy.ahk','settings_schema.ahk','settings_store.ahk','worker_client.ahk','danmaku_library.ahk','library_service.ahk','profile_service.ahk','settings_service.ahk')) {
+foreach ($module in @('src\shortcuts\shortcut_policy.ahk','src\settings\settings_schema.ahk','src\settings\settings_store.ahk','src\browser\worker_client.ahk','src\library\danmaku_library.ahk','src\library\library_service.ahk','src\library\profile_service.ahk','src\settings\settings_service.ahk')) {
     $moduleText = [IO.File]::ReadAllText((Join-Path $release $module))
     $moduleText = [regex]::Replace($moduleText, '(?m)^\s*;.*$', '')
     if ($moduleText -match '\b(PaletteWindow|ManagementWindow|ManagementStatus|ManagedList|EditProfileIndex|EditScopeShared|ActiveEditorDialog|DanmakuEditorWindow|RefreshProfiles|RefreshManagement|RefreshPalette|ToolTip|MsgBox|InputBox|Gui)\b') {
@@ -10,7 +10,7 @@ foreach ($module in @('shortcut_policy.ahk','settings_schema.ahk','settings_stor
     }
 }
 # Application Gui.Show calls belong only to the shared presenter (menus/viewport wrappers excluded).
-foreach ($file in Get-ChildItem -LiteralPath $release -Filter '*.ahk' -File) {
+foreach ($file in Get-ChildItem -LiteralPath $release -Filter '*.ahk' -Recurse -File) {
     if ($file.Name -eq 'window_presenter.ahk') { continue }
     $text = [IO.File]::ReadAllText($file.FullName)
     if ($text -match '(?m)^\s*(?!menu\.|popup\.|panel\.Viewport\.)[\w.]+\.Show\(') {
@@ -19,15 +19,15 @@ foreach ($file in Get-ChildItem -LiteralPath $release -Filter '*.ahk' -File) {
 }
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
-$bindingSource = [IO.File]::ReadAllText("$fixture\shortcut_bindings.ahk").Replace('SetReactionHotkey(key, enabled := true) {', 'RegisterFixtureHotkey(key, enabled := true) {')
-[IO.File]::WriteAllText("$fixture\shortcut_bindings.ahk", $bindingSource, [Text.UTF8Encoding]::new($true))
-$shortcutSource = [IO.File]::ReadAllText("$fixture\shortcut_controller.ahk").Replace('WaitShortcutRelease(keys) {', 'WaitFixtureShortcutRelease(keys) {')
-[IO.File]::WriteAllText("$fixture\shortcut_controller.ahk", $shortcutSource, [Text.UTF8Encoding]::new($true))
-$reactionSource = [IO.File]::ReadAllText("$fixture\reaction_controller.ahk")
+$bindingSource = [IO.File]::ReadAllText("$fixture\src\shortcuts\shortcut_bindings.ahk").Replace('SetReactionHotkey(key, enabled := true) {', 'RegisterFixtureHotkey(key, enabled := true) {')
+[IO.File]::WriteAllText("$fixture\src\shortcuts\shortcut_bindings.ahk", $bindingSource, [Text.UTF8Encoding]::new($true))
+$shortcutSource = [IO.File]::ReadAllText("$fixture\src\shortcuts\shortcut_controller.ahk").Replace('WaitShortcutRelease(keys) {', 'WaitFixtureShortcutRelease(keys) {')
+[IO.File]::WriteAllText("$fixture\src\shortcuts\shortcut_controller.ahk", $shortcutSource, [Text.UTF8Encoding]::new($true))
+$reactionSource = [IO.File]::ReadAllText("$fixture\src\reactions\reaction_controller.ahk")
 $reactionSource = $reactionSource.Replace('WinActive("ahk_id " job.Window)', 'FixtureReactionWindowActive(job.Window)').Replace('job.StartedAt := ReactionClockMs()', 'job.StartedAt := ReactionClockMs()' + "`r`n            FixtureStarts.Push(job.StartedAt)")
-[IO.File]::WriteAllText("$fixture\reaction_controller.ahk", $reactionSource, [Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText("$fixture\src\reactions\reaction_controller.ahk", $reactionSource, [Text.UTF8Encoding]::new($true))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination "$fixture\settings.ini" -Force
-$worker = [IO.File]::ReadAllText("$release\browser_worker.ps1")
+$worker = [IO.File]::ReadAllText("$release\src\browser\browser_worker.ps1")
 $worker = $worker.Replace('function Invoke-WorkerRequest($Request) {', 'function Invoke-FixtureBaseRequest($Request) {')
 $mock = @'
 function Invoke-WorkerRequest($Request) {
@@ -52,17 +52,17 @@ function Get-ReactionInvoker($Target) { return $script:fakeInvoke }
 function Find-RegisteredReactions([long]$WindowHandle, $Saved) { return @{ Elements=@($script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget) } }
 '@
 $worker = $worker.Replace('if ($Library) { return }', $mock + "`n" + 'if ($Library) { return }')
-[IO.File]::WriteAllText("$fixture\browser_worker.ps1", $worker, [Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText("$fixture\src\browser\browser_worker.ps1", $worker, [Text.UTF8Encoding]::new($true))
 $source = [IO.File]::ReadAllText("$release\main.ahk").Replace("`r`n", "`n")
 if ($source -notmatch '(?s)#HotIf IsBrowser\(WinExist\("A"\)\)\s+\^!1::HandleProfileDanmakuShortcut\(1\)\s+\^!2::HandleProfileDanmakuShortcut\(2\)\s+\^!3::HandleSharedDanmakuShortcut\(1\)\s+\^!4::HandleSharedDanmakuShortcut\(2\)\s+#HotIf\s+\^!q::ShowPalette\(\)') {
     throw 'Shortcut scope regression: text keys must be browser-only and panel key global'
 }
-$browserSource = [IO.File]::ReadAllText("$fixture\browser_service.ahk")
+$browserSource = [IO.File]::ReadAllText("$fixture\src\browser\browser_service.ahk")
 $browserSource = [regex]::Replace($browserSource, '(?ms)^IsBrowser\(hwnd\) \{.*?^\}', "IsBrowser(hwnd) {`r`nreturn hwnd = 123`r`n}")
 $browserSource = $browserSource.Replace('ResolveBrowserChannel(hwnd) {','ResolveFixtureBrowserChannel(hwnd) {').Replace('VerifyInputTarget(hwnd, expectedVideo) {','VerifyFixtureInputTarget(hwnd, expectedVideo) {')
-[IO.File]::WriteAllText("$fixture\browser_service.ahk", $browserSource, [Text.UTF8Encoding]::new($true))
-$delivery = [IO.File]::ReadAllText("$fixture\text_input.ahk").Replace('WinActive("ahk_id " hwnd)','FixtureInputWindowActive(hwnd)').Replace('SendText(text)','CaptureFixtureInput(text)')
-[IO.File]::WriteAllText("$fixture\text_input.ahk", $delivery, [Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText("$fixture\src\browser\browser_service.ahk", $browserSource, [Text.UTF8Encoding]::new($true))
+$delivery = [IO.File]::ReadAllText("$fixture\src\input\text_input.ahk").Replace('WinActive("ahk_id " hwnd)','FixtureInputWindowActive(hwnd)').Replace('SendText(text)','CaptureFixtureInput(text)')
+[IO.File]::WriteAllText("$fixture\src\input\text_input.ahk", $delivery, [Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
 global Checks := 0

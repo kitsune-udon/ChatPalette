@@ -1,4 +1,4 @@
-﻿param([string]$SelectorsPath = (Join-Path $PSScriptRoot 'data\reaction_selectors.json'))
+﻿param([string]$SelectorsPath = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'data\reaction_selectors.json'))
 . (Join-Path $PSScriptRoot 'browser_uia.ps1')
 . (Join-Path $PSScriptRoot 'reaction_store.ps1')
 # Reaction adapter: UI discovery and execution are separate from transport and UI.

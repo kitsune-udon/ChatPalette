@@ -26,7 +26,7 @@ EnsureWorkerRunning() {
     q := Chr(34)
     command := q A_WinDir "\System32\WindowsPowerShell\v1.0\powershell.exe" q
         . " -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "
-        . q A_ScriptDir "\browser_worker.ps1" q
+        . q A_ScriptDir "\src\browser\browser_worker.ps1" q
         . " -PipeName " q pipeName q
         . " -ParentProcessId " DllCall("GetCurrentProcessId")
         . " -CachePath " q AppDataDirectory "\video_metadata_cache.json" q

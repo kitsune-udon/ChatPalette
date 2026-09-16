@@ -3,7 +3,7 @@
 $release = New-TestRuntime
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-. "$release\reaction_automation.ps1"
+. "$release\src\browser\reaction_automation.ps1"
 function Test-ElementWindow($Element, [long]$WindowHandle) { return $WindowHandle -eq 123 }
 $tokens = @(1..5 | ForEach-Object { @{name="reaction$_";id="id$_";class='reaction';type=50000} })
 $saved = @{tokens=$tokens}
