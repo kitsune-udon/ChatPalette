@@ -83,7 +83,7 @@ SaveReactionDefaults(draft) {
         state := CreateSettingsSnapshot()
         state.DefaultReactionKind := draft.Reaction, state.DefaultReactionCount := draft.Count
         state.DefaultReactionIntervalMs := draft.Interval, state.ReactionShortcut := draft.Key
-        if draft.Reaction < 1 || draft.Reaction > 5 || !HasSettingValue(ReactionCounts,draft.Count) || !HasSettingValue(ReactionIntervals,draft.Interval)
+        if !IsInteger(draft.Reaction) || draft.Reaction < 1 || draft.Reaction > ReactionNames.Length || !HasSettingValue(ReactionCounts,draft.Count) || !HasSettingValue(ReactionIntervals,draft.Interval)
             throw Error("リアクション設定の値が正しくありません。")
         ApplyReactionDefaults(state)
     } finally {

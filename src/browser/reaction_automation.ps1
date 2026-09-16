@@ -151,17 +151,33 @@ function New-ReactionLookupCondition($Saved) {
 function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
     $plan = Get-ReactionPlan $Saved
     if ($null -eq $plan) { return $null }
+    # Revalidate live properties every time; rescan only when references or registration are invalid.
     if ($script:ReactionElementCache.ContainsKey($WindowHandle)) {
         $entry = $script:ReactionElementCache[$WindowHandle]
-        if ([object]::ReferenceEquals($entry.Plan, $plan) -and ([DateTime]::UtcNow - $entry.Checked).TotalMilliseconds -lt 1000) {
+        if ([object]::ReferenceEquals($entry.Plan, $plan)) {
             try {
                 $cachedRecords = @(foreach ($control in $entry.Elements) { Get-ReactionRecord $control })
                 $cached = Select-ReactionRecords $cachedRecords $plan
-                if ($null -ne $cached -and (Test-ElementWindow $cached.Elements[0] $WindowHandle)) { return $cached }
+                if ($null -ne $cached) {
+                    $belongsToWindow = $true
+                    foreach ($element in $cached.Elements) {
+                        if (!(Test-ElementWindow $element $WindowHandle)) { $belongsToWindow = $false; break }
+                    }
+                    if ($belongsToWindow) { return $cached }
+                }
             } catch { }
         }
         $script:ReactionElementCache.Remove($WindowHandle)
     }
+    $group = Find-ReactionGroupInWindow $WindowHandle $plan
+    if ($null -ne $group) {
+        if ($script:ReactionElementCache.Count -ge 8) { $script:ReactionElementCache.Clear() }
+        $script:ReactionElementCache[$WindowHandle] = @{Elements=$group.Elements; Plan=$plan}
+    }
+    return $group
+}
+
+function Find-ReactionGroupInWindow([long]$WindowHandle, $plan) {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
     # Filter inside the provider before fetching properties across process boundaries.
     if (!$plan.ContainsKey('Condition')) { $plan.Condition = New-ReactionLookupCondition $plan }
@@ -172,12 +188,7 @@ function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
             $records += Get-ReactionRecord $control
         } catch { }
     }
-    $group = Select-ReactionRecords $records $plan
-    if ($null -ne $group) {
-        if ($script:ReactionElementCache.Count -ge 8) { $script:ReactionElementCache.Clear() }
-        $script:ReactionElementCache[$WindowHandle] = @{Elements=$group.Elements; Checked=[DateTime]::UtcNow; Plan=$plan}
-    }
-    return $group
+    return Select-ReactionRecords $records $plan
 }
 
 function Get-ReactionRecord($Control) {

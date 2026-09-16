@@ -89,7 +89,7 @@ ReadSettingsFile(path) {
 }
 
 ReadReactionSettings(state, document) {
-    state.DefaultReactionKind := Min(5, Max(1, ReadSettingInteger(document, "General", "ReactionDefault", ReactionDefaults.Choice)))
+    state.DefaultReactionKind := Min(ReactionNames.Length, Max(1, ReadSettingInteger(document, "General", "ReactionDefault", ReactionDefaults.Choice)))
     state.DefaultReactionCount := ReadSettingInteger(document, "General", "ReactionCount", ReactionDefaults.Count)
     if !HasSettingValue(ReactionCounts, state.DefaultReactionCount)
         state.DefaultReactionCount := ReactionDefaults.Count

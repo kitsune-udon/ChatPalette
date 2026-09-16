@@ -136,7 +136,14 @@ ReactionSendNext() {
         SetReactionStatus("操作先が変わったため停止しました。操作済み " job.Completed " / " job.Total " 回。", true,"","",job,"wrong_window")
         return
     }
+    precisionEnabled := false
+    releasePrecision := (*) => SetReactionTimingPrecision(false)
     try {
+        if job.Interval > 0 {
+            precisionEnabled := SetReactionTimingPrecision(true)
+            if precisionEnabled
+                OnExit(releasePrecision)
+        }
         while ActiveReactionJob = job && !job.Cancelled {
             if !WaitReactionInterval(job)
                 return
@@ -146,7 +153,7 @@ ReactionSendNext() {
                 return
             }
             job.StartedAt := ReactionClockMs()
-            reply := RequestBrowserOperation(job.Window, "reaction_send", job.Video, "Reaction=" job.Choice "`n")
+            reply := RequestBrowserOperation(job.Window, "reaction_send", job.Video, "Reaction=" ResolveReactionKind(job.Choice) "`n")
             if ActiveReactionJob != job
                 return
             ApplyReactionResult(job, reply)
@@ -155,7 +162,25 @@ ReactionSendNext() {
         SetTimer(ReactionSendNext, 0)
         ActiveReactionJob := 0
         ReactionNotice("unknown", operationError.Message,"",job)
+    } finally {
+        if precisionEnabled {
+            OnExit(releasePrecision, 0)
+            SetReactionTimingPrecision(false)
+        }
     }
+}
+
+; Only interval-controlled runs request higher precision. Always balance successful requests.
+SetReactionTimingPrecision(enabled) {
+    if enabled
+        return DllCall("Winmm\timeBeginPeriod", "UInt", 1, "UInt") = 0
+    DllCall("Winmm\timeEndPeriod", "UInt", 1, "UInt")
+    return 0 ; OnExit callbacks must never prevent shutdown.
+}
+
+; Resolve once per operation. The worker continues to accept only concrete kinds 1..5.
+ResolveReactionKind(choice) {
+    return choice = RandomReactionKind ? Random(1, 5) : choice
 }
 
 ReactionClockMs() {
@@ -177,7 +202,10 @@ WaitReactionInterval(job) {
         remaining := ReactionWaitRemaining(job, ReactionClockMs())
         if remaining <= 0
             return true
-        Sleep(Min(10, Ceil(remaining)))
+        ; Wake for Windows messages as well as the deadline; keep cancellation responsive.
+        DllCall("MsgWaitForMultipleObjectsEx", "UInt", 0, "Ptr", 0,
+            "UInt", Min(10, Ceil(remaining)), "UInt", 0x4FF, "UInt", 0x4)
+        Sleep(-1)
     }
     return false
 }

@@ -8,7 +8,7 @@ $tests = @'
 OnExit(StopBrowserWorker)
 try {
     AssertEmpty(FileExist(SettingsFilePath), "fresh settings created")
-    AssertEmpty(DefaultReactionIntervalMs = 100, "new settings default to 100ms start interval")
+    AssertEmpty(DefaultReactionIntervalMs = 200, "new settings default to 200ms start interval")
     AssertEmpty(InStr(SettingsFilePath, "\data\") && !FileExist(A_ScriptDir "\settings.ini"), "settings live only in data directory")
     legacyPath := A_ScriptDir "\settings.ini"
     FileAppend("[General]`nCount=99`n", legacyPath)
