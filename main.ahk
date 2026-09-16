@@ -1,6 +1,7 @@
 ﻿#Requires AutoHotkey v2.0
 #SingleInstance Force
 #Include settings_schema.ahk
+#Include app_lifecycle.ahk
 #Include reaction_controller.ahk
 #Include app_ui.ahk
 #Include danmaku_library.ahk
@@ -15,7 +16,10 @@
 if A_Args.Length && A_Args[1] = "--check"
     ExitApp()
 
-global SettingsFilePath := A_ScriptDir "\settings.ini"
+global AppVersion := Trim(FileRead(A_ScriptDir "\VERSION", "UTF-8"))
+global LastBrowserOperation := {Mode:"なし", State:"未実行", Duration:0}
+global AppDataDirectory := A_ScriptDir "\data"
+global SettingsFilePath := AppDataDirectory "\settings.ini"
 global SharedDanmakuItems := [], IsSharedLibrarySelected := false
 global Profiles := [], SelectedProfileIndex := 1, TargetBrowserHwnd := 0, MainWindow := 0, DanmakuEditorWindow := 0
 global LibraryProfilePicker := 0, DanmakuListView := 0, DanmakuPreview := 0, PanelStatusText := 0
@@ -25,13 +29,15 @@ global UndoButton := 0
 global ProfileManagerActive := false
 global WorkerRequestActive := false
 global WorkerProcessId := 0, WorkerPipeHandle := 0, WorkerRequestSequence := 0, ChannelIndex := Map()
-ReloadAppSettings()
+if !InitializeAppSettings()
+    ExitApp(1)
 InitReactions()
 BeginReactionEditing()
 BuildPanel()
 OnExit(StopBrowserWorker)
 A_TrayMenu.Add("ヘルパーを開く", ShowPanel)
 A_TrayMenu.Add("使い方", Help)
+A_TrayMenu.Add("診断情報", ShowDiagnostics)
 A_TrayMenu.Default := "ヘルパーを開く"
 UpdateTray()
 if A_Args.Length && A_Args[1] = "--smoke"
@@ -97,7 +103,7 @@ ShowPanel(*) {
     active := WinExist("A")
     if active != MainWindow.Hwnd
         TargetBrowserHwnd := IsBrowser(active) ? active : 0
-    PanelStatusText.Text := TargetBrowserHwnd ? "入力先：" WinGetTitle("ahk_id " TargetBrowserHwnd) : "YouTubeのチャット欄をクリックし、Ctrl＋Alt＋Qで開き直してください。"
+    PanelStatusText.Text := TargetBrowserHwnd ? "入力先：" WinGetTitle("ahk_id " TargetBrowserHwnd) : "YouTubeのチャット欄またはコメント欄をクリックし、Ctrl＋Alt＋Qで開き直してください。"
     MainWindow.Show()
     if FeatureTabs.Value = 2
         DanmakuListView.Focus()
@@ -251,13 +257,16 @@ ToggleAuto(*) {
 
 ; Application policy, separate from worker transport and view rendering.
 RequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
-    global IsBrowserOperationBusy
+    global IsBrowserOperationBusy, LastBrowserOperation
     if IsBrowserOperationBusy || !IsBrowser(hwnd)
         return {State: mode = "reaction_send" ? "unknown" : "unavailable", Author: "", Channel: "", Video: ""}
     IsBrowserOperationBusy := true
     try {
         waitView := BeginWorkerWait(mode)
-        return SendWorkerRequest(hwnd, mode, expectedVideo, extra)
+        started := A_TickCount
+        reply := SendWorkerRequest(hwnd, mode, expectedVideo, extra)
+        LastBrowserOperation := {Mode:mode, State:reply.State, Duration:A_TickCount-started}
+        return reply
     } finally {
         IsBrowserOperationBusy := false
         if IsSet(waitView)
@@ -270,10 +279,10 @@ ResolveBrowserChannel(hwnd) {
 }
 
 VerifyInputTarget(hwnd, expectedVideo) {
-    if !WinActive("ahk_id " hwnd) || expectedVideo = ""
+    if !WinActive("ahk_id " hwnd)
         return false
-    result := RequestBrowserOperation(hwnd, "verify", expectedVideo)
-    if result.State = "ok" && result.Video == expectedVideo && WinActive("ahk_id " hwnd)
+    result := RequestBrowserOperation(hwnd, "verify_input", expectedVideo)
+    if result.State = "ok" && (expectedVideo = "" || result.Video == expectedVideo) && WinActive("ahk_id " hwnd)
         return true
     return false
 }

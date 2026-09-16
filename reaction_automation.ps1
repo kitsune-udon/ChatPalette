@@ -1,16 +1,12 @@
-﻿# Reaction adapter: UI discovery and execution are separate from transport and UI.
+﻿param([string]$SelectorsPath = (Join-Path $PSScriptRoot 'data\reaction_selectors.json'))
+. (Join-Path $PSScriptRoot 'reaction_store.ps1')
+# Reaction adapter: UI discovery and execution are separate from transport and UI.
 # Registration is explicit and read-only with respect to the YouTube page.
-$script:ReactionSelectorsPath = Join-Path $PSScriptRoot 'reaction_selectors.json'
-$script:BrowserReactionSelectors = @{}
+$script:ReactionSelectorsPath = $SelectorsPath
+$script:BrowserReactionSelectors = Read-ReactionSelectors $SelectorsPath
 $script:LastReactionInvocationAt = [DateTime]::MinValue
 $script:ReactionElementCache = @{}
 $script:ReactionAliases = @('heart|ハート|[❤♥]', 'smil|grin|happy|笑|😀|😁|😄|😊', 'party|celebrat|tada|お祝い|祝|🎉', 'surpris|shock|astonish|flushed|open[_ -]?mouth|\bwow\b|驚|びっくり|赤面|赤らめ|😮|😲|😯|😳', '100|hundred|perfect|💯')
-if (Test-Path -LiteralPath $script:ReactionSelectorsPath) {
-    try {
-        $saved = Get-Content -LiteralPath $script:ReactionSelectorsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($entry in $saved.profiles) { $script:BrowserReactionSelectors[$entry.browser] = $entry }
-    } catch { }
-}
 
 function Get-BrowserProcessName([long]$WindowHandle) {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
@@ -93,7 +89,12 @@ function Get-ReactionGroup($Element) {
 }
 
 function Select-RegisteredReactions($Records, $Saved) {
+    if (!(Test-ReactionTokens $Saved.tokens)) {
+        $script:ReactionLookupDiagnostic = '登録情報が不正です。5種類のボタンを再登録してください。'
+        return $null
+    }
     $selected = @()
+    $selectedIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $diagnostics = @()
     foreach ($token in $Saved.tokens) {
         $exact = @($Records | Where-Object {
@@ -105,14 +106,34 @@ function Select-RegisteredReactions($Records, $Saved) {
         $unique = @{}
         foreach ($record in $visible) { $unique[$record.RuntimeId] = $record }
         $diagnostics += "[$($token.name)] 一致=$($exact.Count)、表示中=$($unique.Count)"
-        if ($unique.Count -eq 1) { $selected += ,@($unique.Values)[0].Element }
+        if ($unique.Count -eq 1) {
+            $record = @($unique.Values)[0]
+            if (!$record.RuntimeId -or !$selectedIds.Add([string]$record.RuntimeId)) { return $null }
+            $selected += ,$record.Element
+        }
     }
     $script:ReactionLookupDiagnostic = '登録したボタンを直接検索: ' + ($diagnostics -join ' / ')
     if ($selected.Count -ne 5) { return $null }
     return @{Elements=$selected}
 }
 
+function New-ReactionLookupCondition($Saved) {
+    # Capture accepts invokable Custom controls too. Lookup must preserve their types.
+    $conditions = [System.Windows.Automation.Condition[]]@(
+        foreach ($token in $Saved.tokens) {
+            $name = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::NameProperty, [string]$token.name)
+            $type = [System.Windows.Automation.PropertyCondition]::new(
+                [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+                [System.Windows.Automation.ControlType]::LookupById([int]$token.type))
+            [System.Windows.Automation.AndCondition]::new($name, $type)
+        }
+    )
+    return [System.Windows.Automation.OrCondition]::new($conditions)
+}
+
 function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
+    if (!(Test-ReactionTokens $Saved.tokens)) { return $null }
     $fingerprint = ($Saved.tokens | ConvertTo-Json -Depth 4 -Compress)
     if ($script:ReactionElementCache.ContainsKey($WindowHandle)) {
         $entry = $script:ReactionElementCache[$WindowHandle]
@@ -126,18 +147,8 @@ function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
         $script:ReactionElementCache.Remove($WindowHandle)
     }
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
-    $buttonCondition = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
     # Filter inside the provider before fetching properties across process boundaries.
-    $nameConditions = [System.Windows.Automation.Condition[]]@(
-        foreach ($token in $Saved.tokens) {
-            [System.Windows.Automation.PropertyCondition]::new(
-                [System.Windows.Automation.AutomationElement]::NameProperty, [string]$token.name)
-        }
-    )
-    if ($nameConditions.Count -ne 5) { return $null }
-    $condition = [System.Windows.Automation.AndCondition]::new($buttonCondition,
-        [System.Windows.Automation.OrCondition]::new($nameConditions))
+    $condition = New-ReactionLookupCondition $Saved
     $records = @()
     foreach ($control in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
         try {
@@ -183,10 +194,12 @@ function Register-ReactionSelectors($Request, $Reply) {
     $entry = @{browser = $browser; groupClass = $group.Class; groupId = $group.Id; tokens = $group.Tokens}
     # Normalize to the same object shape used when loading JSON.
     $entry = $entry | ConvertTo-Json -Depth 8 | ConvertFrom-Json
-    $script:BrowserReactionSelectors[$browser] = $entry
-    $json = @{version = 1; profiles = @($script:BrowserReactionSelectors.Values)} | ConvertTo-Json -Depth 8
-    [IO.File]::WriteAllText(($script:ReactionSelectorsPath + '.new'), $json, [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath ($script:ReactionSelectorsPath + '.new') -Destination $script:ReactionSelectorsPath -Force
+    try { Save-ReactionSelectors $browser $entry }
+    catch {
+        $Reply.State = 'save_failed'
+        $Reply.Detail = $_.Exception.Message
+        return $Reply
+    }
     $Reply.State = 'registered'
     return $Reply
 }

@@ -1,4 +1,8 @@
 # Local settings, browser registrations and video metadata
+/data/
+/tests/.tmp/
+/dist/
+/settings.ini.backup-*
 /settings.ini
 /reaction_selectors.json
 /video_metadata_cache.json

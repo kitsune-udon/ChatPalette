@@ -10,13 +10,13 @@ PowerShell 7への切り替えは実装していません。ブラウザーの�
 
 ## 配布に含めるもの
 
-- プロジェクト直下のすべての `.ahk`・`.ps1`（同じフォルダー構成を維持）
+- プロジェクト直下のすべての `.ahk`・`.ps1` と `VERSION`（同じフォルダー構成を維持）
 - `README.md`、`LICENSE`、`docs/` 一式
 - ソース配布の場合は `.gitignore`、`.gitattributes`、`.editorconfig`
 
-実行に必要なのはコード一式です。利用先にAutoHotkey v2とWindows PowerShell 5.1が必要です。設定をアプリと同じ場所に保存するため、利用者が書き込める場所へ展開します。
+実行に必要なのはコード一式です。利用先にAutoHotkey v2とWindows PowerShell 5.1が必要です。設定をアプリ内の `data/` に保存するため、利用者が書き込める場所へ展開します。
 
-個人の `settings.ini`、`reaction_selectors.json`、`video_metadata_cache.json` と保存途中の `.new` ファイルは配布しません。`.git` フォルダーも実行用配布物には不要です。Gitの除外設定はZIP作成時の除外を保証しないため、配布物そのものを確認してください。
+個人の `data/` 全体と、旧配置の `settings.ini`、`reaction_selectors.json`、`video_metadata_cache.json`、保存途中の `.new` ファイルは配布しません。`.git` フォルダーも実行用配布物には不要です。Gitの除外設定はZIP作成時の除外を保証しないため、配布物そのものを確認してください。
 
 ## Gitと文字コード
 
@@ -59,16 +59,39 @@ Windows PowerShell 5.1で日本語を含むスクリプトを確実に読める�
 6. リアクションはまず登録と「送信せずに検出を確認」で確認する。送信を伴う確認は明示的に行う。
 7. 配布物に個人データ・一時ファイルが入っていないことを確認する。
 
-開発時の自動テストは、配布プロジェクトとは別の作業領域にあります。このリポジトリには現時点で同梱していません。テスト件数を、このリポジトリだけで再現できる保証として扱わないでください。テストを移設する場合は、個人設定に依存しない固定データと、ブラウザーへ実送信しない代替処理を含めて整備します。
+## 自動テスト
 
-## 外部情報と限界
+プロジェクト直下で以下を実行します。Windows PowerShell 5.1とAutoHotkey v2が必要です。
 
-動画の投稿者情報はYouTubeのoEmbedから取得します。ブラウザーのURL欄とリアクションボタンはUI Automationで読み取ります。YouTubeやブラウザーのUI変更により検出が失敗する場合があります。
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
+```
 
-チャンネルキーは取得した投稿者URLのパスを基にしており、すべてを不変のチャンネルIDへ変換する仕組みではありません。ハンドル等が変わった場合は関連付けの見直しが必要になることがあります。
+AutoHotkeyを標準外の場所に置いている場合は `-AutoHotkeyPath '実行ファイルの絶対パス'` を指定します。各テストは新しい一時実行フォルダーを作り、固定データまたは空状態で検証します。実際の入力・リアクション操作・ネットワーク取得は代替処理で置き換えます。利用者の `data/` を読み書きしません。一括実行後の一時ファイルは成功・失敗のどちらでも削除します。
 
-リアクションの完了はUIのボタン呼び出しが戻ったことを意味します。サーバーの受理確認や、結果不明時の再送は実装していません。
+自動テストは入力欄の分類規則・拒否条件を検証します。ブラウザーごとの実画面の互換性検証は別途必要です。
+
+## 配布ZIPを作る
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
+```
+
+`dist/youtube_chat_helper-バージョン.zip` を作成します。既存の同名ZIPは上書きしません。コード・文書・固定テストデータ・開発設定を明示的に収集し、個人の `data/`・`.git/`・テスト実行ファイルは収集しません。ZIP内の `SHA256SUMS` で内容のハッシュを確認できます。
+
+更新時は `VERSION` と `CHANGELOG.md` を更新します。GitへのコミットやGitHubへのアップロードは、このスクリプトでは行いません。
+
+判別方式・キャッシュ・通信の詳細は[設計資料](architecture.md)を参照してください。
 
 ## ライセンス表示
 
 コードとドキュメントは [MIT License](../../LICENSE) で提供します。配布時は著作権表示とライセンス全文を保持してください。
+
+## 名前の規則
+
+- ファイル名は担当を示す。`settings_store.ahk` はファイル入出力、`settings_service.ahk` は設定の確定、`worker_client.ahk` は常駐処理への通信を担当する。
+- PowerShellの `browser_worker.ps1` は常駐処理の入口、`reaction_automation.ps1` はリアクション操作を担当する。
+- 弾幕の識別子には `Danmaku`、全投稿者で共有するデータには `Shared`、投稿者別のデータには `Profile` を用いる。
+- `SelectedProfileIndex` は配列の選択位置、`TargetBrowserHwnd` は入力先ウィンドウ、`ActiveReactionJob` は実行中の処理を表す。
+- 操作は `Insert`、`Delete`、`Commit`、`Read` などで目的を示す。`UndoLibraryChange` は削除だけでなく移動も取り消す。
+- 保存ファイルは `settings.ini`、`reaction_selectors.json`、`video_metadata_cache.json`。保存先は `data/`。

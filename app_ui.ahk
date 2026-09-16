@@ -6,7 +6,8 @@ BuildPanel() {
     MainWindow.SetFont("s10", "Yu Gothic UI")
     MainWindow.MarginX := 16, MainWindow.MarginY := 16
     MainWindow.AddText("x20 y14 w460 h30 c183153", "YouTube チャットヘルパー").SetFont("s16 bold")
-    MainWindow.AddText("x20 y48 w500 h22 c526174", "YouTubeチャットの弾幕入力とリアクション送信を補助します。")
+    MainWindow.AddText("x20 y48 w500 h22 c526174", "YouTubeのチャット・コメント入力とリアクション操作を補助します。")
+    MainWindow.AddButton("x482 y22 w108 h30", "診断情報").OnEvent("Click", ShowDiagnostics)
     MainWindow.AddButton("x600 y22 w140 h30", "使い方").OnEvent("Click", Help)
     FeatureTabs := MainWindow.AddTab3("x16 y82 w728 h522 Choose1", ["ホーム", "弾幕ライブラリ", "投稿者別設定", "共通設定", "環境・登録"])
     UiX := 32, UiY := 120
@@ -50,6 +51,7 @@ BeginWorkerWait(mode) {
     MainWindow.Opt("+Disabled")
     message := mode = "resolve" ? "YouTubeの投稿者を確認しています…"
         : mode = "verify" || mode = "reaction_context" ? "YouTubeの動画を確認しています…"
+        : mode = "verify_input" ? "チャット欄・コメント欄を確認しています…"
         : "リアクションの操作対象を確認しています…"
     notification := () => ToolTip(message)
     SetTimer(notification, -400)
@@ -64,7 +66,7 @@ EndWorkerWait(view) {
 }
 
 ShowInputFailure() {
-    ToolTip("動画または入力先を確認できなかったため入力を止めました。もう一度操作してください。")
+    ToolTip("入力を止めました。YouTubeのチャット欄またはコメント欄をクリックして再試行してください。")
     SetTimer(() => ToolTip(), -2800)
 }
 
@@ -461,7 +463,7 @@ CloseDanmakuEditor(*) {
 
 Help(*) {
     MainWindow.Opt("+OwnDialogs")
-    MsgBox("【ホーム】`nYouTubeのチャット欄をクリックしてCtrl＋Alt＋Q。弾幕を選んで入力します。送信はYouTube側で行ってください。`nリアクションは♡メニューを開いたまま実行。Escで停止、Ctrl＋Alt＋Qで進捗を確認できます。`n`n【弾幕ライブラリ】`n投稿者を選び、追加・編集・複製・並べ替え。ダブルクリックで編集します。`n投稿者別／共通を選んで編集します。Ctrl＋Alt＋1／2は投稿者別、3／4は共通の先頭2種類を入力します。`n`n【投稿者別設定／共通設定】`n種類の上書きは投稿者別、既定の種類・回数・待ち時間・キーは共通です。それぞれの画面で保存します。`n現在のリアクションキー：" ReactionKeyLabel() "`n`n【環境・登録】`n自動判別の切り替えと、ブラウザーの初回登録・検出確認。正常に動く場合は再登録不要です。`n`n×／Escは画面を隠します。終了はタスクトレイ → Exit。", "使い方")
+    MsgBox("【ホーム】`nYouTubeのチャット欄またはコメント欄をクリックしてCtrl＋Alt＋Q。弾幕を選んで入力します。送信はYouTube側で行ってください。`nリアクションは♡メニューを開いたまま実行。Escで停止、Ctrl＋Alt＋Qで進捗を確認できます。`n`n【弾幕ライブラリ】`n投稿者を選び、追加・編集・複製・並べ替え。ダブルクリックで編集します。`n投稿者別／共通を選んで編集します。Ctrl＋Alt＋1／2は投稿者別、3／4は共通の先頭2種類を入力します。`n`n【投稿者別設定／共通設定】`n種類の上書きは投稿者別、既定の種類・回数・待ち時間・キーは共通です。それぞれの画面で保存します。`n現在のリアクションキー：" ReactionKeyLabel() "`n`n【環境・登録】`n自動判別の切り替えと、ブラウザーの初回登録・検出確認。正常に動く場合は再登録不要です。`n`n×／Escは画面を隠します。終了はタスクトレイ → Exit。", "使い方")
 }
 
 
@@ -621,6 +623,7 @@ ReactionNotice(state, detail := "", suffix := "") {
         "registered", "5種類のボタンを登録しました。次は「送らずに確認」で検出を確認できます。",
         "ready", "5種類のリアクションを検出できました。送信はしていません。",
         "operated", "リアクションボタンを1回操作しました。YouTube側の受理は確認できません。",
+        "save_failed", "登録情報を保存できませんでした。以前の登録は保持しています。フォルダーの書き込み権限を確認してください。",
         "not_registered", "このブラウザーの登録が必要です。「環境・登録」→「操作ボタンを登録・再登録」を実行してください。",
         "menu_closed", "登録したメニューが見つかりません。♡にマウスを重ねて5種類を表示してください。",
         "changed", "動画が変わったため中止しました。",

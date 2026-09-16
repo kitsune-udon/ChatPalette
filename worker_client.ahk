@@ -25,7 +25,8 @@ EnsureWorkerRunning() {
         . q A_ScriptDir "\browser_worker.ps1" q
         . " -PipeName " q pipeName q
         . " -ParentProcessId " DllCall("GetCurrentProcessId")
-        . " -CachePath " q A_ScriptDir "\video_metadata_cache.json" q
+        . " -CachePath " q AppDataDirectory "\video_metadata_cache.json" q
+        . " -DataDirectory " q AppDataDirectory q
     Run(command, A_ScriptDir, "Hide", &WorkerProcessId)
 }
 
@@ -93,7 +94,7 @@ SendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
         request := "Seq=" seq "`nWindow=" hwnd "`nMode=" mode "`nVideo=" expectedVideo "`n"
             . extra
         start := A_TickCount
-        limit := mode = "verify" ? 2500 : 8000
+        limit := (mode = "verify" || mode = "verify_input") ? 2500 : 8000
         sent := false
         while A_TickCount - start < limit {
             if !WorkerProcessId || !ProcessExist(WorkerProcessId)

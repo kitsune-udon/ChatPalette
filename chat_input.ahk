@@ -9,7 +9,7 @@ DeliverText(text, hwnd, expectedVideo := "", activate := false) {
     }
     if !WinActive("ahk_id " hwnd)
         return false
-    if expectedVideo != "" && !VerifyInputTarget(hwnd, expectedVideo)
+    if !VerifyInputTarget(hwnd, expectedVideo)
         return false
     SendText(text)
     return true
@@ -56,7 +56,7 @@ InsertSharedDanmaku(n, hwnd, fromPanel := false) {
     if IsBrowserOperationBusy || DanmakuEditorWindow || ActiveReactionJob || ProfileManagerActive || n < 1 || n > SharedDanmakuItems.Length
         return
     if !IsBrowser(hwnd) {
-        PanelStatusText.Text := "YouTubeのチャット欄をクリックしてCtrl＋Alt＋Qで開き直してください。"
+        PanelStatusText.Text := "YouTubeのチャット欄またはコメント欄をクリックしてCtrl＋Alt＋Qで開き直してください。"
         return
     }
     text := SharedDanmakuItems[n].Text
