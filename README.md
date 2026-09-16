@@ -40,7 +40,7 @@ YouTubeライブチャットで、登録した弾幕の入力とリアクショ�
 - [利用ガイド](docs/user/guide.md)：初回登録、投稿者の関連付け、リアクション、保存範囲
 - [保守・トラブル対処](docs/user/maintenance.md)：エラーへの対処、バックアップ、初期化、更新
 - [開発・配布ガイド](docs/developer/guide.md)：実行環境、Git、文字コード、配布と検証
-- [設計と責任境界](docs/developer/architecture.md)：モジュールの役割、データの流れ、変更時の規則
+- [設計と責務の分担](docs/developer/architecture.md)：モジュールの役割、データの流れ、変更時の規則
 
 ## 初期設定
 

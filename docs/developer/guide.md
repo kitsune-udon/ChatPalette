@@ -1,6 +1,6 @@
 # 開発・配布ガイド
 
-[READMEへ戻る](../../README.md) · [設計と責任境界](architecture.md)
+[READMEへ戻る](../../README.md) · [設計と責務の分担](architecture.md)
 
 ## 実行構成
 
