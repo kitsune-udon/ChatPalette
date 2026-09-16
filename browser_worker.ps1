@@ -134,11 +134,14 @@ function Write-PipeReply($Writer, $Reply) {
 
 if ($Library) { return }
 $pipe = $null
+$signal = $null
 try {
     $parent = Get-Process -Id $ParentProcessId
     if ($parent.HasExited) { exit 1 }
     $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [IO.Pipes.PipeDirection]::InOut)
     $pipe.Connect(5000)
+    $signal = [Threading.EventWaitHandle]::OpenExisting($PipeName + '-ready')
+    $null = $signal.Set()
     $reader = [IO.BinaryReader]::new($pipe, [Text.Encoding]::UTF8, $true)
     $writer = [IO.BinaryWriter]::new($pipe, [Text.Encoding]::UTF8, $true)
     Add-Type -AssemblyName UIAutomationClient
@@ -151,6 +154,10 @@ try {
         try { $reply = Invoke-WorkerRequest $request }
         catch { $reply = @{ Seq = $request.Seq; Window = $request.Window; State = 'unavailable' } }
         Write-PipeReply $writer $reply
+        $null = $signal.Set()
     }
 } catch { exit 1 }
-finally { if ($null -ne $pipe) { $pipe.Dispose() } }
+finally {
+    if ($null -ne $pipe) { $pipe.Dispose() }
+    if ($null -ne $signal) { $signal.Dispose() }
+}

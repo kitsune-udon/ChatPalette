@@ -59,6 +59,17 @@ $record = Get-InputRecord (TextField $false 'search' '') $true
 Assert (!(Get-YouTubeInputKind @($record,$document))) 'editable Custom search rejected'
 $record = Get-InputRecord (TextField $false 'other-editor' '') $true
 Assert (!(Get-YouTubeInputKind @($record,$document))) 'unknown Custom editor rejected'
+$patternless = TextField $false 'input' 'style-scope yt-live-chat-text-input-field-renderer'
+$patternless.Current.ControlType.Id = 50004
+$patternless | Add-Member ScriptMethod TryGetCurrentPattern { param($kind,$result) return $false } -Force
+$record = Get-InputRecord $patternless $true
+Assert (!(Get-YouTubeInputKind @($record,$document))) 'Edit without evidence of writability rejected'
+$ancestor = TextField $false 'parent' 'style-scope ytd-comment-simplebox-renderer'
+$ancestor.Current.PSObject.Properties.Remove('Name')
+$ancestor.Current | Add-Member ScriptProperty Name { throw 'Ancestor text must not be queried' }
+$ancestor | Add-Member ScriptMethod TryGetCurrentPattern { throw 'Ancestor edit patterns must not be queried' } -Force
+$structural = Get-InputRecord $ancestor $false
+Assert ($structural.Id -eq 'parent' -and !$structural.ContainsKey('Name')) 'ancestry fetches structure only'
 $record = Get-InputRecord (TextField $false 'contenteditable-root' 'style-scope yt-formatted-string') $true
 Assert ((Get-YouTubeInputKind @($record,
     @{Id='contenteditable-textarea'; Class='style-scope ytd-commentbox'; Type=50026},

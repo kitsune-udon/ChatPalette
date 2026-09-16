@@ -329,34 +329,34 @@ QuickReaction(*) {
     global ActiveReactionJob
     if !ActiveReactionJob || ActiveReactionJob.Mode != "queued"
         return
-    hwnd := ActiveReactionJob.Window
+    queuedJob := ActiveReactionJob
+    hwnd := queuedJob.Window
     batchStarted := false
     try {
         key := RegExReplace(ReactionShortcut, "[!^+#<>]", "")
         if !WaitShortcutRelease([key, "Control", "Alt", "Shift"])
             return
-        if !ActiveReactionJob || ActiveReactionJob.Cancelled || !WinActive("ahk_id " hwnd)
-            return
-        if !ActiveReactionJob || ActiveReactionJob.Cancelled
+        if ActiveReactionJob != queuedJob || queuedJob.Cancelled || !WinActive("ahk_id " hwnd)
             return
         context := RequestBrowserOperation(hwnd, "reaction_context")
-        if !ActiveReactionJob || ActiveReactionJob.Cancelled
+        if ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         if context.State != "ok" || !WinActive("ahk_id " hwnd) {
             ReactionNotice("unavailable")
             return
         }
         choice := ResolveReactionChoice(hwnd, context.Video)
-        if !choice || !ActiveReactionJob || ActiveReactionJob.Cancelled
+        if !choice || ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         ActiveReactionJob := {Mode: "reaction_send", Window: hwnd, Video: context.Video,
             Choice: choice, Total: ReactionCount, Completed: 0, Cancelled: false, Interval: ReactionInterval}
         batchStarted := true
         ReactionSendNext()
     } catch as operationError {
-        ReactionNotice("unknown", operationError.Message)
+        if ActiveReactionJob = queuedJob
+            ReactionNotice("unknown", operationError.Message)
     } finally {
-        if !batchStarted {
+        if !batchStarted && ActiveReactionJob = queuedJob {
             ActiveReactionJob := 0
             if ReactionExecutionStatus.Phase = "queued"
                 SetReactionStatus("開始できませんでした。キーを離し、YouTubeを最前面にして再実行してください。", true)

@@ -63,8 +63,37 @@ try {
     AssertEmpty(InStr(invalidMessage, "[General] Count"), "invalid settings identify exact key")
     backup := BackupSettingsForReset(brokenPath)
     AssertEmpty(FileExist(backup) && !FileExist(brokenPath) && InStr(FileRead(backup), "not-an-integer"), "reset preserves corrupt original")
+    FileAppend("[General]`nCount=1.5`n", brokenPath)
+    rejectedFraction := false
+    try ReadSettingsFile(brokenPath)
+    catch
+        rejectedFraction := true
+    AssertEmpty(rejectedFraction, "fractional count rejected instead of truncating records")
     diagnostics := BuildDiagnosticReport()
     AssertEmpty(InStr(diagnostics, AppVersion) && !InStr(diagnostics, A_ScriptDir), "diagnostics include version without private path")
+    snapshot := ReadDiagnosticSnapshot()
+    snapshotReport := BuildDiagnosticReport(snapshot)
+    AssertEmpty(snapshot.Duration = "—（未実行）" && InStr(snapshot.Worker,"必要なとき"), "idle diagnostics explain normal waiting state")
+    LastBrowserOperation := {Mode:"verify_input",State:"wrong_input",Duration:42}
+    AssertEmpty(BuildDiagnosticReport(snapshot) = snapshotReport, "copy uses the captured snapshot")
+    diagnosticPanel := CreateDiagnosticPanel()
+    for control in diagnosticPanel.Window {
+        control.GetPos(&x, &y, &w, &h)
+        AssertEmpty(x >= 20 && x+w <= 620 && y >= 14 && y+h <= 670, "diagnostic controls fit panel")
+    }
+    foundResult := false
+    for control in diagnosticPanel.Window
+        if control.Type = "Text" && control.Text = "入力欄を確認できませんでした"
+            foundResult := true
+    AssertEmpty(foundResult, "diagnostic panel uses readable result labels")
+    LastBrowserOperation := {Mode:"verify_input",State:"ok",Duration:12}
+    diagnosticPanel.Refresh.Call()
+    foundResult := false
+    for control in diagnosticPanel.Window
+        if control.Type = "Text" && control.Text = "確認できました"
+            foundResult := true
+    AssertEmpty(foundResult, "diagnostic refresh replaces displayed result")
+    diagnosticPanel.Window.Destroy()
     FileAppend("PASS: empty initialization, UI, shared library, profile lifecycle and reload`n", "*")
     ExitApp(0)
 } catch as failure {

@@ -6,6 +6,7 @@ $script:ReactionSelectorsPath = $SelectorsPath
 $script:BrowserReactionSelectors = Read-ReactionSelectors $SelectorsPath
 $script:LastReactionInvocationAt = [DateTime]::MinValue
 $script:ReactionElementCache = @{}
+$script:ReactionPlans = @()
 $script:ReactionAliases = @('heart|ハート|[❤♥]', 'smil|grin|happy|笑|😀|😁|😄|😊', 'party|celebrat|tada|お祝い|祝|🎉', 'surpris|shock|astonish|flushed|open[_ -]?mouth|\bwow\b|驚|びっくり|赤面|赤らめ|😮|😲|😯|😳', '100|hundred|perfect|💯')
 
 function Get-BrowserProcessName([long]$WindowHandle) {
@@ -89,23 +90,50 @@ function Get-ReactionGroup($Element) {
 }
 
 function Select-RegisteredReactions($Records, $Saved) {
-    if (!(Test-ReactionTokens $Saved.tokens)) {
+    $plan = New-ReactionPlan $Saved
+    if ($null -eq $plan) {
         $script:ReactionLookupDiagnostic = '登録情報が不正です。5種類のボタンを再登録してください。'
         return $null
     }
+    return Select-ReactionRecords $Records $plan
+}
+
+function New-ReactionPlan($Saved) {
+    if (!(Test-ReactionTokens $Saved.tokens)) { return $null }
+    # Copy at the boundary: runtime registrations are replaced, never mutated.
+    $tokens = @(foreach ($token in $Saved.tokens) {
+        @{name=$token.name; id=$token.id; class=$token.class; type=$token.type}
+    })
+    return @{Tokens=$tokens}
+}
+
+function Get-ReactionPlan($Saved) {
+    foreach ($entry in $script:ReactionPlans) {
+        if ([object]::ReferenceEquals($entry.Source, $Saved)) { return $entry.Plan }
+    }
+    $plan = New-ReactionPlan $Saved
+    if ($null -eq $plan) { return $null }
+    if ($script:ReactionPlans.Count -ge 8) { $script:ReactionPlans = @() }
+    $script:ReactionPlans += @{Source=$Saved; Plan=$plan}
+    return $plan
+}
+
+function Select-ReactionRecords($Records, $Plan) {
     $selected = @()
     $selectedIds = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     $diagnostics = @()
-    foreach ($token in $Saved.tokens) {
-        $exact = @($Records | Where-Object {
-            $_.Name -ceq [string]$token.name -and $_.Id -ceq [string]$token.id -and
-            $_.Class -ceq [string]$token.class -and $_.Type -eq [int]$token.type
-        })
-        $visible = @($exact | Where-Object { -not $_.Hidden -and $_.Enabled })
+    foreach ($token in $Plan.Tokens) {
+        $exactCount = 0
         # Runtime IDs deduplicate multiple references to the same actual control.
         $unique = @{}
-        foreach ($record in $visible) { $unique[$record.RuntimeId] = $record }
-        $diagnostics += "[$($token.name)] 一致=$($exact.Count)、表示中=$($unique.Count)"
+        foreach ($record in $Records) {
+            if ($record.Name -ceq $token.name -and $record.Id -ceq $token.id -and
+                $record.Class -ceq $token.class -and $record.Type -eq $token.type) {
+                $exactCount++
+                if (!$record.Hidden -and $record.Enabled) { $unique[$record.RuntimeId] = $record }
+            }
+        }
+        $diagnostics += "[$($token.name)] 一致=$exactCount、表示中=$($unique.Count)"
         if ($unique.Count -eq 1) {
             $record = @($unique.Values)[0]
             if (!$record.RuntimeId -or !$selectedIds.Add([string]$record.RuntimeId)) { return $null }
@@ -133,14 +161,14 @@ function New-ReactionLookupCondition($Saved) {
 }
 
 function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
-    if (!(Test-ReactionTokens $Saved.tokens)) { return $null }
-    $fingerprint = ($Saved.tokens | ConvertTo-Json -Depth 4 -Compress)
+    $plan = Get-ReactionPlan $Saved
+    if ($null -eq $plan) { return $null }
     if ($script:ReactionElementCache.ContainsKey($WindowHandle)) {
         $entry = $script:ReactionElementCache[$WindowHandle]
-        if ($entry.Fingerprint -ceq $fingerprint -and ([DateTime]::UtcNow - $entry.Checked).TotalMilliseconds -lt 1000) {
+        if ([object]::ReferenceEquals($entry.Plan, $plan) -and ([DateTime]::UtcNow - $entry.Checked).TotalMilliseconds -lt 1000) {
             try {
                 $cachedRecords = @(foreach ($control in $entry.Elements) { Get-ReactionRecord $control })
-                $cached = Select-RegisteredReactions $cachedRecords $Saved
+                $cached = Select-ReactionRecords $cachedRecords $plan
                 if ($null -ne $cached -and (Test-ElementWindow $cached.Elements[0] $WindowHandle)) { return $cached }
             } catch { }
         }
@@ -148,17 +176,18 @@ function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
     }
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
     # Filter inside the provider before fetching properties across process boundaries.
-    $condition = New-ReactionLookupCondition $Saved
+    if (!$plan.ContainsKey('Condition')) { $plan.Condition = New-ReactionLookupCondition $plan }
+    $condition = $plan.Condition
     $records = @()
     foreach ($control in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
         try {
             $records += Get-ReactionRecord $control
         } catch { }
     }
-    $group = Select-RegisteredReactions $records $Saved
+    $group = Select-ReactionRecords $records $plan
     if ($null -ne $group) {
         if ($script:ReactionElementCache.Count -ge 8) { $script:ReactionElementCache.Clear() }
-        $script:ReactionElementCache[$WindowHandle] = @{Elements=$group.Elements; Checked=[DateTime]::UtcNow; Fingerprint=$fingerprint}
+        $script:ReactionElementCache[$WindowHandle] = @{Elements=$group.Elements; Checked=[DateTime]::UtcNow; Plan=$plan}
     }
     return $group
 }

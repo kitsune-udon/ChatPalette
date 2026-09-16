@@ -77,7 +77,7 @@ AutoHotkeyを標準外の場所に置いている場合は `-AutoHotkeyPath '実
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 ```
 
-`dist/youtube_chat_helper-バージョン.zip` を作成します。既存の同名ZIPは上書きしません。コード・文書・固定テストデータ・開発設定を明示的に収集し、個人の `data/`・`.git/`・テスト実行ファイルは収集しません。ZIP内の `SHA256SUMS` で内容のハッシュを確認できます。
+`dist/ChatPalette-バージョン.zip` を作成します。既存の同名ZIPは上書きしません。コード・文書・固定テストデータ・開発設定を明示的に収集し、個人の `data/`・`.git/`・テスト実行ファイルは収集しません。ZIP内の `SHA256SUMS` で内容のハッシュを確認できます。
 
 更新時は `VERSION` と `CHANGELOG.md` を更新します。GitへのコミットやGitHubへのアップロードは、このスクリプトでは行いません。
 

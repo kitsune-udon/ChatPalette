@@ -12,10 +12,17 @@ foreach ($module in @('settings_schema.ahk','settings_store.ahk','worker_client.
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $reactionSource = [IO.File]::ReadAllText("$fixture\reaction_controller.ahk").Replace('SetReactionHotkey(key, enabled := true) {', 'RegisterFixtureHotkey(key, enabled := true) {')
+$reactionSource = $reactionSource.Replace('WaitShortcutRelease(keys) {', 'WaitFixtureShortcutRelease(keys) {')
 [IO.File]::WriteAllText("$fixture\reaction_controller.ahk", $reactionSource, [Text.UTF8Encoding]::new($true))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination "$fixture\settings.ini" -Force
 $worker = [IO.File]::ReadAllText("$release\browser_worker.ps1")
+$worker = $worker.Replace('function Invoke-WorkerRequest($Request) {', 'function Invoke-FixtureBaseRequest($Request) {')
 $mock = @'
+function Invoke-WorkerRequest($Request) {
+    if ($Request.FixtureExit -eq '1') { exit 1 }
+    if ($Request.FixtureDelay) { Start-Sleep -Milliseconds ([int]$Request.FixtureDelay) }
+    return Invoke-FixtureBaseRequest $Request
+}
 function Read-BrowserVideoId([long]$WindowHandle) { return 'abcdefghijk' }
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
 function Test-ReactionForeground([long]$WindowHandle) { return $true }
@@ -491,8 +498,29 @@ try {
     result := RequestBrowserOperation(123, "reaction_send", context.Video, "Reaction=5`n")
     Assert(result.State = "cooldown" || result.State = "operated", "subsequent pipe request handled across cooldown boundary")
     firstPID := WorkerProcessId
+    sequenceBeforeCrash := WorkerRequestSequence
+    ProcessClose(firstPID)
+    ProcessWaitClose(firstPID, 2)
+    recovered := RequestBrowserOperation(123, "reaction_context")
+    Assert(recovered.State = "ok" && WorkerProcessId != firstPID && WorkerRequestSequence = sequenceBeforeCrash + 1, "crashed worker restarts on next request without replay")
+    firstPID := WorkerProcessId
     StopBrowserWorker()
     Assert(!ProcessExist(firstPID), "worker shuts down")
+    context := RequestBrowserOperation(123, "reaction_context")
+    global StoppedWhileWaiting := false
+    ActiveReactionJob := {Mode:"reaction_send", Cancelled:false, Completed:0, Total:1}
+    waitingJob := ActiveReactionJob
+    SetTimer(CancelDuringFixtureWait, -30)
+    delayed := RequestBrowserOperation(123, "verify", context.Video, "FixtureDelay=250`n")
+    Assert(delayed.State = "ok" && StoppedWhileWaiting && waitingJob.Cancelled, "notification wait pumps cancellation before response")
+    CancelReaction()
+    timedOut := SendWorkerRequest(123, "verify", context.Video, "FixtureDelay=3500`n")
+    Assert(timedOut.State = "unavailable" && !WorkerProcessId && !WorkerPipeHandle && !WorkerSignalHandle, "timeout releases pipe and notification resources")
+    context := RequestBrowserOperation(123, "reaction_context")
+    crashed := SendWorkerRequest(123, "reaction_send", context.Video, "FixtureExit=1`nReaction=1`n")
+    Assert(crashed.State = "unknown" && !WorkerProcessId && !WorkerSignalHandle, "in-flight crash is unknown and never replayed")
+    Assert(RequestBrowserOperation(123,"reaction_context").State = "ok", "notification resources recover after in-flight crash")
+    StopBrowserWorker()
     BeginReactionEditing()
     HasUnsavedSharedReaction := true
     HasUnsavedReactionSettings := true
@@ -501,6 +529,11 @@ try {
     Assert(CanChangeProfile(), "shared-only edits allow profile transition")
     SaveSelectedProfile(SelectedProfileIndex)
     Assert(SharedReactionDraft = sharedDraftBefore && SharedReactionDraft.Count = 1000 && HasUnsavedSharedReaction, "profile selection preserves shared draft")
+    unchangedPath := SettingsFilePath
+    SettingsFilePath := A_ScriptDir "\missing-parent\selection.ini"
+    SaveSelectedProfile(SelectedProfileIndex)
+    Assert(!FileExist(SettingsFilePath), "unchanged selection performs no disk write")
+    SettingsFilePath := unchangedPath
     HasUnsavedProfileReaction := true
     blocked := false
     try SaveSelectedProfile(SelectedProfileIndex)
@@ -520,6 +553,18 @@ try {
     cancelledMessage := ReactionExecutionStatus.Message
     QuickReaction()
     Assert(ReactionExecutionStatus.Message = cancelledMessage, "queued cancellation result is retained")
+    global ShortcutReleaseReplacement, ShortcutReleaseResult
+    for released in [false, true] {
+        replacementJob := {Mode:"queued", Cancelled:false, Window:0}
+        ShortcutReleaseReplacement := replacementJob
+        ShortcutReleaseResult := released
+        ActiveReactionJob := {Mode:"queued", Cancelled:false, Window:0}
+        SetReactionStatus("新しい開始待ち", false, "queued")
+        QuickReaction()
+        Assert(ActiveReactionJob = replacementJob && ReactionExecutionStatus.Phase = "queued", "old shortcut cleanup preserves replacement job")
+    }
+    ShortcutReleaseReplacement := 0
+    CancelReaction()
     schemaPath := A_ScriptDir "\schema-check.ini"
     schemaState := CreateSettingsSnapshot()
     schemaState.SharedDanmakuItems := [
@@ -540,6 +585,31 @@ try {
         rejected := true
     Assert(rejected && FileRead(schemaPath) == savedRoundTrip && !FileExist(schemaPath ".new"), "multiline text cannot corrupt persisted INI")
     schemaState.SharedDanmakuItems[1].Text := "👏"
+    bulkState := CreateSettingsSnapshot()
+    bulkState.Profiles := []
+    Loop 50 {
+        bulkProfile := {Name:"投稿者" A_Index,Channel:"/channel/fixture" A_Index,Reaction:0,Items:[]}
+        Loop 10
+            bulkProfile.Items.Push({Name:"弾幕" A_Index,Text:"  👏" Chr(34) "引用符" Chr(34) "👏  "})
+        bulkState.Profiles.Push(bulkProfile)
+    }
+    WriteSettingsFile(bulkState, schemaPath)
+    bulkRead := ReadSettingsFile(schemaPath)
+    Assert(bulkRead.Profiles.Length = 50, "bulk save retains all sections")
+    for i, profile in bulkRead.Profiles {
+        Assert(profile.Name == bulkState.Profiles[i].Name && profile.Items.Length = 10, "bulk save retains author and count")
+        for j, item in profile.Items
+            Assert(item.Text == bulkState.Profiles[i].Items[j].Text, "bulk save preserves unicode quotes and spaces")
+    }
+    diskBeforeLock := FileRead(schemaPath)
+    lock := FileOpen(schemaPath, "r -d")
+    failed := false
+    try WriteSettingsFile(schemaState, schemaPath)
+    catch
+        failed := true
+    finally
+        lock.Close()
+    Assert(failed && FileRead(schemaPath) == diskBeforeLock && !FileExist(schemaPath ".new"), "failed replacement preserves INI and removes temporary file")
     ReactionCounts.Push(7)
     ReactionIntervals.Push(75)
     try {
@@ -570,6 +640,19 @@ SetReactionHotkey(key, enabled := true) {
     RegisterFixtureHotkey(key, enabled)
     if IsSet(KeyCalls)
         KeyCalls.Push({Key:key, Enabled:enabled})
+}
+WaitShortcutRelease(keys) {
+    global ActiveReactionJob
+    if IsSet(ShortcutReleaseReplacement) && ShortcutReleaseReplacement {
+        ; Model Esc followed by a new shortcut while the old KeyWait is suspended.
+        ActiveReactionJob := ShortcutReleaseReplacement
+        return ShortcutReleaseResult
+    }
+    return WaitFixtureShortcutRelease(keys)
+}
+CancelDuringFixtureWait() {
+    global StoppedWhileWaiting := IsBrowserOperationBusy
+    CancelReaction()
 }
 CheckHelpOwner() {
     global HelpOwnerMatches

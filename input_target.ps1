@@ -19,6 +19,10 @@ function Get-YouTubeInputKind($Records) {
 
 function Get-InputRecord($Element, [bool]$Focused) {
     $info = $Element.Current
+    if (!$Focused) {
+        # Ancestry needs structure only, not names, focus state or edit patterns.
+        return @{Id=$info.AutomationId; Class=$info.ClassName; Type=$info.ControlType.Id}
+    }
     $editable = $false
     if ($Focused) {
         $pattern = $null
@@ -29,8 +33,6 @@ function Get-InputRecord($Element, [bool]$Focused) {
             # Read only the attribute, never the document text. Unknown is not editable.
             $readOnly = $pattern.DocumentRange.GetAttributeValue([System.Windows.Automation.TextPattern]::IsReadOnlyAttribute)
             $editable = $readOnly -is [bool] -and !$readOnly
-        } else {
-            $editable = $info.ControlType.Id -eq 50004 # Edit
         }
     }
     return @{Id=$info.AutomationId; Name=$info.Name; Class=$info.ClassName; Type=$info.ControlType.Id;
@@ -38,7 +40,6 @@ function Get-InputRecord($Element, [bool]$Focused) {
 }
 
 function Get-FocusedYouTubeInput([long]$WindowHandle) {
-    if (!(Test-ReactionForeground $WindowHandle)) { return '' }
     $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
     if ($null -eq $focused -or !(Test-ElementWindow $focused $WindowHandle)) { return '' }
     $records = @()
@@ -49,8 +50,9 @@ function Get-FocusedYouTubeInput([long]$WindowHandle) {
         $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
     }
     $kind = Get-YouTubeInputKind $records
-    if (!$kind -or !(Test-ReactionForeground $WindowHandle)) { return '' }
+    if (!$kind) { return '' }
     $latest = [System.Windows.Automation.AutomationElement]::FocusedElement
     if ($null -eq $latest -or ![System.Windows.Automation.Automation]::Compare($focused, $latest)) { return '' }
+    if (!(Test-ElementWindow $latest $WindowHandle)) { return '' }
     return $kind
 }

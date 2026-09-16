@@ -6,7 +6,7 @@ $version = (Get-Content -LiteralPath (Join-Path $project 'VERSION') -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid VERSION' }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
-$zipPath = Join-Path $output "youtube_chat_helper-$version.zip"
+$zipPath = Join-Path $output "ChatPalette-$version.zip"
 if (Test-Path -LiteralPath $zipPath) { throw 'Release archive already exists. Use a new version or output directory.' }
 $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
 try {

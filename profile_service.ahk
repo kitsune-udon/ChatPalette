@@ -56,6 +56,8 @@ SaveSelectedProfile(index) {
             throw Error("投稿者設定を保存するか、変更を戻してください。")
         if index < 1 || index > Profiles.Length
             throw Error("投稿者が見つかりません。")
+        if index = SelectedProfileIndex
+            return
         state := CreateSettingsSnapshot()
         state.SelectedProfileIndex := index
         WriteSettingsFile(state, SettingsFilePath)

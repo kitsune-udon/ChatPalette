@@ -51,34 +51,27 @@ HasSettingValue(values, value) {
 }
 
 WriteSettingsFile(state, path) {
-    ; Rewrite to a new file so removed records do not remain in the settings.
+    ; Serialize before touching disk; one write preserves the same UTF-16 INI format.
+    text := "[General]`r`nCount=" state.Profiles.Length "`r`nCurrent=" state.SelectedProfileIndex
+        . "`r`nAutoMode=" state.AutoMode "`r`nReactionDefault=" state.ReactionDefault
+        . "`r`nReactionCount=" state.ReactionCount "`r`nReactionInterval=" state.ReactionInterval "`r`n"
+        . SettingTextLine("ReactionShortcut", state.ReactionShortcut, "General")
+    for i, p in state.Profiles {
+        section := "Profile" i
+        text .= "`r`n[" section "]`r`n" SettingTextLine("Name", p.Name, section)
+            . SettingTextLine("Channel", p.Channel, section)
+            . "Reaction=" p.Reaction "`r`nCount=" p.Items.Length "`r`n"
+        for j, item in p.Items
+            text .= SettingTextLine("Label" j, item.Name, section) SettingTextLine("Text" j, item.Text, section)
+    }
+    text .= "`r`n[CommonDanmaku]`r`nCount=" state.SharedDanmakuItems.Length "`r`n"
+    for j, item in state.SharedDanmakuItems
+        text .= SettingTextLine("Label" j, item.Name, "CommonDanmaku") SettingTextLine("Text" j, item.Text, "CommonDanmaku")
     destination := path ".new"
     try {
         if FileExist(destination)
             FileDelete(destination)
-        IniWrite(state.Profiles.Length, destination, "General", "Count")
-        IniWrite(state.SelectedProfileIndex, destination, "General", "Current")
-        IniWrite(state.AutoMode, destination, "General", "AutoMode")
-        IniWrite(state.ReactionDefault, destination, "General", "ReactionDefault")
-        IniWrite(state.ReactionCount, destination, "General", "ReactionCount")
-        IniWrite(state.ReactionInterval, destination, "General", "ReactionInterval")
-        IniWrite(state.ReactionShortcut, destination, "General", "ReactionShortcut")
-        for i, p in state.Profiles {
-            section := "Profile" i
-            WriteSettingText(p.Name, destination, section, "Name")
-            WriteSettingText(p.Channel, destination, section, "Channel")
-            IniWrite(p.Reaction, destination, section, "Reaction")
-            IniWrite(p.Items.Length, destination, section, "Count")
-            for j, item in p.Items {
-                WriteSettingText(item.Name, destination, section, "Label" j)
-                WriteSettingText(item.Text, destination, section, "Text" j)
-            }
-        }
-        IniWrite(state.SharedDanmakuItems.Length, destination, "CommonDanmaku", "Count")
-        for j, item in state.SharedDanmakuItems {
-            WriteSettingText(item.Name, destination, "CommonDanmaku", "Label" j)
-            WriteSettingText(item.Text, destination, "CommonDanmaku", "Text" j)
-        }
+        FileAppend(text, destination, "UTF-16")
         FileMove(destination, path, true)
     } finally {
         if FileExist(destination) {
@@ -87,16 +80,16 @@ WriteSettingsFile(state, path) {
     }
 }
 
-WriteSettingText(value, path, section, key) {
+SettingTextLine(key, value, section) {
     if InStr(value, "`r") || InStr(value, "`n")
         throw Error("設定の文字列には改行を含められません：[" section "] " key)
-    ; The INI API strips one enclosing quote pair and unquoted edge spaces.
-    ; Always wrap literal strings so their original quotes/spaces survive reload.
-    IniWrite(Chr(34) value Chr(34), path, section, key)
+    ; INI reading strips one enclosing quote pair. Preserve literal quotes/spaces.
+    return key "=" Chr(34) value Chr(34) "`r`n"
 }
-
 ReadSettingInteger(path, section, key, fallback) {
     value := IniRead(path, section, key, fallback)
+    if !IsInteger(value)
+        throw Error("設定値が整数ではありません：[" section "] " key)
     try return Integer(value)
     catch
         throw Error("設定値が整数ではありません：[" section "] " key)

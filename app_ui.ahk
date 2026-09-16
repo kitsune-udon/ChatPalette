@@ -1,12 +1,12 @@
 ﻿; View construction, rendering, and UI event adapters.
 BuildPanel() {
     global MainWindow, FeatureTabs, PanelStatusText, UiX, UiY
-    MainWindow := Gui("", "YouTube チャットヘルパー")
+    MainWindow := Gui("", "ChatPalette")
     MainWindow.BackColor := "F5F7FA"
     MainWindow.SetFont("s10", "Yu Gothic UI")
     MainWindow.MarginX := 16, MainWindow.MarginY := 16
-    MainWindow.AddText("x20 y14 w460 h30 c183153", "YouTube チャットヘルパー").SetFont("s16 bold")
-    MainWindow.AddText("x20 y48 w500 h22 c526174", "YouTubeのチャット・コメント入力とリアクション操作を補助します。")
+    MainWindow.AddText("x20 y14 w460 h30 c183153", "ChatPalette").SetFont("s16 bold")
+    MainWindow.AddText("x20 y48 w500 h22 c526174", "YouTube向けの弾幕入力・リアクション補助ツール")
     MainWindow.AddButton("x482 y22 w108 h30", "診断情報").OnEvent("Click", ShowDiagnostics)
     MainWindow.AddButton("x600 y22 w140 h30", "使い方").OnEvent("Click", Help)
     FeatureTabs := MainWindow.AddTab3("x16 y82 w728 h522 Choose1", ["ホーム", "弾幕ライブラリ", "投稿者別設定", "共通設定", "環境・登録"])
@@ -640,5 +640,5 @@ ReactionNotice(state, detail := "", suffix := "") {
 
 
 UpdateTray() {
-    A_IconTip := "弾幕ヘルパー：" (GetSelectedProfile() ? Profiles[SelectedProfileIndex].Name : "投稿者未登録")
+    A_IconTip := "ChatPalette：" (GetSelectedProfile() ? Profiles[SelectedProfileIndex].Name : "投稿者未登録")
 }

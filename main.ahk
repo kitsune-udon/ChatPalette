@@ -28,17 +28,17 @@ global DetectedChannel := {State: "unavailable", Author: "", Channel: ""}, Libra
 global UndoButton := 0
 global ProfileManagerActive := false
 global WorkerRequestActive := false
-global WorkerProcessId := 0, WorkerPipeHandle := 0, WorkerRequestSequence := 0, ChannelIndex := Map()
+global WorkerProcessId := 0, WorkerPipeHandle := 0, WorkerSignalHandle := 0, WorkerRequestSequence := 0, ChannelIndex := Map()
 if !InitializeAppSettings()
     ExitApp(1)
 InitReactions()
 BeginReactionEditing()
 BuildPanel()
 OnExit(StopBrowserWorker)
-A_TrayMenu.Add("ヘルパーを開く", ShowPanel)
+A_TrayMenu.Add("ChatPaletteを開く", ShowPanel)
 A_TrayMenu.Add("使い方", Help)
 A_TrayMenu.Add("診断情報", ShowDiagnostics)
-A_TrayMenu.Default := "ヘルパーを開く"
+A_TrayMenu.Default := "ChatPaletteを開く"
 UpdateTray()
 if A_Args.Length && A_Args[1] = "--smoke"
     ExitApp()

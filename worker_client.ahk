@@ -1,6 +1,6 @@
 ﻿; Worker lifecycle and framed request/reply transport. No GUI dependencies.
 EnsureWorkerRunning() {
-    global WorkerProcessId, WorkerPipeHandle
+    global WorkerProcessId, WorkerPipeHandle, WorkerSignalHandle
     if WorkerProcessId && ProcessExist(WorkerProcessId) && WorkerPipeHandle
         return
     StopBrowserWorker()
@@ -19,6 +19,10 @@ EnsureWorkerRunning() {
         throw Error("名前付きパイプを作成できませんでした。")
     }
     DllCall("ConnectNamedPipe", "Ptr", WorkerPipeHandle, "Ptr", 0)
+    WorkerSignalHandle := DllCall("CreateEventW", "Ptr", 0, "Int", false, "Int", false,
+        "Str", pipeName "-ready", "Ptr")
+    if !WorkerSignalHandle
+        throw Error("補助プロセスの通知を準備できませんでした。")
     q := Chr(34)
     command := q A_WinDir "\System32\WindowsPowerShell\v1.0\powershell.exe" q
         . " -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "
@@ -31,10 +35,14 @@ EnsureWorkerRunning() {
 }
 
 StopBrowserWorker(*) {
-    global WorkerProcessId, WorkerPipeHandle
+    global WorkerProcessId, WorkerPipeHandle, WorkerSignalHandle
     if WorkerPipeHandle {
         DllCall("CloseHandle", "Ptr", WorkerPipeHandle)
         WorkerPipeHandle := 0
+    }
+    if IsSet(WorkerSignalHandle) && WorkerSignalHandle {
+        DllCall("CloseHandle", "Ptr", WorkerSignalHandle)
+        WorkerSignalHandle := 0
     }
     if WorkerProcessId {
         try {
@@ -122,7 +130,7 @@ SendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
                         Video: fields.Get("Video", ""), Detail: fields.Get("Detail", "")}
                 }
             }
-            Sleep(10)
+            WaitWorkerSignal(Min(50, Max(0, limit - (A_TickCount - start))))
         }
         StopBrowserWorker()
         return unavailable
@@ -132,4 +140,15 @@ SendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
     } finally {
         WorkerRequestActive := false
     }
+}
+
+WaitWorkerSignal(timeout) {
+    ; Wake on worker notification or input; pump AHK timers/hotkeys without a sleep.
+    handles := Buffer(A_PtrSize)
+    NumPut("Ptr", WorkerSignalHandle, handles)
+    result := DllCall("MsgWaitForMultipleObjectsEx", "UInt", 1, "Ptr", handles,
+        "UInt", timeout, "UInt", 0x4FF, "UInt", 4, "UInt")
+    if result = 0xFFFFFFFF
+        throw Error("補助プロセスの通知待ちに失敗しました。")
+    Sleep(-1)
 }

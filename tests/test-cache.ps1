@@ -13,7 +13,7 @@ $elements = @(foreach ($i in 1..5) {
     $control | Add-Member ScriptMethod GetRuntimeId { return @($this.Id) }
     $control
 })
-$script:ReactionElementCache[123L] = @{Fingerprint=($tokens | ConvertTo-Json -Depth 4 -Compress);Checked=[DateTime]::UtcNow;Elements=$elements}
+$script:ReactionElementCache[123L] = @{Plan=(Get-ReactionPlan $saved);Checked=[DateTime]::UtcNow;Elements=$elements}
 $result = Find-RegisteredReactions 123 $saved
 if ($null -eq $result -or $result.Elements.Count -ne 5) { throw 'valid cache not reused' }
 $elements[2].Current.IsOffscreen = $true
@@ -24,3 +24,13 @@ $elements[2].Current.Name = 'replaced'
 $records = @(foreach ($element in $elements) { Get-ReactionRecord $element })
 if ($null -ne (Select-RegisteredReactions $records $saved)) { throw 'changed cached identity accepted' }
 'PASS: cached lookup, hidden control and changed identity checks'
+$plan = Get-ReactionPlan $saved
+if (![object]::ReferenceEquals($plan,(Get-ReactionPlan $saved))) { throw 'Registration plan not reused' }
+$replacement = @{tokens=@($tokens | ForEach-Object { $_.Clone() })}
+$replacement.tokens[0].name = 'new-name'
+$nextPlan = Get-ReactionPlan $replacement
+if ([object]::ReferenceEquals($plan,$nextPlan) -or $nextPlan.Tokens[0].name -ne 'new-name') { throw 'Re-registration reused old plan' }
+if ($plan.Tokens[0].name -ne 'reaction1') { throw 'Prepared snapshot changed with new registration' }
+foreach ($i in 1..20) { $null = Get-ReactionPlan @{tokens=@($tokens | ForEach-Object { $_.Clone() })} }
+if ($script:ReactionPlans.Count -gt 8) { throw 'Registration plan cache unbounded' }
+'PASS: reusable registration plans, replacement and bounded cache'
