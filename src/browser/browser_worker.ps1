@@ -1,9 +1,9 @@
-﻿param([string]$PipeName, [int]$ParentProcessId, [string]$CachePath, [switch]$Library, [string]$DataDirectory = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'data'))
+﻿param([string]$PipeName, [int]$ParentProcessId, [switch]$Library)
 $ErrorActionPreference = 'Stop'
 $script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 $script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)
 $script:AddressBarCache = @{}
-. (Join-Path $PSScriptRoot 'reaction_automation.ps1') -SelectorsPath (Join-Path $DataDirectory 'reaction_selectors.json')
+. (Join-Path $PSScriptRoot 'reaction_automation.ps1')
 . (Join-Path $PSScriptRoot 'video_metadata.ps1')
 . (Join-Path $PSScriptRoot 'input_target.ps1')
 
@@ -77,6 +77,10 @@ function Read-BrowserVideoId([long]$WindowHandle) {
 }
 
 function Invoke-WorkerRequest($Request) {
+    if ($Request.Mode -eq 'reaction_configure') {
+        Set-ReactionRegistrationSnapshot $Request.Payload
+        return @{Seq=$Request.Seq; Window=$Request.Window; State='configured'}
+    }
     if ($Request.Mode -eq 'reaction_status') {
         $browser = Get-BrowserProcessName ([long]$Request.Window)
         $state = if (-not $browser) { 'unavailable' } elseif ($script:BrowserReactionSelectors.ContainsKey($browser)) { 'configured' } else { 'not_registered' }
@@ -155,7 +159,6 @@ try {
     Add-Type -AssemblyName UIAutomationClient
     Add-Type -AssemblyName UIAutomationTypes
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Load-VideoCache
     while ($true) {
         # Blocks without polling. Closing/crashing the AHK server breaks the read.
         $request = Read-PipeRequest $reader

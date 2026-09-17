@@ -49,7 +49,7 @@ try {
     monitor := DllCall("MonitorFromWindow","Ptr",probe.Hwnd,"UInt",2,"Ptr")
     DllCall("GetMonitorInfoW","Ptr",monitor,"Ptr",info)
     DllCall("GetWindowRect","Ptr",probe.Hwnd,"Ptr",rect)
-    AssertView(NumGet(rect,0,"Int")>=NumGet(info,20,"Int") && NumGet(rect,4,"Int")>=NumGet(info,24,"Int"),"offscreen position is recovered")
+    AssertView(NumGet(rect,0,"Int")>=NumGet(info,20,"Int") && NumGet(rect,4,"Int")>=NumGet(info,24,"Int") && NumGet(rect,8,"Int")<=NumGet(info,28,"Int") && NumGet(rect,12,"Int")<=NumGet(info,32,"Int"),"all edges fit recovered work area")
     probe.Destroy()
     FileAppend("PASS: " ViewChecks " viewport and progress checks; no browser operations`n","*")
     ExitApp(0)

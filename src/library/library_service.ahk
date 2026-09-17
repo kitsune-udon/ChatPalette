@@ -12,19 +12,25 @@ GetLibraryItems(library, profileId := "") {
     return library.Profiles[index].Items
 }
 
+; External callers retain ownership of their mutable draft.
 CommitLibraryChange(library, label) {
+    return CommitLibraryDraft({Profiles:CopyProfiles(library.Profiles), SharedDanmakuItems:CopyItems(library.SharedDanmakuItems)},label)
+}
+
+; Internal command drafts transfer ownership after successful persistence.
+CommitLibraryDraft(library, label) {
     global Profiles, SharedDanmakuItems, InputProfileIndex
     previousCritical := A_IsCritical
     Critical("On")
     try {
         activeId := GetInputProfile() ? GetInputProfile().Id : ""
-        before := {Profiles:CopyProfiles(Profiles), Items:CopyItems(SharedDanmakuItems), Label:label}
+        before := {Profiles:Profiles, Items:SharedDanmakuItems, Label:label}
         ; Only library data comes from the caller. Other preferences are always current.
-        state := CreateSettingsSnapshot()
-        state.Profiles := CopyProfiles(library.Profiles)
-        state.SharedDanmakuItems := CopyItems(library.SharedDanmakuItems)
+        state := CreateSettingsSnapshot(false)
+        state.Profiles := library.Profiles
+        state.SharedDanmakuItems := library.SharedDanmakuItems
         state.InputProfileIndex := FindProfileIndexById(state.Profiles, activeId)
-        WriteSettingsFile(state, SettingsFilePath)
+        SaveLibrarySettings(state, SettingsDatabasePath)
         Profiles := state.Profiles, SharedDanmakuItems := state.SharedDanmakuItems
         InputProfileIndex := state.InputProfileIndex
         LibraryHistory.Push(before)
@@ -44,11 +50,11 @@ UndoLibraryCommand() {
         if !LibraryHistory.Length
             return ""
         previous := LibraryHistory[-1]
-        state := CreateSettingsSnapshot()
-        state.Profiles := CopyProfiles(previous.Profiles), state.SharedDanmakuItems := CopyItems(previous.Items)
+        state := CreateSettingsSnapshot(false)
+        state.Profiles := previous.Profiles, state.SharedDanmakuItems := previous.Items
         activeId := GetInputProfile() ? GetInputProfile().Id : ""
         state.InputProfileIndex := FindProfileIndexById(state.Profiles, activeId)
-        WriteSettingsFile(state, SettingsFilePath)
+        SaveLibrarySettings(state, SettingsDatabasePath)
         Profiles := state.Profiles, SharedDanmakuItems := state.SharedDanmakuItems
         InputProfileIndex := state.InputProfileIndex
         LibraryHistory.Pop()
@@ -63,7 +69,7 @@ ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId :
     previousCritical := A_IsCritical
     Critical("On")
     try {
-        library := CreateLibrarySnapshot(), items := GetLibraryItems(library,profileId)
+        library := CreateLibraryDraft(), items := EditLibraryItems(library,profileId)
         if action != "add" && (!IsInteger(index) || index < 1 || index > items.Length)
             throw Error("対象の弾幕が見つかりません。選び直してください。")
         selected := index
@@ -71,7 +77,7 @@ ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId :
             case "add", "edit":
                 if !IsObject(value) || !Trim(value.Name) || !Trim(value.Text)
                     throw Error("弾幕名と本文を入力してください。")
-                item := {Name:Trim(value.Name), Text:value.Text, Slot:0}
+                item := {Id:action = "add" ? NewRecordId() : items[index].Id, Name:Trim(value.Name), Text:value.Text, Slot:0}
                 if action = "add"
                     items.Push(item), selected := items.Length
                 else
@@ -83,7 +89,7 @@ ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId :
                 items.RemoveAt(index)
             case "duplicate":
                 item := items[index]
-                items.InsertAt(index+1,{Name:item.Name "（コピー）",Text:item.Text,Slot:0})
+                items.InsertAt(index+1,{Id:NewRecordId(),Name:item.Name "（コピー）",Text:item.Text,Slot:0})
                 selected := index+1, label := "「" item.Name "」の複製"
             case "up", "down":
                 selected := index + (action = "up" ? -1 : 1)
@@ -94,14 +100,14 @@ ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId :
             case "move":
                 if destinationId = profileId
                     throw Error("別の移動先を選んでください。")
-                destination := GetLibraryItems(library,destinationId)
-                item := items.RemoveAt(index), item.Slot := 0
+                destination := EditLibraryItems(library,destinationId)
+                item := items.RemoveAt(index).Clone(), item.Slot := 0
                 destination.Push(item)
                 label := "「" item.Name "」の移動"
             default:
                 throw Error("不明な弾幕操作です。")
         }
-        CommitLibraryChange(library,label)
+        CommitLibraryDraft(library,label)
         return {Label:label, Index:selected, ProfileId:profileId}
     } finally {
         Critical(previousCritical)
@@ -112,7 +118,7 @@ ExecuteProfileCommand(action, profileId := "", value := "", channel := "") {
     previousCritical := A_IsCritical
     Critical("On")
     try {
-        library := CreateLibrarySnapshot(), index := FindProfileIndexById(library.Profiles,profileId)
+        library := CreateLibraryDraft(), index := FindProfileIndexById(library.Profiles,profileId)
         if action != "add" && !index
             throw Error("対象の配信者が見つかりません。選び直してください。")
         switch action {
@@ -125,7 +131,7 @@ ExecuteProfileCommand(action, profileId := "", value := "", channel := "") {
                             if profile.Channel == channel
                                 throw Error("既に「" profile.Name "」と連携しています。")
                     }
-                    profileId := NewProfileId()
+                    profileId := NewRecordId()
                     library.Profiles.Push({Id:profileId,Name:Trim(value),Channel:channel,Items:[]})
                 } else
                     library.Profiles[index].Name := Trim(value)
@@ -144,9 +150,29 @@ ExecuteProfileCommand(action, profileId := "", value := "", channel := "") {
             default:
                 throw Error("不明な配信者操作です。")
         }
-        CommitLibraryChange(library,label)
+        CommitLibraryDraft(library,label)
         return {Label:label, ProfileId:profileId}
     } finally {
         Critical(previousCritical)
     }
+}
+
+; Clone profile metadata, sharing immutable item arrays until a command edits one.
+CreateLibraryDraft() {
+    clonedProfiles := []
+    for profile in Profiles
+        clonedProfiles.Push(profile.Clone())
+    return {Profiles:clonedProfiles, SharedDanmakuItems:SharedDanmakuItems}
+}
+
+EditLibraryItems(library, profileId) {
+    if profileId = "" {
+        library.SharedDanmakuItems := library.SharedDanmakuItems.Clone()
+        return library.SharedDanmakuItems
+    }
+    index := FindProfileIndexById(library.Profiles,profileId)
+    if !index
+        throw Error("対象の配信者が見つかりません。選び直してください。")
+    library.Profiles[index].Items := library.Profiles[index].Items.Clone()
+    return library.Profiles[index].Items
 }

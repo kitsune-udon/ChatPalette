@@ -1,13 +1,10 @@
-﻿param([string]$SelectorsPath = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'data\reaction_selectors.json'))
-. (Join-Path $PSScriptRoot 'browser_uia.ps1')
-. (Join-Path $PSScriptRoot 'reaction_store.ps1')
+﻿. (Join-Path $PSScriptRoot 'browser_uia.ps1')
+. (Join-Path $PSScriptRoot 'reaction_registration.ps1')
 # Reaction adapter: UI discovery and execution are separate from transport and UI.
 # Registration is explicit and read-only with respect to the YouTube page.
-$script:ReactionSelectorsPath = $SelectorsPath
-$script:BrowserReactionSelectors = Read-ReactionSelectors $SelectorsPath
-$script:ReactionRecordCache = $null
+$script:BrowserReactionSelectors = @{}
+$script:ReactionPropertyRequest = $null
 $script:ReactionElementCache = @{}
-$script:ReactionPlans = @()
 $script:ReactionAliases = @('heart|ハート|[❤♥]', 'smil|grin|happy|笑|😀|😁|😄|😊', 'party|celebrat|tada|お祝い|祝|🎉', 'surpris|shock|astonish|flushed|open[_ -]?mouth|\bwow\b|驚|びっくり|赤面|赤らめ|😮|😲|😯|😳', '100|hundred|perfect|💯')
 
 function Test-ReactionForeground([long]$WindowHandle) {
@@ -96,13 +93,12 @@ function New-ReactionPlan($Saved) {
 }
 
 function Get-ReactionPlan($Saved) {
-    foreach ($entry in $script:ReactionPlans) {
-        if ([object]::ReferenceEquals($entry.Source, $Saved)) { return $entry.Plan }
-    }
+    if ($null -ne $Saved.PreparedPlan) { return $Saved.PreparedPlan }
     $plan = New-ReactionPlan $Saved
     if ($null -eq $plan) { return $null }
-    if ($script:ReactionPlans.Count -ge 8) { $script:ReactionPlans = @() }
-    $script:ReactionPlans += @{Source=$Saved; Plan=$plan}
+    # The immutable registration owns its plan; replacing it releases the old plan.
+    if ($Saved -is [Collections.IDictionary]) { $Saved.PreparedPlan = $plan }
+    else { $Saved | Add-Member NoteProperty PreparedPlan $plan }
     return $plan
 }
 
@@ -192,14 +188,14 @@ function Find-ReactionGroupInWindow([long]$WindowHandle, $plan) {
 }
 
 function Get-ReactionRecord($Control) {
-    if ($null -eq $script:ReactionRecordCache) {
-        $script:ReactionRecordCache = [System.Windows.Automation.CacheRequest]::new()
+    if ($null -eq $script:ReactionPropertyRequest) {
+        $script:ReactionPropertyRequest = [System.Windows.Automation.CacheRequest]::new()
         foreach ($property in @('NameProperty','AutomationIdProperty','ClassNameProperty','ControlTypeProperty','IsOffscreenProperty','IsEnabledProperty')) {
-            $script:ReactionRecordCache.Add([System.Windows.Automation.AutomationElement]::$property)
+            $script:ReactionPropertyRequest.Add([System.Windows.Automation.AutomationElement]::$property)
         }
     }
     # Refresh all attributes together; never reuse a previous property snapshot.
-    $snapshot = $Control.GetUpdatedCache($script:ReactionRecordCache)
+    $snapshot = $Control.GetUpdatedCache($script:ReactionPropertyRequest)
     $info = $snapshot.Cached
     return @{Element=$Control; Name=$info.Name; Id=$info.AutomationId; Class=$info.ClassName;
         Type=$info.ControlType.Id; Hidden=$info.IsOffscreen; Enabled=$info.IsEnabled;
@@ -227,16 +223,9 @@ function Register-ReactionSelectors($Request, $Reply) {
     }
     if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $Reply.Video) { $Reply.State = 'changed'; return $Reply }
     $browser = Get-BrowserProcessName ([long]$Request.Window)
-    $entry = @{browser = $browser; groupClass = $group.Class; groupId = $group.Id; tokens = $group.Tokens}
-    # Normalize to the same object shape used when loading JSON.
-    $entry = $entry | ConvertTo-Json -Depth 8 | ConvertFrom-Json
-    try { Save-ReactionSelectors $browser $entry }
-    catch {
-        $Reply.State = 'save_failed'
-        $Reply.Detail = $_.Exception.Message
-        return $Reply
-    }
-    $Reply.State = 'registered'
+    $entry = @{browser = $browser.ToLowerInvariant(); tokens = $group.Tokens}
+    $Reply.Detail = $entry | ConvertTo-Json -Depth 8 -Compress
+    $Reply.State = 'captured'
     return $Reply
 }
 
@@ -267,6 +256,10 @@ function Invoke-ReactionRequest($Request) {
         $pattern = Get-ReactionInvoker $target
         if ($null -eq $pattern) {
             $reply.State = 'unsupported'; return $reply
+        }
+        # UIA lookups may outlive a foreground switch. Check again at the action boundary.
+        if (-not (Test-ReactionForeground ([long]$Request.Window))) {
+            $reply.State = 'wrong_window'; return $reply
         }
         # Never retry after invocation, even if the provider throws or the pipe breaks.
         $reply.State = 'unknown'

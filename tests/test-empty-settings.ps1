@@ -7,18 +7,18 @@ New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $tests = @'
 OnExit(StopBrowserWorker)
 try {
-    AssertEmpty(FileExist(SettingsFilePath), "fresh settings created")
+    AssertEmpty(FileExist(SettingsDatabasePath), "fresh settings created")
     AssertEmpty(DefaultReactionIntervalMs = 200, "new settings default to 200ms start interval")
-    AssertEmpty(InStr(SettingsFilePath, "\data\") && !FileExist(A_ScriptDir "\settings.ini"), "settings live only in data directory")
+    AssertEmpty(InStr(SettingsDatabasePath, "\data\") && !FileExist(A_ScriptDir "\settings.ini"), "settings live only in data directory")
     legacyPath := A_ScriptDir "\settings.ini"
     FileAppend("[General]`nCount=99`n", legacyPath)
-    beforeMigration := FileRead(SettingsFilePath)
+    beforeMigration := FileRead(SettingsDatabasePath,"RAW")
     InitializeDataDirectory(AppDataDirectory)
-    AssertEmpty(FileRead(SettingsFilePath) = beforeMigration && FileExist(legacyPath), "migration never overwrites existing data")
+    AssertEmpty(SameFileBytes(FileRead(SettingsDatabasePath,"RAW"),beforeMigration) && FileExist(legacyPath), "migration never overwrites existing data")
     FileDelete(legacyPath)
     FileAppend("{}", A_ScriptDir "\reaction_selectors.json")
     InitializeDataDirectory(AppDataDirectory)
-    AssertEmpty(FileExist(AppDataDirectory "\reaction_selectors.json") && !FileExist(A_ScriptDir "\reaction_selectors.json"), "legacy selectors moved to data")
+    AssertEmpty(!FileExist(AppDataDirectory "\reaction_selectors.json") && FileExist(A_ScriptDir "\reaction_selectors.json"), "legacy root placement is ignored")
     AssertEmpty(Profiles.Length=0 && SharedDanmakuItems.Length=0, "fresh install has no sample data")
     AssertEmpty(!PaletteInsert.Enabled, "empty palette cannot input")
     BuildManagement()
@@ -27,7 +27,7 @@ try {
     AssertEmpty(!!DanmakuEditorWindow, "shared editor needs no author")
     CloseDanmakuEditor()
     state := CreateSettingsSnapshot()
-    state.Profiles.Push({Id:NewProfileId(),Name:"first",Channel:"",Items:[]})
+    state.Profiles.Push({Id:NewRecordId(),Name:"first",Channel:"",Items:[]})
     CommitLibraryChange(state,"add")
     AssertEmpty(Profiles.Length=1 && InputProfileIndex=0,"first added author does not steal input selection")
     UndoLibraryChange()
@@ -37,7 +37,7 @@ try {
     brokenPath := AppDataDirectory "\broken.ini"
     FileAppend("[General]`nCount=not-an-integer`n", brokenPath)
     invalidMessage := ""
-    try ReadSettingsFile(brokenPath)
+    try ReadLegacySettings(brokenPath)
     catch as failure
         invalidMessage := failure.Message
     AssertEmpty(InStr(invalidMessage, "[General] Count"), "invalid settings identify exact key")
@@ -45,7 +45,7 @@ try {
     AssertEmpty(FileExist(backup) && !FileExist(brokenPath) && InStr(FileRead(backup), "not-an-integer"), "reset preserves corrupt original")
     FileAppend("[General]`nCount=1.5`n", brokenPath)
     rejectedFraction := false
-    try ReadSettingsFile(brokenPath)
+    try ReadLegacySettings(brokenPath)
     catch
         rejectedFraction := true
     AssertEmpty(rejectedFraction, "fractional count rejected instead of truncating records")
@@ -82,6 +82,9 @@ try {
 AssertEmpty(condition, message) {
     if !condition
         throw Error(message)
+}
+SameFileBytes(left,right) {
+    return left.Size=right.Size && (!left.Size || DllCall("msvcrt\memcmp","Ptr",left,"Ptr",right,"UPtr",left.Size,"CDecl Int")=0)
 }
 '@
 $source = [IO.File]::ReadAllText((Join-Path $release 'main.ahk'))

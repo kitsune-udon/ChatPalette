@@ -18,16 +18,16 @@
         "configured","設定済み（認識は未確認）", "ready","操作対象を確認できました", "operated","ボタンを操作しました（受理は未確認）",
         "wrong_input","入力欄を確認できませんでした", "changed","動画が変わったため中止しました",
         "wrong_window","操作先が変わったため中止しました", "unavailable","情報を取得できませんでした",
-        "unknown","操作結果を確認できませんでした", "not_registered","操作ボタンが未登録です",
+        "unknown","操作結果を確認できませんでした", "cancelled","中止しました", "not_registered","操作ボタンが未登録です",
         "menu_closed","リアクションメニューが見つかりません", "unsupported","操作対象を識別できませんでした",
-        "cooldown","操作間隔が短いため停止しました", "save_failed","登録情報を保存できませんでした")
+        "cooldown","操作間隔が短いため停止しました", "save_failed","登録情報を保存できませんでした", "sync_failed","登録情報を同期できませんでした")
     phases := Map("idle","待機中", "queued","キーを離すのを待っています", "running","実行中", "finished","終了")
     mode := modes.Has(LastBrowserOperation.Mode) ? LastBrowserOperation.Mode : "不明"
     state := states.Has(LastBrowserOperation.State) ? LastBrowserOperation.State : "不明"
     phase := phases.Has(ReactionExecutionStatus.Phase) ? ReactionExecutionStatus.Phase : "不明"
     return {CapturedAt:FormatTime(, "yyyy/MM/dd HH:mm:ss"), Version:AppVersion, Ahk:A_AhkVersion, OS:A_OSVersion,
         Browser:browser, Worker:WorkerProcessId && ProcessExist(WorkerProcessId) ? "起動中" : "待機中（必要なときに起動）",
-        Auto:AutoMode ? "ON" : "OFF", Settings:FileExist(SettingsFilePath) ? "あり" : "なし",
+        Auto:AutoMode ? "ON" : "OFF", Settings:FileExist(SettingsDatabasePath) ? "あり" : "なし",
         Operation:modes.Get(mode, "不明な操作"), Result:states.Get(state, "不明な結果"),
         Duration:mode = "なし" ? "—（未実行）" : LastBrowserOperation.Duration " ms",
         Phase:phases.Get(phase, "不明"), ModeCode:mode, StateCode:state, PhaseCode:phase}

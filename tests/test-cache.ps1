@@ -32,9 +32,8 @@ $replacement.tokens[0].name = 'new-name'
 $nextPlan = Get-ReactionPlan $replacement
 if ([object]::ReferenceEquals($plan,$nextPlan) -or $nextPlan.Tokens[0].name -ne 'new-name') { throw 'Re-registration reused old plan' }
 if ($plan.Tokens[0].name -ne 'reaction1') { throw 'Prepared snapshot changed with new registration' }
-foreach ($i in 1..20) { $null = Get-ReactionPlan @{tokens=@($tokens | ForEach-Object { $_.Clone() })} }
-if ($script:ReactionPlans.Count -gt 8) { throw 'Registration plan cache unbounded' }
-'PASS: reusable registration plans, replacement and bounded cache'
+if (![object]::ReferenceEquals($saved.PreparedPlan,$plan)) { throw 'Plan not owned by registration' }
+'PASS: reusable registration plans, replacement and registration ownership'
 
 $script:SearchCount = 0
 $script:SearchResult = $null

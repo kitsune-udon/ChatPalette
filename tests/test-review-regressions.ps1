@@ -10,13 +10,14 @@ $reaction = [IO.File]::ReadAllText((Join-Path $release 'src\reactions\reaction_c
 [IO.File]::WriteAllText((Join-Path $release 'src\reactions\reaction_controller.ahk'),$reaction,[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
-global ReviewChecks := 0, ReviewFocusCalls := 0, ReviewFocusChanges := true
+global ReviewChecks := 0, ReviewFocusCalls := 0, ReviewFocusChanges := true, ReviewStatusCalls := 0
 try {
     BuildManagement()
     AutoMode := false
     TargetBrowserHwnd := 123
     LastBrowserOperation := {Mode:"reaction_send",State:"menu_closed",Duration:100}
     RefreshReactionRegistration()
+    AssertReview(ReviewStatusCalls=1,"display query reaches worker after registration handshake")
     AssertReview(LastBrowserOperation.Mode="reaction_send" && LastBrowserOperation.State="menu_closed","display query preserves failure")
     for topic in [Help,ShowReactionDetails,ShowDiagnostics] {
         topic.Call()
@@ -75,7 +76,7 @@ try {
         FileAppend(spec[1],path,"UTF-16")
         original := FileRead(path)
         errorText := ""
-        try ReadSettingsFile(path)
+        try ReadLegacySettings(path)
         catch as failure
             errorText := failure.Message
         AssertReview(InStr(errorText,spec[2]) && FileRead(path)=original,"invalid counts and missing data rejected without modifying original")
@@ -85,7 +86,7 @@ try {
     largeFile.Length := 32*1024*1024+1
     largeFile.Close()
     rejected := false
-    try ReadSettingsFile(largePath)
+    try ReadLegacySettings(largePath)
     catch
         rejected := true
     AssertReview(rejected,"oversized file rejected before parsing")
@@ -106,6 +107,10 @@ ReviewWindowActive(hwnd) {
     return ++ReviewFocusCalls=1
 }
 SendWorkerRequest(hwnd,mode:="resolve",expectedVideo:="",extra:="") {
+    if mode = "reaction_configure"
+        return {State:"configured",Author:"",Channel:"",Video:"",Detail:""}
+    global ReviewStatusCalls
+    ReviewStatusCalls++
     if mode != "reaction_status"
         throw Error("Unexpected browser operation: " mode)
     return {State:"configured",Author:"",Channel:"",Video:"",Detail:""}

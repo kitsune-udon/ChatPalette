@@ -29,12 +29,11 @@ EnsureWorkerRunning() {
         . q A_ScriptDir "\src\browser\browser_worker.ps1" q
         . " -PipeName " q pipeName q
         . " -ParentProcessId " DllCall("GetCurrentProcessId")
-        . " -CachePath " q AppDataDirectory "\video_metadata_cache.json" q
-        . " -DataDirectory " q AppDataDirectory q
     Run(command, A_ScriptDir, "Hide", &WorkerProcessId)
 }
 
 StopBrowserWorker(*) {
+    global RegistrationWorkerPid := 0
     global WorkerProcessId, WorkerPipeHandle, WorkerSignalHandle
     if WorkerPipeHandle {
         DllCall("CloseHandle", "Ptr", WorkerPipeHandle)

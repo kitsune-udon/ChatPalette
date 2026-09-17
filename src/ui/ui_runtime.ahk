@@ -81,3 +81,61 @@ IsAppWindow(hwnd) {
     DllCall("GetWindowThreadProcessId","Ptr",hwnd,"UInt*",&pid)
     return pid = DllCall("GetCurrentProcessId")
 }
+
+BeginListRefresh(list, keyColumn) {
+    selected := list.GetNext()
+    state := {Selected:selected, Key:selected ? list.GetText(selected,keyColumn) : "",
+        Top:SendMessage(0x1027,0,0,list.Hwnd), Visible:!!(WinGetStyle("ahk_id " list.Hwnd) & 0x10000000)}
+    list.Opt("-Redraw")
+    return state
+}
+
+EndListRefresh(list, state, keyColumn) {
+    try {
+        count := list.GetCount(), selected := 0
+        if state.Selected && state.Selected <= count && list.GetText(state.Selected,keyColumn) == state.Key
+            selected := state.Selected
+        else if state.Selected {
+            Loop count
+                if list.GetText(A_Index,keyColumn) == state.Key {
+                    selected := A_Index
+                    break
+                }
+        }
+        if count
+            list.Modify(selected ? selected : 1,"Select Focus")
+    } finally {
+        list.Opt("+Redraw")
+        ; WM_SETREDRAW can expose an inactive tab control. Restore the native
+        ; visibility without setting AHK's explicit Hidden flag for future tabs.
+        if !state.Visible
+            DllCall("ShowWindow","Ptr",list.Hwnd,"Int",0)
+    }
+    ; Row metrics and the scroll range are current only after redraw is restored.
+    if list.GetCount() {
+        rect := Buffer(16,0)
+        if SendMessage(0x100E,0,rect.Ptr,list.Hwnd) {
+            height := NumGet(rect,12,"Int")-NumGet(rect,4,"Int")
+            SendMessage(0x1014,0,((selected ? Min(state.Top,count-1) : 0)-SendMessage(0x1027,0,0,list.Hwnd))*height,list.Hwnd)
+        }
+    }
+}
+
+; Compare exact labels before crossing into the native control. No shared mutable cache.
+SyncChoiceNames(control, names) {
+    same := control.HasOwnProp("ChoiceNames") && control.ChoiceNames.Length = names.Length
+    if same {
+        for i, name in names {
+            if !(name == control.ChoiceNames[i]) {
+                same := false
+                break
+            }
+        }
+    }
+    if same
+        return false
+    control.Delete()
+    control.Add(names)
+    control.ChoiceNames := names.Clone()
+    return true
+}

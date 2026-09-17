@@ -2,7 +2,7 @@
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
-foreach ($module in @('src\shortcuts\shortcut_policy.ahk','src\settings\settings_schema.ahk','src\settings\settings_store.ahk','src\browser\worker_client.ahk','src\library\danmaku_library.ahk','src\library\library_service.ahk','src\library\profile_service.ahk','src\settings\settings_service.ahk')) {
+foreach ($module in @('src\shortcuts\shortcut_policy.ahk','src\settings\settings_schema.ahk','src\settings\settings_store.ahk','src\settings\settings_repository.ahk','src\settings\reaction_registration_repository.ahk','src\settings\library_storage_plan.ahk','src\settings\library_storage_delta.ahk','src\settings\legacy_settings_import.ahk','src\storage\sqlite_connection.ahk','src\browser\worker_client.ahk','src\library\danmaku_library.ahk','src\library\library_service.ahk','src\library\profile_service.ahk','src\settings\settings_service.ahk')) {
     $moduleText = [IO.File]::ReadAllText((Join-Path $release $module))
     $moduleText = [regex]::Replace($moduleText, '(?m)^\s*;.*$', '')
     if ($moduleText -match '\b(PaletteWindow|ManagementWindow|ManagementStatus|ManagedList|EditProfileIndex|EditScopeShared|ActiveEditorDialog|DanmakuEditorWindow|RefreshProfiles|RefreshManagement|RefreshPalette|ToolTip|MsgBox|InputBox|Gui)\b') {
@@ -26,7 +26,8 @@ $shortcutSource = [IO.File]::ReadAllText("$fixture\src\shortcuts\shortcut_contro
 $reactionSource = [IO.File]::ReadAllText("$fixture\src\reactions\reaction_controller.ahk")
 $reactionSource = $reactionSource.Replace('WinActive("ahk_id " job.Window)', 'FixtureReactionWindowActive(job.Window)').Replace('job.StartedAt := ReactionClockMs()', 'job.StartedAt := ReactionClockMs()' + "`r`n            FixtureStarts.Push(job.StartedAt)")
 [IO.File]::WriteAllText("$fixture\src\reactions\reaction_controller.ahk", $reactionSource, [Text.UTF8Encoding]::new($true))
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination "$fixture\settings.ini" -Force
+New-Item -ItemType Directory -Path "$fixture\data" -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination "$fixture\data\settings.ini" -Force
 $worker = [IO.File]::ReadAllText("$release\src\browser\browser_worker.ps1")
 $worker = $worker.Replace('function Invoke-WorkerRequest($Request) {', 'function Invoke-FixtureBaseRequest($Request) {')
 $mock = @'
@@ -44,7 +45,6 @@ function Invoke-WorkerRequest($Request) {
 function Read-BrowserVideoId([long]$WindowHandle) { return 'abcdefghijk' }
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
 function Test-ReactionForeground([long]$WindowHandle) { return $true }
-$script:BrowserReactionSelectors['fixture'] = @{}
 $script:fakeTarget = [pscustomobject]@{ Current=[pscustomobject]@{IsOffscreen=$false; IsEnabled=$true} }
 $script:fakeInvoke = [pscustomobject]@{}
 $script:fakeInvoke | Add-Member ScriptMethod Invoke { }
@@ -181,7 +181,7 @@ try {
     TargetBrowserHwnd := 0
     PrepareReaction("reaction_check")
     Assert(DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd) && !ActiveReactionJob,"failed check retains management window")
-    Assert(ManagementStatus.Text=ReactionExecutionStatus.Message && ManagementStatus.Text!="","failed check explains reason in management")
+    Assert(ManagementStatus.Text="通知：" ReactionExecutionStatus.Message && ManagementStatus.Text!="","failed check explains reason in management")
     PrepareReaction("reaction_capture")
     Assert(DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd) && !ActiveReactionJob,"failed registration retains management window")
     ManagementWindow.Hide()
@@ -291,11 +291,8 @@ try {
 
     originalIniPath := A_ScriptDir "\existing-format.ini"
     FileAppend("[General]`nSchema=3`nCount=0`nReactionDefault=4`nReactionCount=100`nReactionInterval=25`n",originalIniPath,"UTF-16")
-    existing := ReadSettingsFile(originalIniPath)
+    existing := ReadLegacySettings(originalIniPath)
     Assert(existing.DefaultReactionKind=4 && existing.DefaultReactionCount=100 && existing.DefaultReactionIntervalMs=25,"existing INI names keep settings")
-    WriteSettingsFile(existing,originalIniPath)
-    savedIni := FileRead(originalIniPath)
-    Assert(InStr(savedIni,"ReactionDefault=4") && InStr(savedIni,"ReactionCount=100") && InStr(savedIni,"ReactionInterval=25") && !InStr(savedIni,"DefaultReaction"),"internal rename does not change INI format")
     SetReactionStatus("reaction result fixture",true)
     PaletteStatusControl.Text := "unrelated input notice"
     ShowReactionProgress()
@@ -363,7 +360,7 @@ try {
     Assert(ItemSlot(Profiles[1].Items[1]) = 1, "old first preset keeps shortcut")
 
     initial := CreateSettingsSnapshot()
-    initial.Profiles.Push({Id:NewProfileId(),Name:"editing B",Channel:"/channel/b",Items:[]})
+    initial.Profiles.Push({Id:NewRecordId(),Name:"editing B",Channel:"/channel/b",Items:[]})
     CommitLibraryChange(initial,"test author")
     SaveInputProfileSelection(1)
     activeId := GetInputProfile().Id
@@ -418,15 +415,15 @@ try {
     savedCount := DefaultReactionCount
     UndoLibraryChange()
     Assert(DefaultReactionCount=savedCount,"library undo never reverts reaction defaults")
-    priorProfiles := Profiles, priorHistory := LibraryHistory.Length, path := SettingsFilePath
-    SettingsFilePath := A_ScriptDir "\missing\cannot-save.ini"
+    priorProfiles := Profiles, priorHistory := LibraryHistory.Length, path := SettingsDatabasePath
+    SettingsDatabasePath := A_ScriptDir "\missing\cannot-save.ini"
     failed := false
     state := CreateSettingsSnapshot(), state.Profiles[1].Name := "not saved"
     try CommitLibraryChange(state,"failed")
     catch
         failed := true
     Assert(failed && Profiles=priorProfiles && LibraryHistory.Length=priorHistory,"failed save preserves live data and history")
-    SettingsFilePath := path
+    SettingsDatabasePath := path
     SaveInputProfileSelection(1)
     RefreshProfiles()
     PaletteWindow.Show("Hide w360 h620")
@@ -455,10 +452,10 @@ try {
     Assert(failed && ReactionShortcut=priorKey,"reserved key rejected transactionally")
     for interval in ReactionIntervals {
         SaveReactionDefaults(CreateReactionOptions(1,1,interval,priorKey))
-        Assert(ReadSettingsFile(SettingsFilePath).DefaultReactionIntervalMs=interval,"interval persisted " interval)
+        Assert(LoadSettings(SettingsDatabasePath).DefaultReactionIntervalMs=interval,"interval persisted " interval)
     }
     for count in ReactionCounts {
-        job := {Total:count,Completed:count-1,Cancelled:false,Interval:100}
+        job := {StartedAt:0,Total:count,Completed:count-1,Cancelled:false,Interval:100}
         ActiveReactionJob := job
         ApplyReactionResult(job,{State:"operated"})
         Assert(job.Completed=count && !ActiveReactionJob,"exact completion " count)
@@ -499,7 +496,7 @@ try {
     SaveReactionDefaults(CreateReactionOptions(4,10,50,ReactionShortcut))
     stale.DefaultReactionKind := 1
     CommitLibraryChange(stale,"stale caller")
-    actualState := ReadSettingsFile(SettingsFilePath)
+    actualState := LoadSettings(SettingsDatabasePath)
     Assert(actualState.DefaultReactionKind=4 && DefaultReactionKind=4,"library commit cannot overwrite other preferences")
     beforeFailure := CreateLibrarySnapshot(), historySize := LibraryHistory.Length
     rejected := false
@@ -546,6 +543,11 @@ try {
     Assert(!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"closing dialog preserves previously disabled window")
     PaletteWindow.Opt("-Disabled"), modal.Destroy()
 
+    registrationTokens := "["
+    Loop 5
+        registrationTokens .= (A_Index>1 ? "," : "") '{"name":"reaction' A_Index '","id":"id' A_Index '","class":"button","type":50000}'
+    registrationTokens .= "]"
+    SaveReactionRegistration('{"browser":"fixture","tokens":' registrationTokens '}')
     context := RequestBrowserOperation(123, "browser_context")
     Assert(context.State = "ok" && context.Video = "abcdefghijk", "pipe reaction context")
     result := RequestBrowserOperation(123, "reaction_check", context.Video)
@@ -555,7 +557,7 @@ try {
     result := RequestBrowserOperation(123, "reaction_send", context.Video, "Reaction=5`n")
     Assert(result.State = "operated", "mock operation through pipe")
     result := RequestBrowserOperation(123, "reaction_send", context.Video, "Reaction=5`n")
-    Assert(result.State = "cooldown" || result.State = "operated", "subsequent pipe request handled across cooldown boundary")
+    Assert(result.State = "operated", "no implicit cooldown between operations")
     firstPID := WorkerProcessId
     sequenceBeforeCrash := WorkerRequestSequence
     ProcessClose(firstPID)
@@ -604,17 +606,17 @@ try {
     }
     ShortcutReleaseReplacement := 0
     CancelReaction()
-    schemaPath := A_ScriptDir "\schema-check.ini"
+    schemaPath := A_ScriptDir "\schema-check.db"
     schemaState := CreateSettingsSnapshot()
     schemaState.SharedDanmakuItems := [
         {Name:Chr(34) "quoted label" Chr(34), Text:"  👏👏  "},
         {Name:"quoted text", Text:Chr(34) "👏" Chr(34)},
         {Name:"single quotes", Text:"'👏'"}]
-    WriteSettingsFile(schemaState, schemaPath)
-    roundTrip := ReadSettingsFile(schemaPath)
+    SaveSettings(schemaState, schemaPath)
+    roundTrip := LoadSettings(schemaPath)
     for i, expected in schemaState.SharedDanmakuItems {
-        Assert(roundTrip.SharedDanmakuItems[i].Name == expected.Name, "INI preserves label quotes")
-        Assert(roundTrip.SharedDanmakuItems[i].Text == expected.Text, "INI preserves literal text and spaces")
+        Assert(roundTrip.SharedDanmakuItems[i].Name == expected.Name, "database preserves label quotes")
+        Assert(roundTrip.SharedDanmakuItems[i].Text == expected.Text, "database preserves literal text and spaces")
     }
     longText := ""
     Loop 35000
@@ -623,8 +625,8 @@ try {
         expected := SubStr(longText, 1, length - Mod(length, 2))
         schemaState.SharedDanmakuItems := [{Name:"long",Text:expected}]
         schemaState.Profiles[1].Items := [{Name:"long",Text:expected}]
-        WriteSettingsFile(schemaState, schemaPath)
-        actual := ReadSettingsFile(schemaPath)
+        SaveSettings(schemaState, schemaPath)
+        actual := LoadSettings(schemaPath)
         Assert(actual.SharedDanmakuItems[1].Text == expected, "long shared text round-trip " length)
         Assert(actual.Profiles[1].Items[1].Text == expected, "long profile text round-trip " length)
     }
@@ -634,60 +636,63 @@ try {
         if FileExist(legacyPath)
             FileDelete(legacyPath)
         FileAppend(legacyText, legacyPath, encoding)
-        legacy := ReadSettingsFile(legacyPath)
+        legacy := ReadLegacySettings(legacyPath)
         Assert(legacy.SharedDanmakuItems[1].Name == " legacy " && legacy.SharedDanmakuItems[1].Text == "  a=b;👏  ", "legacy quotes, case and BOM " encoding)
         Assert(legacy.SharedDanmakuItems[2].Text == "unquoted", "legacy unquoted whitespace " encoding)
     }
     LastReactionResult.Detail := "previous failure"
-    completedJob := {Completed:0, Total:1, Cancelled:false}
+    completedJob := {StartedAt:0,Completed:0, Total:1, Cancelled:false}
     ActiveReactionJob := completedJob
     ApplyReactionResult(completedJob, {State:"operated"})
     Assert(LastReactionResult.Detail = "" && InStr(LastReactionResult.Message, "完了"), "success clears previous failure detail")
-    savedRoundTrip := FileRead(schemaPath)
+    savedRoundTrip := FileRead(schemaPath,"RAW")
     schemaState.SharedDanmakuItems[1].Text := "first`nsecond"
     rejected := false
-    try WriteSettingsFile(schemaState, schemaPath)
+    try SaveSettings(schemaState, schemaPath)
     catch
         rejected := true
-    Assert(rejected && FileRead(schemaPath) == savedRoundTrip && !FileExist(schemaPath ".new"), "multiline text cannot corrupt persisted INI")
+    Assert(rejected && SameFileBytes(FileRead(schemaPath,"RAW"),savedRoundTrip) && !FileExist(schemaPath ".new"), "multiline text cannot corrupt persisted database")
     schemaState.SharedDanmakuItems[1].Text := "👏"
     bulkState := CreateSettingsSnapshot()
     bulkState.Profiles := []
     Loop 50 {
-        bulkProfile := {Name:"配信者" A_Index,Channel:"/channel/fixture" A_Index,Id:NewProfileId(),Items:[]}
+        bulkProfile := {Name:"配信者" A_Index,Channel:"/channel/fixture" A_Index,Id:NewRecordId(),Items:[]}
         Loop 10
             bulkProfile.Items.Push({Name:"弾幕" A_Index,Text:"  👏" Chr(34) "引用符" Chr(34) "👏  "})
         bulkState.Profiles.Push(bulkProfile)
     }
-    WriteSettingsFile(bulkState, schemaPath)
-    bulkRead := ReadSettingsFile(schemaPath)
+    SaveSettings(bulkState, schemaPath)
+    bulkRead := LoadSettings(schemaPath)
     Assert(bulkRead.Profiles.Length = 50, "bulk save retains all sections")
     for i, profile in bulkRead.Profiles {
         Assert(profile.Name == bulkState.Profiles[i].Name && profile.Items.Length = 10, "bulk save retains author and count")
         for j, item in profile.Items
             Assert(item.Text == bulkState.Profiles[i].Items[j].Text, "bulk save preserves unicode quotes and spaces")
     }
-    diskBeforeLock := FileRead(schemaPath)
-    lock := FileOpen(schemaPath, "r -d")
+    diskBeforeLock := LoadSettings(schemaPath)
+    blocker := SqliteConnection(schemaPath)
+    blocker.Exec("BEGIN IMMEDIATE")
     failed := false
-    try WriteSettingsFile(schemaState, schemaPath)
+    try SaveSettings(schemaState,schemaPath)
     catch
         failed := true
-    finally
-        lock.Close()
-    Assert(failed && FileRead(schemaPath) == diskBeforeLock && !FileExist(schemaPath ".new"), "failed replacement preserves INI and removes temporary file")
+    finally {
+        blocker.Exec("ROLLBACK"), blocker.Close()
+    }
+    Assert(failed && LoadSettings(schemaPath).Profiles.Length=diskBeforeLock.Profiles.Length,"competing writer preserves database")
     ReactionCounts.Push(7)
     ReactionIntervals.Push(75)
     try {
         schemaState.DefaultReactionCount := 7
         schemaState.DefaultReactionIntervalMs := 75
-        WriteSettingsFile(schemaState, schemaPath)
-        schemaRead := ReadSettingsFile(schemaPath)
+        SaveSettings(schemaState, schemaPath)
+        schemaRead := LoadSettings(schemaPath)
         Assert(schemaRead.DefaultReactionCount = 7 && schemaRead.DefaultReactionIntervalMs = 75, "store accepts options from shared schema")
         Assert(SettingOptionLabels(ReactionCounts, "回")[-1] = "7回" && SettingOptionLabels(ReactionIntervals, " ms")[-1] = "75 ms", "UI labels follow shared schema")
     } finally {
         ReactionCounts.Pop()
         ReactionIntervals.Pop()
+        CloseSettingsStore()
         FileDelete(schemaPath)
     }
     global FixtureStarts := []
@@ -770,6 +775,9 @@ FailPresentation(*) {
 PrepareViewportFixture(viewport) {
     Assert(!DllCall("IsWindowVisible","Ptr",viewport.Hwnd),"viewport layout runs before visibility")
     viewport.Resize()
+}
+SameFileBytes(left,right) {
+    return left.Size=right.Size && (!left.Size || DllCall("msvcrt\memcmp","Ptr",left,"Ptr",right,"UPtr",left.Size,"CDecl Int")=0)
 }
 Assert(condition, label) {
     global Checks

@@ -3,7 +3,9 @@ ResolveDanmakuInput(shared, itemReference, hwnd, bySlot := false, expectedProfil
     if !IsBrowser(hwnd)
         throw Error("YouTubeのチャット欄かコメント欄をクリックしてから、Ctrl＋Alt＋Qを押してください。")
     if !shared && AutoMode {
-        if !SelectProfileFromBrowser(hwnd)
+        selected := SelectProfileFromBrowser(hwnd)
+        RefreshVisiblePalette()
+        if !selected
             return 0
         video := DetectedChannel.Video
     } else {

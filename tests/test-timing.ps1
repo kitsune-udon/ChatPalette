@@ -12,7 +12,7 @@ OnExit(StopBrowserWorker)
 global TimingChecks := 0, TimingMode := "", PrecisionEvents := ""
 try {
     AssertTiming(ReactionIntervalLabels()[5]="150 ms" && ReactionIntervalLabels()[7]="250 ms", "new choices and labels")
-    for mode in ["normal","error","cancel","unavailable","nowait"] {
+    for mode in ["normal","error","cancel","unavailable","nowait","sync_failed","unknown"] {
         TimingMode := mode, PrecisionEvents := ""
         job := {Mode:"reaction_send",Window:123,Video:"abcdefghijk",Choice:1,Completed:0,Total:2,Cancelled:false,Interval:mode="nowait" ? 0 : 100}
         ActiveReactionJob := job
@@ -20,10 +20,14 @@ try {
         expected := mode="nowait" ? "" : (mode="unavailable" ? "B" : "BE")
         AssertTiming(PrecisionEvents=expected,"balanced precision: " mode)
         AssertTiming(!ActiveReactionJob,"job finished: " mode)
+        expectedCount := (mode="error" || mode="sync_failed" || mode="unknown") ? 0 : (mode="cancel" ? 1 : 2)
+        AssertTiming(job.Completed=expectedCount,"exact completed count on exit: " mode)
+        if mode="sync_failed" || mode="unknown"
+            AssertTiming(LastReactionResult.Reason=mode,"failure reason preserved: " mode)
     }
     TimingMode := "random"
     SaveReactionDefaults(CreateReactionOptions(RandomReactionKind,10,200,ReactionShortcut))
-    restored := ReadSettingsFile(SettingsFilePath)
+    restored := LoadSettings(SettingsDatabasePath)
     AssertTiming(restored.DefaultReactionKind=RandomReactionKind && restored.DefaultReactionIntervalMs=200,"random persistence")
     global RandomChoices := []
     ActiveReactionJob := {Mode:"reaction_send",Window:123,Video:"abcdefghijk",Choice:RandomReactionKind,Completed:0,Total:10,Cancelled:false,Interval:0}
@@ -34,6 +38,15 @@ try {
         AssertTiming(choice>=1 && choice<=5,"worker receives concrete kind")
     Loop 5
         AssertTiming(ResolveReactionKind(A_Index)=A_Index,"fixed kind unchanged")
+    measured := {StartedAt:1000,Completed:0,Total:3,Cancelled:false}
+    ActiveReactionJob := measured
+    ApplyReactionResult(measured,{State:"operated"})
+    AssertTiming(measured.Measurement="","single operation has no interval")
+    measured.StartedAt := 1200
+    ApplyReactionResult(measured,{State:"operated"})
+    measured.StartedAt := 1400
+    ApplyReactionResult(measured,{State:"operated"})
+    AssertTiming(InStr(LastReactionResult.Message,"平均開始間隔 200 ms"),"start timestamps determine mean independently of response time")
     TimingMode := "normal"
     for interval in [150,250] {
         PrecisionEvents := ""
@@ -70,6 +83,8 @@ RequestBrowserOperation(hwnd,mode:="resolve",video:="",extra:="") {
             throw Error("Invalid random worker payload")
         RandomChoices.Push(Integer(match[1]))
     }
+    if TimingMode="sync_failed" || TimingMode="unknown"
+        return {State:TimingMode}
     if TimingMode="error"
         throw Error("injected failure")
     if TimingMode="exit"

@@ -19,38 +19,6 @@ function Trim-Cache {
     }
 }
 
-function Load-VideoCache {
-    if (-not $CachePath -or -not (Test-Path -LiteralPath $CachePath)) { return }
-    try {
-        $data = Get-Content -LiteralPath $CachePath -Raw -Encoding UTF8 | ConvertFrom-Json
-        foreach ($entry in @($data.entries)) {
-            if ($entry.video -cnotmatch '^[A-Za-z0-9_-]{11}$' -or -not $entry.author) { continue }
-            $key = Get-ChannelKey ('https://www.youtube.com' + $entry.channel)
-            if (-not $key) { continue }
-            $script:Videos[$entry.video] = @{ Author = [string]$entry.author; Channel = $key; Time = [DateTime]::Parse($entry.time).ToUniversalTime() }
-        }
-        Trim-Cache
-    } catch { $script:Videos.Clear() }
-}
-
-function Save-VideoCache {
-    if (-not $CachePath) { return }
-    $temp = $CachePath + '.' + $PID + '.new'
-    try {
-        Trim-Cache
-        $entries = @(foreach ($entry in $script:Videos.GetEnumerator()) {
-            @{ video = $entry.Key; author = $entry.Value.Author; channel = $entry.Value.Channel; time = $entry.Value.Time.ToString('o') }
-        })
-        [IO.File]::WriteAllText($temp, (@{ version = 2; entries = $entries } | ConvertTo-Json -Depth 4), [Text.Encoding]::UTF8)
-        Move-Item -LiteralPath $temp -Destination $CachePath -Force -ErrorAction Stop
-    } catch { } # Memory caching still works if the file is not writable.
-    finally {
-        if (Test-Path -LiteralPath $temp) {
-            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
 function Fetch-Metadata([string]$Video) {
     $url = 'https://www.youtube.com/oembed?format=json&url=' + [Uri]::EscapeDataString('https://www.youtube.com/watch?v=' + $Video)
     $data = Invoke-RestMethod -Uri $url -TimeoutSec 4 -UseBasicParsing
@@ -67,7 +35,7 @@ function Resolve-Video([string]$Video) {
         $metadata = Fetch-Metadata $Video
         $script:Videos[$Video] = $metadata
         $null = $script:Failures.Remove($Video)
-        Save-VideoCache
+        Trim-Cache
         return $metadata
     } catch {
         if ($script:Failures.Count -ge 128) { $script:Failures.Clear() }

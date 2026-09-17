@@ -14,7 +14,16 @@ RequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "
     try {
         waitView := BeginWorkerWait(mode)
         started := A_TickCount
-        reply := SendWorkerRequest(hwnd, mode, expectedVideo, extra)
+        ready := true
+        if InStr(mode,"reaction_") = 1 {
+            try ready := PrepareReactionRegistrations(hwnd)
+            catch {
+                StopBrowserWorker()
+                ready := false
+            }
+        }
+        reply := ready ? SendWorkerRequest(hwnd, mode, expectedVideo, extra)
+            : {State:"sync_failed",Author:"",Channel:"",Video:""}
         ; Display-only queries must not erase the operation the user is investigating.
         if mode != "reaction_status"
             LastBrowserOperation := {Mode:mode, State:reply.State, Duration:A_TickCount-started}

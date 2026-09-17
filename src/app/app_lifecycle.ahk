@@ -19,7 +19,7 @@ InitializeAppSettings() {
                 return false
             }
             choice := MsgBox("設定を読み込めませんでした。`n`n" failure.Message
-                . "`n`n対象：" SettingsFilePath
+                . "`n`n対象：" SettingsDatabasePath
                 . "`n`n［再試行］ファイルを修正して読み直す"
                 . "`n［無視］元の設定を退避し、初期設定で起動する"
                 . "`n［中止］変更せず終了する", "設定の復旧", "AbortRetryIgnore Icon! Default1")
@@ -28,7 +28,7 @@ InitializeAppSettings() {
             if choice = "Ignore" {
                 if MsgBox("配信者・弾幕を0件の初期設定に戻します。元の設定は削除せず、同じフォルダーへ退避します。続けますか？", "初期化の確認", "YesNo Default2 Icon!") != "Yes"
                     continue
-                try BackupSettingsForReset(SettingsFilePath)
+                try BackupSettingsForReset(SettingsDatabasePath)
                 catch as backupError {
                     MsgBox("退避できなかったため初期化しません。`n" backupError.Message, "設定の復旧", "Icon!")
                     return false
@@ -40,19 +40,46 @@ InitializeAppSettings() {
 
 InitializeDataDirectory(directory) {
     DirCreate(directory)
-    ; Prefer existing data/ files. Never overwrite them with legacy root files.
-    for name in ["settings.ini", "reaction_selectors.json", "video_metadata_cache.json"] {
-        legacy := A_ScriptDir "\" name
-        destination := directory "\" name
-        if FileExist(legacy) && !FileExist(destination)
-            FileMove(legacy, destination, false)
-    }
+
 }
 
 BackupSettingsForReset(path) {
-    if !FileExist(path)
-        return ""
-    backup := path ".backup-" FormatTime(, "yyyyMMdd-HHmmss") "-" A_TickCount
-    FileMove(path, backup, false)
-    return backup
+    CloseSettingsStore()
+    suffix := ".backup-" FormatTime(, "yyyyMMdd-HHmmss") "-" A_TickCount
+    moved := []
+    try {
+        ; Preserve sidecar names relative to the renamed database for recovery.
+        for tail in ["", "-journal", "-wal", "-shm"] {
+            if FileExist(path tail) {
+                FileMove(path tail,path suffix tail,false)
+                moved.Push([path tail,path suffix tail])
+            }
+        }
+        for name in ["settings.ini","reaction_selectors.json"] {
+            legacy := AppDataDirectory "\" name
+            if FileExist(legacy) {
+                FileMove(legacy,legacy suffix,false)
+                moved.Push([legacy,legacy suffix])
+            }
+        }
+    } catch as failure {
+        while moved.Length {
+            pair := moved.Pop()
+            try FileMove(pair[2],pair[1],false)
+        }
+        throw failure
+    }
+    return path suffix
+}
+
+ExportSettingsBackup(*) {
+    destination := FileSelect("S16",,"弾幕・設定・ボタン登録のバックアップ先（新しいファイル名）","SQLite database (*.db)")
+    if destination = ""
+        return
+    try {
+        BackupSettingsDatabase(destination)
+        MsgBox("弾幕・配信者・共通設定・リアクションボタンの登録情報を保存しました。","バックアップ完了")
+    } catch as failure {
+        MsgBox("バックアップできませんでした。`n" failure.Message,"バックアップ失敗","Icon!")
+    }
 }

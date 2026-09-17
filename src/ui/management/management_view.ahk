@@ -37,7 +37,7 @@ BuildManagement() {
     ManagementProfileMenu.OnEvent("Click",OpenManagedProfileMenu)
     ManagementButtons := [ManagementProfileMenu]
     ManagementListHeading := ManagementWindow.AddText("x28 y202 w680 h24","弾幕一覧 — 選んで編集")
-    ManagedList := ManagementWindow.AddListView("x28 y218 w680 h210 -Multi", ["弾幕名", "本文", "キー"])
+    ManagedList := ManagementWindow.AddListView("x28 y218 w680 h210 -Multi NoSortHdr", ["弾幕名", "本文", "キー"])
     ManagedList.OnEvent("ItemSelect",UpdateManagementActions)
     ManagedList.OnEvent("DoubleClick", (*) => OpenDanmakuEditor(false))
     ManagementItemButtons := []
@@ -87,7 +87,7 @@ BuildManagement() {
     ManagementTabs.UseTab()
     ManagementBack := ManagementWindow.AddButton("x16 y614 w140 h32","パレットへ戻る")
     ManagementBack.OnEvent("Click",ReturnToPalette)
-    ManagementStatus := ManagementWindow.AddEdit("x16 y614 w720 h34 ReadOnly Multi VScroll", "")
+    ManagementStatus := ManagementWindow.AddEdit("x16 y614 w720 h34 ReadOnly Multi VScroll Hidden", "")
     ManagementWindow.OnEvent("Close",(*) => ManagementWindow.Hide())
     ManagementWindow.OnEvent("Escape",(*) => ManagementWindow.Hide())
     ManagementWindow.OnEvent("Size",ResizeManagement)
@@ -104,7 +104,7 @@ RefreshManagement() {
     names := ["共通の弾幕"]
     for profile in Profiles
         names.Push(profile.Name)
-    ManagementTarget.Delete(), ManagementTarget.Add(names)
+    SyncChoiceNames(ManagementTarget,names)
     if EditProfileIndex < 1 || EditProfileIndex > Profiles.Length
         EditScopeShared := true, EditProfileIndex := 0
     ManagementTarget.Choose(EditScopeShared ? 1 : EditProfileIndex+1)
@@ -112,15 +112,17 @@ RefreshManagement() {
     ManagementChannel.Text := EditScopeShared ? "すべてのチャンネルで使う弾幕です。" : "チャンネル：" (Profiles[EditProfileIndex].Channel != "" ? Profiles[EditProfileIndex].Channel : "チャンネル未連携")
     for button in ManagementButtons
         button.Enabled := !EditScopeShared
-    ManagedList.Delete()
-    for item in GetEditingDanmakuItems()
-        ManagedList.Add("",item.Name,item.Text,ItemSlot(item) ? "Ctrl+Alt+" (ItemSlot(item)+(EditScopeShared ? 2 : 0)) : "")
-    ManagedList.ModifyCol(1,160), ManagedList.ModifyCol(2,380), ManagedList.ModifyCol(3,110)
-    if GetEditingDanmakuItems().Length
-        ManagedList.Modify(1,"Select Focus")
+    position := BeginListRefresh(ManagedList,2)
+    try {
+        ManagedList.Delete()
+        for item in GetEditingDanmakuItems()
+            ManagedList.Add("",item.Name,item.Text,ItemSlot(item) ? "Ctrl+Alt+" (ItemSlot(item)+(EditScopeShared ? 2 : 0)) : "")
+        ManagedList.ModifyCol(1,160), ManagedList.ModifyCol(2,380), ManagedList.ModifyCol(3,110)
+    } finally {
+        EndListRefresh(ManagedList,position,2)
+    }
     UpdateManagementActions()
-    ManagementUndo.Enabled := LibraryHistory.Length > 0
-    ManagementUndo.Text := LibraryHistory.Length ? LibraryHistory[-1].Label "を取り消す" : "取り消せる変更はありません"
+    RefreshManagementUndo()
     ManagementWindow.GetClientPos(,,&width,&height)
     if width > 0
         ResizeManagement(ManagementWindow,0,width,height)
@@ -202,9 +204,10 @@ LayoutManagement(gui, state, width, height) {
 
 SelectManagedRow(index) {
     if ManagedList.GetCount() {
-        ManagedList.Modify(0,"-Select")
         ManagedList.Modify(Min(Max(1,index),ManagedList.GetCount()),"Select Focus Vis")
     }
+    ; Programmatic selection must not depend on deferred ItemSelect callbacks.
+    UpdateManagementActions()
 }
 
 ; The palette shortcut opens a concrete choice, not just the management tab.
@@ -237,4 +240,31 @@ ResizeManagement(gui, state, width, height) {
         ManagementViewport.Resize()
     else
         LayoutManagement(gui,state,width,height)
+}
+
+SetManagementNotice(message) {
+    ManagementStatus.Text := message = "" ? "" : "通知：" message
+    ManagementStatus.Visible := message != ""
+}
+
+; Reordering updates the two affected rows without rebuilding the list or resetting its viewport.
+RefreshManagedOrder(previous, current) {
+    items := GetEditingDanmakuItems()
+    ManagedList.Opt("-Redraw")
+    try {
+        for index in [previous,current] {
+            item := items[index]
+            ManagedList.Modify(index,"",item.Name,item.Text,ItemSlot(item) ? "Ctrl+Alt+" (ItemSlot(item)+(EditScopeShared ? 2 : 0)) : "")
+        }
+        SelectManagedRow(current)
+    } finally {
+        ManagedList.Opt("+Redraw")
+    }
+    UpdateManagementActions()
+    RefreshManagementUndo()
+}
+
+RefreshManagementUndo() {
+    ManagementUndo.Enabled := LibraryHistory.Length > 0
+    ManagementUndo.Text := LibraryHistory.Length ? LibraryHistory[-1].Label "を取り消す" : "取り消せる変更はありません"
 }

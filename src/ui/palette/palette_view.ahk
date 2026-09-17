@@ -1,4 +1,5 @@
 ﻿BuildPalette() {
+    global PaletteSearchPending := false
     global PaletteTitle, PaletteWindow, PaletteContext, PaletteMode, PaletteProfile, PaletteSearch, PaletteList
     global PaletteInsert, PaletteBind, PaletteChoice, PaletteCount, PaletteInterval, PaletteStart, PaletteStop
     global PaletteOptionLabels, PaletteSettingsStatus, PaletteManageButton, PaletteReactionHeading, PaletteIntervalHint
@@ -19,14 +20,14 @@
     PaletteBind.OnEvent("Click", OpenChannelLinkDialog)
     PaletteSearch := PaletteWindow.AddEdit("x16 y140 w524 h28")
     DllCall("SendMessage", "Ptr", PaletteSearch.Hwnd, "UInt", 0x1501, "Ptr", 1, "Str", "弾幕名・本文を検索")
-    PaletteSearch.OnEvent("Change", (*) => RefreshPaletteItems())
+    PaletteSearch.OnEvent("Change", QueuePaletteSearch)
     PaletteList := PaletteWindow.AddListView("x16 y176 w524 h200 -Multi", ["対象", "弾幕・本文", "キー"])
     PaletteList.OnEvent("ItemSelect", PreviewPaletteItem)
     PalettePreview := PaletteWindow.AddEdit("x16 y346 w524 h36 ReadOnly -VScroll", "")
     PaletteInsert := PaletteWindow.AddButton("x16 y386 w180 h32 Default", "選んだ弾幕を入力")
     PaletteInsert.OnEvent("Click", InsertPaletteItem)
     PaletteManageButton := PaletteWindow.AddButton("x204 y386 w160 h32", "弾幕を追加・編集")
-    PaletteManageButton.OnEvent("Click", (*) => ShowManagement())
+    PaletteManageButton.OnEvent("Click", OpenPaletteLibrary)
     PaletteHint := PaletteWindow.AddText("x16 y426 w524 h24", "弾幕は入力のみ。内容を確認してYouTubeで送信します。")
     PaletteReactionHeading := PaletteWindow.AddText("x16 y460 w260 h24", "今回のリアクション")
     PaletteReactionHeading.SetFont("bold")
@@ -103,7 +104,7 @@ LayoutPalette(gui, state, width, height) {
 
 OpenPaletteMenu(*) {
     popup := Menu()
-    popup.Add("弾幕・配信者を管理", (*) => ShowManagement(1))
+    popup.Add("弾幕・配信者を管理", OpenPaletteLibrary)
     popup.Add("リアクションの標準設定", (*) => ShowManagement(2))
     popup.Add("操作・サポート", (*) => ShowManagement(3))
     popup.Add("リアクションの実行結果", ShowReactionDetails)
@@ -118,12 +119,11 @@ RefreshPalette() {
     names := []
     for profile in Profiles
         names.Push(profile.Name)
-    PaletteProfile.Delete(), PaletteProfile.Add(names)
-    if InputProfileIndex
-        PaletteProfile.Choose(InputProfileIndex)
+    SyncChoiceNames(PaletteProfile,names)
+    PaletteProfile.Choose(InputProfileIndex)
     PaletteProfile.Enabled := !AutoMode && Profiles.Length > 0
     profile := GetInputProfile()
-    matched := !AutoMode || (DetectedChannel.State = "ok" && ChannelIndex.Get(DetectedChannel.Channel,0) = InputProfileIndex && InputProfileIndex > 0)
+    matched := HasPaletteInputProfile()
     if AutoMode && !matched
         PaletteProfile.Choose(0)
     PaletteContext.Text := "弾幕の入力対象：" (profile && matched ? profile.Name : "共通の弾幕のみ")
@@ -134,19 +134,23 @@ RefreshPalette() {
 
 
 RefreshPaletteItems() {
-    global PaletteRows := []
-    PaletteList.Delete()
-    query := Trim(PaletteSearch.Value)
-    profile := GetInputProfile()
-    matched := !AutoMode || (DetectedChannel.State = "ok" && ChannelIndex.Get(DetectedChannel.Channel,0) = InputProfileIndex && InputProfileIndex > 0)
-    if profile && matched
-        AddPaletteItems(profile.Items, false, query)
-    AddPaletteItems(SharedDanmakuItems, true, query)
-    if PaletteRows.Length
-        PaletteList.Modify(1,"Select Focus")
+    CancelScheduledPaletteSearch()
+    position := BeginListRefresh(PaletteList,2)
+    try {
+        global PaletteRows := []
+        PaletteList.Delete()
+        query := Trim(PaletteSearch.Value)
+        profile := GetInputProfile()
+        matched := HasPaletteInputProfile()
+        if profile && matched
+            AddPaletteItems(profile.Items, false, query)
+        AddPaletteItems(SharedDanmakuItems, true, query)
+        PaletteInsert.Enabled := PaletteRows.Length > 0
+        PaletteHint.Text := PaletteRows.Length ? "弾幕は入力のみ。内容を確認してYouTubeで送信します。" : (query != "" ? "一致する弾幕がありません。検索条件を変えてください。" : "「弾幕を追加・編集」から登録できます。共通弾幕は配信者不要です。")
+    } finally {
+        EndListRefresh(PaletteList,position,2)
+    }
     PreviewPaletteItem()
-    PaletteInsert.Enabled := PaletteRows.Length > 0
-    PaletteHint.Text := PaletteRows.Length ? "弾幕は入力のみ。内容を確認してYouTubeで送信します。" : (query != "" ? "一致する弾幕がありません。検索条件を変えてください。" : "「弾幕を追加・編集」から登録できます。共通弾幕は配信者不要です。")
 }
 
 
@@ -162,6 +166,8 @@ AddPaletteItems(items, shared, query) {
 
 
 InsertPaletteItem(*) {
+    if FlushPendingPaletteSearch()
+        return
     if IsBrowserOperationBusy || ActiveReactionJob || DanmakuEditorWindow
         return
     index := PaletteList.GetNext()
@@ -207,8 +213,6 @@ SelectPaletteProfile(*) {
 
 SetDetectionStatus(message) {
     global DetectionMessage := message
-    if IsSet(PaletteContext)
-        RefreshPalette()
 }
 
 
@@ -261,4 +265,40 @@ ResizePalette(gui, state, width, height) {
         PaletteViewport.Resize()
     else
         LayoutPalette(gui,state,width,height)
+}
+
+QueuePaletteSearch(*) {
+    global PaletteSearchPending
+    CancelScheduledPaletteSearch()
+    profile := GetInputProfile()
+    count := SharedDanmakuItems.Length + (profile && HasPaletteInputProfile() ? profile.Items.Length : 0)
+    if count <= 200 {
+        RefreshPaletteItems()
+        return
+    }
+    PaletteSearchPending := true
+    PaletteInsert.Enabled := false
+    PaletteHint.Text := "検索を更新しています…"
+    SetTimer(RunScheduledPaletteSearch,-100)
+}
+
+RunScheduledPaletteSearch() {
+    if DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd)
+        RefreshPaletteItems()
+    else
+        CancelScheduledPaletteSearch()
+}
+
+CancelScheduledPaletteSearch() {
+    global PaletteSearchPending := false
+    SetTimer(RunScheduledPaletteSearch,0)
+}
+
+; Do not insert or edit an old row while a new search is pending.
+FlushPendingPaletteSearch() {
+    if !PaletteSearchPending
+        return false
+    RefreshPaletteItems()
+    PaletteHint.Text := "検索結果を更新しました。弾幕を選んで操作してください。"
+    return true
 }

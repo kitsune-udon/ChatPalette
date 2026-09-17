@@ -7,7 +7,8 @@ GetEditingDanmakuItems() {
 }
 RefreshManagementAfterCommand(editId) {
     global EditProfileIndex := FindProfileIndexById(Profiles,editId)
-    RefreshProfiles()
+    RefreshVisiblePalette()
+    RefreshManagement()
 }
 HandleDanmakuCommand(action, *) {
     if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
@@ -18,14 +19,19 @@ HandleDanmakuCommand(action, *) {
     editId := GetEditingProfileId()
     try result := ExecuteDanmakuCommand(action,editId,index)
     catch as failure {
-        ManagementStatus.Text := "保存できませんでした。" failure.Message
+        SetManagementNotice("保存できませんでした。" failure.Message)
         return
     }
     if !result
         return
-    RefreshManagementAfterCommand(editId)
-    SelectManagedRow(result.Index)
-    ManagementStatus.Text := result.Label "：保存済み"
+    if action = "up" || action = "down" {
+        RefreshManagedOrder(index,result.Index)
+        RefreshVisiblePalette()
+    } else {
+        RefreshManagementAfterCommand(editId)
+        SelectManagedRow(result.Index)
+    }
+    SetManagementNotice(result.Label "：保存済み")
 }
 UndoLibraryChange(*) {
     if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
@@ -33,12 +39,12 @@ UndoLibraryChange(*) {
     editId := GetEditingProfileId()
     try label := UndoLibraryCommand()
     catch as failure {
-        ManagementStatus.Text := "取り消しを保存できませんでした。" failure.Message
+        SetManagementNotice("取り消しを保存できませんでした。" failure.Message)
         return
     }
     RefreshManagementAfterCommand(editId)
     if label != ""
-        ManagementStatus.Text := label "を取り消しました。"
+        SetManagementNotice(label "を取り消しました。")
 }
 ManageProfile(action, *) {
     if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
@@ -64,32 +70,32 @@ RunProfileDialog(action) {
             return
     } else if action = "bind" {
         if !IsBrowser(TargetBrowserHwnd) {
-            ManagementStatus.Text := "YouTubeからパレットを開き直してください。"
+            SetManagementNotice("YouTubeからパレットを開き直してください。")
             return
         }
         candidate := ResolveBrowserChannel(TargetBrowserHwnd)
         if candidate.State != "ok" {
-            ManagementStatus.Text := "チャンネルを取得できませんでした。YouTubeから開き直してください。"
+            SetManagementNotice("チャンネルを取得できませんでした。YouTubeから開き直してください。")
             return
         }
         if MsgBox("YouTubeのチャンネル「" candidate.Author "」で、配信者「" Profiles[EditProfileIndex].Name "」の弾幕を自動選択します。`n`n現在：" (Profiles[EditProfileIndex].Channel != "" ? Profiles[EditProfileIndex].Channel : "未連携") "`n変更後：" candidate.Channel "`n以前の連携はこのチャンネルに置き換わります。`n`n連携しますか？","チャンネル連携の確認","YesNo") != "Yes"
             return
         fresh := ResolveBrowserChannel(TargetBrowserHwnd)
         if fresh.State != "ok" || fresh.Channel != candidate.Channel {
-            ManagementStatus.Text := "チャンネルが変わりました。もう一度連携してください。"
+            SetManagementNotice("チャンネルが変わりました。もう一度連携してください。")
             return
         }
         value := candidate.Channel
     }
     try result := ExecuteProfileCommand(action,editId,value)
     catch as failure {
-        ManagementStatus.Text := "保存できませんでした。" failure.Message
+        SetManagementNotice("保存できませんでした。" failure.Message)
         return
     }
     if action = "add"
         editId := result.ProfileId, EditScopeShared := false
     RefreshManagementAfterCommand(editId)
-    ManagementStatus.Text := result.Label "：保存済み"
+    SetManagementNotice(result.Label "：保存済み")
 }
 
 
@@ -116,20 +122,20 @@ SaveReactionDefaultsFromControls(*) {
 
 PrepareReaction(mode) {
     if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog {
-        ManagementStatus.Text := "現在の処理・編集を終了してから実行してください。"
+        SetManagementNotice("現在の処理・編集を終了してから実行してください。")
         return
     }
     if ScheduleReaction(mode,mode = "reaction_capture" ? 0 : 5)
         ManagementWindow.Hide()
     else
-        ManagementStatus.Text := ReactionExecutionStatus.Message
+        SetManagementNotice(ReactionExecutionStatus.Message)
 }
 
 ReturnToPalette(*) {
     if RestoreActiveEditorDialog() || IsBrowserOperationBusy
         return
+    RefreshPaletteForTarget()
     ManagementWindow.Hide()
-    RefreshPalette()
     ShowFittedWindow(PaletteWindow,560,740,ResizePalette)
 }
 

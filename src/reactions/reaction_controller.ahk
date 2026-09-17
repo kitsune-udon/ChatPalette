@@ -85,8 +85,10 @@ ReactionCountdown() {
         DllCall("GetPhysicalCursorPos", "Ptr", point)
         extra := "Reaction=" job.Choice "`nX=" NumGet(point, 0, "Int") "`nY=" NumGet(point, 4, "Int") "`n"
         reply := RequestBrowserOperation(job.Window, job.Mode, job.Video, extra)
-        if job.Cancelled {
-            SetReactionStatus("登録・確認を中止しました。", true)
+        if job.Mode = "reaction_capture"
+            reply := FinalizeReactionCapture(job,reply)
+        if job.Cancelled && !job.HasOwnProp("RegistrationCommitted") {
+            SetReactionStatus("登録・確認を中止しました。", true,"","",job,"cancelled")
         } else if ShouldWaitForRegistration(job, reply) {
             job.Detail := reply.HasOwnProp("Detail") ? reply.Detail : ""
             SetReactionStatus("登録待機中：♡のメニューを開き、マウスをその上に置いてください。Escで中止。")
@@ -97,8 +99,36 @@ ReactionCountdown() {
     } catch as captureError {
         ReactionNotice("unavailable", captureError.Message)
     } finally {
-        if !IsSet(reply) || !ShouldWaitForRegistration(job, reply)
+        if ActiveReactionJob = job && (!IsSet(reply) || !ShouldWaitForRegistration(job, reply))
             ActiveReactionJob := 0
+    }
+}
+
+; The job owns cancellation; persistence and worker synchronization stay in their service.
+FinalizeReactionCapture(job, reply) {
+    global IsBrowserOperationBusy, LastBrowserOperation
+    previousCritical := A_IsCritical
+    Critical("On")
+    previousBusy := IsBrowserOperationBusy
+    IsBrowserOperationBusy := true
+    started := A_TickCount
+    try {
+        ; Cancellation and persistence form one decision. Do not hold Critical across IPC.
+        if ActiveReactionJob != job || job.Cancelled {
+            reply := {State:"cancelled",Detail:""}
+            return reply
+        }
+        reply := SaveCapturedReactionRegistration(reply)
+        if reply.State = "saved"
+            job.RegistrationCommitted := true
+        Critical(previousCritical)
+        reply := SynchronizeCapturedReactionRegistration(job.Window,reply)
+        return reply
+    } finally {
+        Critical(previousCritical)
+        IsBrowserOperationBusy := previousBusy
+        LastBrowserOperation.State := reply.State
+        LastBrowserOperation.Duration += A_TickCount-started
     }
 }
 
@@ -218,13 +248,13 @@ ApplyReactionResult(job, reply) {
         ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "", " 操作済み " job.Completed " / " job.Total " 回で停止。",job)
         return
     }
-    if !job.HasOwnProp("FirstOperationAt") {
-        job.FirstOperationAt := A_TickCount
+    if !job.HasOwnProp("FirstStartedAt") {
+        job.FirstStartedAt := job.StartedAt
         job.Measurement := ""
     }
     job.Completed++
     if job.Completed > 1
-        job.Measurement := "（平均操作間隔 " Round((A_TickCount - job.FirstOperationAt) / (job.Completed - 1)) " ms）"
+        job.Measurement := "（平均開始間隔 " Round((job.StartedAt - job.FirstStartedAt) / (job.Completed - 1)) " ms）"
     progress := ReactionApplied "`n操作済み " job.Completed " / " job.Total " 回" job.Measurement
     if job.Cancelled || job.Completed >= job.Total {
         ActiveReactionJob := 0

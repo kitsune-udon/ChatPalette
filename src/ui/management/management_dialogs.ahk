@@ -117,7 +117,7 @@ TransferItem(*) {
             return
         }
         RefreshManagementAfterCommand(editId)
-        ManagementStatus.Text := result.Label "：保存済み"
+        SetManagementNotice(result.Label "：保存済み")
         Close()
     }
 }
@@ -158,12 +158,12 @@ OpenChannelLinkDialog(*) {
         return
     ShowManagement(1)
     if !IsBrowser(TargetBrowserHwnd) {
-        ManagementStatus.Text := "YouTubeを最前面にしてCtrl＋Alt＋Qを押し、もう一度チャンネル連携を開いてください。"
+        SetManagementNotice("YouTubeを最前面にしてCtrl＋Alt＋Qを押し、もう一度チャンネル連携を開いてください。")
         return
     }
     candidate := ResolveBrowserChannel(TargetBrowserHwnd)
     if candidate.State != "ok" {
-        ManagementStatus.Text := "チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。"
+        SetManagementNotice("チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。")
         return
     }
     view := Gui("+Owner" ManagementWindow.Hwnd,"このチャンネルと連携")
@@ -221,7 +221,7 @@ OpenChannelLinkDialog(*) {
         }
         EditScopeShared := false
         RefreshManagementAfterCommand(result.ProfileId)
-        ManagementStatus.Text := "チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。"
+        SetManagementNotice("チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。")
         Close()
     }
 }

@@ -1,11 +1,4 @@
 ﻿; Profile identity and active input selection. Editing has a separate selection.
-NewProfileId() {
-    guid := Buffer(16), text := Buffer(78)
-    if DllCall("ole32\CoCreateGuid", "Ptr", guid, "Int") != 0
-        throw Error("識別子を作成できませんでした。")
-    DllCall("ole32\StringFromGUID2", "Ptr", guid, "Ptr", text, "Int", 39)
-    return StrGet(text)
-}
 GetInputProfile() {
     return InputProfileIndex >= 1 && InputProfileIndex <= Profiles.Length ? Profiles[InputProfileIndex] : 0
 }
@@ -22,9 +15,9 @@ SaveInputProfileSelection(index) {
     try {
         if index < 1 || index > Profiles.Length || index = InputProfileIndex
             return
-        state := CreateSettingsSnapshot()
+        state := CreateSettingsSnapshot(false)
         state.InputProfileIndex := index
-        WriteSettingsFile(state, SettingsFilePath)
+        SaveSettingsPreferences(state, SettingsDatabasePath)
         InputProfileIndex := index
     } finally {
         Critical(previousCritical)

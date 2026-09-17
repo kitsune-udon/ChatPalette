@@ -18,9 +18,20 @@ NormalizeLibrarySlots(items) {
 AssignItemSlot(items, index, slot) {
     if !IsInteger(index) || !IsInteger(slot) || index < 1 || index > items.Length || slot < 0 || slot > 2
         throw Error("キーの割当が正しくありません。")
-    for i, item in items
-        if i = index
-            item.Slot := slot
-        else if slot && ItemSlot(item) = slot
-            item.Slot := 0
+    ; Clearing a slot cannot conflict with another item; avoid scanning the list.
+    if !slot {
+        if ItemSlot(items[index]) {
+            replacement := items[index].Clone(), replacement.Slot := 0
+            items[index] := replacement
+        }
+        return
+    }
+    for i, item in items {
+        nextSlot := i = index ? slot : (slot && ItemSlot(item) = slot ? 0 : ItemSlot(item))
+        if ItemSlot(item) != nextSlot {
+            replacement := item.Clone()
+            replacement.Slot := nextSlot
+            items[i] := replacement
+        }
+    }
 }

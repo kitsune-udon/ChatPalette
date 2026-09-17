@@ -1,0 +1,52 @@
+﻿$ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'support.ps1')
+$release=New-TestRuntime
+foreach ($name in @('scripts','docs')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $name) -Destination $release -Recurse }
+New-Item -ItemType Directory -Path (Join-Path $release 'tests\fixtures') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination (Join-Path $release 'tests\fixtures')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'support.ps1') -Destination (Join-Path $release 'tests')
+foreach ($name in @('README.md','LICENSE','CHANGELOG.md')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $name) -Destination $release }
+foreach ($relative in @('data\settings.db','data\reaction_selectors.json','tests\.tmp\private.txt','private.txt')) {
+    $path=Join-Path $release $relative
+    New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($path)) -Force | Out-Null
+    [IO.File]::WriteAllText($path,'synthetic private marker')
+}
+$out=Join-Path $release 'dist'
+& (Join-Path $release 'scripts\build-release.ps1') -OutputDirectory $out | Out-Null
+$version=([IO.File]::ReadAllText((Join-Path $release 'VERSION'))).Trim()
+$zipPath=Join-Path $out "ChatPalette-$version.zip"
+$before=(Get-FileHash -LiteralPath $zipPath).Hash
+$archive=[IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    $names=@($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
+    if ($names -match '(^data/|/\.tmp/|^private.txt$|^dist/)') { throw 'Private or temporary files included in release' }
+    foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/settings.ini','scripts/build-release.ps1')) {
+        if ($names -cnotcontains $required) { throw "Missing release file: $required" }
+    }
+    foreach ($line in [IO.File]::ReadAllLines((Join-Path $release 'main.ahk'))) {
+        if ($line -match '^#Include (.+)$' -and $names -cnotcontains $Matches[1].Replace('\','/')) { throw "Missing include: $line" }
+    }
+    $manifestEntry=@($archive.Entries | Where-Object { $_.FullName -eq 'SHA256SUMS' })[0]
+    $reader=[IO.StreamReader]::new($manifestEntry.Open())
+    try { $manifest=$reader.ReadToEnd() } finally { $reader.Dispose() }
+    $expected=@{}
+    foreach ($line in ($manifest -split '\r?\n')) {
+        if (!$line) { continue }
+        if ($line -cnotmatch '^([a-f0-9]{64})  (.+)$' -or $expected.ContainsKey($Matches[2])) { throw 'Invalid or duplicate release hash entry' }
+        $expected[$Matches[2]]=$Matches[1]
+    }
+    if ($expected.Count -ne $archive.Entries.Count-1) { throw 'Incomplete release manifest' }
+    foreach ($entry in $archive.Entries) {
+        $name=$entry.FullName.Replace('\','/')
+        if ($name -eq 'SHA256SUMS') { continue }
+        $stream=$entry.Open(); $sha=[Security.Cryptography.SHA256]::Create()
+        try { $actual=([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
+        finally { $sha.Dispose(); $stream.Dispose() }
+        if ($expected[$name] -cne $actual) { throw "Wrong release checksum: $name" }
+    }
+} finally { $archive.Dispose() }
+$failed=$false
+try { & (Join-Path $release 'scripts\build-release.ps1') -OutputDirectory $out | Out-Null } catch { $failed=$true }
+if (!$failed -or (Get-FileHash -LiteralPath $zipPath).Hash -ne $before) { throw 'Release overwrite protection failed' }
+if (@(Get-ChildItem -LiteralPath $out -Directory -Filter 'stage-*').Count) { throw 'Release staging directory left behind' }
+Write-Output 'PASS: release contents, privacy exclusions, includes, checksums and overwrite protection.'

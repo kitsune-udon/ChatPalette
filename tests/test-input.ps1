@@ -103,4 +103,14 @@ function Read-BrowserVideoId($WindowHandle) {
     return $script:video
 }
 Assert ((Verify '').State -eq 'wrong_input') 'focus changed during final URL read is rejected even if new field is editable'
+$script:focusedId='original'
+function Read-BrowserVideoId($WindowHandle) { return 'abcdefghijk' }
+Assert ((Verify 'abcdefghijk').State -eq 'ok' -and (Verify 'abcdefghijk').Detail -eq 'chat') 'chat worker route succeeds'
+$script:reads=0
+function Read-BrowserVideoId($WindowHandle) {
+    $script:reads++
+    if ($script:reads -eq 1) { return 'abcdefghijk' }
+    return 'ABCDEFGHIJK'
+}
+Assert ((Verify 'abcdefghijk').State -eq 'changed') 'video changes during input verification block input'
 Write-Output "PASS: $script:checks input checks; no real UI or network used."

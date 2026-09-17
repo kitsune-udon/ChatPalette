@@ -46,12 +46,28 @@ $script:target.Current.IsEnabled = $false
 Assert ((Request 'reaction_send').State -eq 'menu_closed') 'disabled target blocks'
 $script:target.Current.IsEnabled = $true
 Assert ((Request 'reaction_send' 'abcdefghijk' '6').State -eq 'unavailable') 'unknown reaction blocks'
+Assert ($script:invocations -eq 0) 'all rejected requests leave invocation count unchanged'
 Assert ((Request 'reaction_send').State -eq 'operated' -and $script:invocations -eq 1) 'one operation'
 Assert ((Request 'reaction_send').State -eq 'operated' -and $script:invocations -eq 2) '待機なし does not impose hidden cooldown'
+# A focus switch while obtaining the invoker must also block the action.
+function Get-ReactionInvoker($Target) { $script:foreground = $false; return $script:invoker }
+Assert ((Request 'reaction_send').State -eq 'wrong_window' -and $script:invocations -eq 2) 'focus change immediately before invoke blocks'
+$script:foreground = $true
+function Get-ReactionInvoker($Target) { return $script:invoker }
 $script:throwOnInvoke = $true
 Assert ((Request 'reaction_send').State -eq 'unknown' -and $script:invocations -eq 3) 'uncertain completion never retries'
 $script:video = ''
 Assert ((Request 'reaction_send').State -eq 'unavailable' -and $script:invocations -eq 3) 'unreadable URL blocks'
+$script:video='abcdefghijk'
+$script:throwOnInvoke=$false
+$script:reads=0
+function Read-BrowserVideoId([long]$WindowHandle) {
+    $script:reads++
+    if ($script:reads -eq 1) { return 'abcdefghijk' }
+    return 'ABCDEFGHIJK'
+}
+Assert ((Request 'reaction_send').State -eq 'changed' -and $script:invocations -eq 3) 'video change during lookup never invokes'
+function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 $script:fakeButtons = @()
@@ -85,7 +101,6 @@ Assert ($null -eq (Get-ReactionGroup $fakeGroup)) 'unrelated five-button menu re
 $script:fakeButtons[1].Current.Name = 'grinning face'
 $script:fakeButtons[1].Current.IsOffscreen = $true
 Assert ($null -eq (Get-ReactionGroup $fakeGroup)) 'partially hidden group rejected'
-Write-Output "PASS: $script:checks reaction safety checks; no real UI or network used"
 
 # Regression: lookup must not depend on blank/transient ancestor containers.
 $savedLookup = @{groupClass='old container'; groupId='old'; tokens=@(
@@ -135,3 +150,5 @@ try {
     Set-Item Function:Resolve-Video $oldResolver
 }
 Write-Output 'PASS: generic browser context is independent of reactions and metadata'
+
+Write-Output "PASS: $script:checks reaction checks; no real UI or network used"
