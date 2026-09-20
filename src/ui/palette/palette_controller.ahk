@@ -80,6 +80,8 @@ RefreshVisiblePalette() {
 
 ; Editing starts from the selected palette item, without changing the input profile.
 OpenPaletteLibrary(*) {
+    if PaletteUpdating
+        return
     if FlushPendingPaletteSearch()
         return
     global EditScopeShared, EditProfileIndex
@@ -104,7 +106,7 @@ GetPaletteLibraryTarget() {
         index := row.Shared ? 0 : FindProfileIndexById(Profiles,row.ProfileId)
         if row.Shared || (index && HasPaletteInputProfile() && index = InputProfileIndex) {
             items := row.Shared ? SharedDanmakuItems : Profiles[index].Items
-            if row.Index >= 1 && row.Index <= items.Length && items[row.Index].Text == row.Text
+            if PaletteItemMatches(row,items)
                 return {ProfileId:row.Shared ? "" : row.ProfileId, Index:row.Index}
         }
     }

@@ -51,6 +51,39 @@ try {
     DllCall("GetWindowRect","Ptr",probe.Hwnd,"Ptr",rect)
     AssertView(NumGet(rect,0,"Int")>=NumGet(info,20,"Int") && NumGet(rect,4,"Int")>=NumGet(info,24,"Int") && NumGet(rect,8,"Int")<=NumGet(info,28,"Int") && NumGet(rect,12,"Int")<=NumGet(info,32,"Int"),"all edges fit recovered work area")
     probe.Destroy()
+    PresentWindow(PaletteWindow,"w260 h300",ResizePalette)
+    PaletteViewport.SetOffset(0,0)
+    PaletteReset.Focus()
+    SetTimer(PaletteViewport.FocusHandler,0)
+    PaletteViewport.SetOffset(0,0)
+    PaletteViewport.Updating := true
+    PaletteViewport.FollowFocus()
+    AssertView(PaletteViewport.Y=0,"focus sampling does not move controls during layout")
+    PaletteViewport.FollowFocus()
+    AssertView(PaletteViewport.Y=0,"focus waits for layout completion")
+    PaletteViewport.Updating := false
+    SetTimer(PaletteViewport.FocusHandler,50)
+    Sleep(80)
+    AssertVisible(PaletteReset,PaletteWindow)
+    Loop 20 {
+        PresentWindow(PaletteWindow,"w260 h300",ResizePalette)
+        PaletteSearch.Focus()
+        PaletteReset.Focus()
+        PaletteViewport.Resize()
+        Sleep(15)
+        for record in PaletteViewport.Children
+            AssertView(Type(record)="Buffer" && record.Size=A_PtrSize+8 && DllCall("IsWindow","Ptr",NumGet(record,0,"Ptr")),"coordinate snapshot complete under focus and resize")
+    }
+    PaletteViewport.SetOffset(0,0)
+    PaletteSearch.Focus()
+    SetTimer(PaletteViewport.FocusHandler,0)
+    PaletteViewport.FollowFocus()
+    PaletteViewport.FollowFocus()
+    AssertView(PaletteViewport.Y=0,"sampling uses the current focused control")
+    SetTimer(PaletteViewport.FocusHandler,50)
+    PaletteViewport.Dispose()
+    AssertView(PaletteViewport.LastFocus=0 && PaletteViewport.Disposed,"dispose clears focus tracking")
+    Sleep(30)
     FileAppend("PASS: " ViewChecks " viewport and progress checks; no browser operations`n","*")
     ExitApp(0)
 } catch as failure {
@@ -68,6 +101,15 @@ AssertVisible(control,view) {
     DllCall("GetWindowRect","Ptr",control.Hwnd,"Ptr",rect)
     DllCall("MapWindowPoints","Ptr",0,"Ptr",view.Hwnd,"Ptr",rect,"UInt",2)
     DllCall("GetClientRect","Ptr",view.Hwnd,"Ptr",client)
+    deadline := A_TickCount+1000
+    while A_TickCount < deadline {
+        DllCall("GetWindowRect","Ptr",control.Hwnd,"Ptr",rect)
+        DllCall("MapWindowPoints","Ptr",0,"Ptr",view.Hwnd,"Ptr",rect,"UInt",2)
+        if (NumGet(rect,0,"Int")>=0 || NumGet(rect,8,"Int")-NumGet(rect,0,"Int")>NumGet(client,8,"Int")) && NumGet(rect,4,"Int")>=0
+            && NumGet(rect,8,"Int")<=NumGet(client,8,"Int") && NumGet(rect,12,"Int")<=NumGet(client,12,"Int")
+            break
+        Sleep(20)
+    }
     AssertView((NumGet(rect,0,"Int")>=0 || NumGet(rect,8,"Int")-NumGet(rect,0,"Int")>NumGet(client,8,"Int")) && NumGet(rect,4,"Int")>=0
         && NumGet(rect,8,"Int")<=NumGet(client,8,"Int") && NumGet(rect,12,"Int")<=NumGet(client,12,"Int"),"focused control is reachable in small view: " control.Text)
 }

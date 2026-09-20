@@ -4,7 +4,7 @@
 
 ## 自動テストで分かること
 
-現行の一括実行は19テスト群です。アプリ・SQLite・GUIの一部は実際に動かし、ブラウザー入力・リアクション送信・ネットワークは代替処理に置き換えます。成功は、ブラウザー全種類との互換性や実際のYouTube受理数の証明にはなりません。
+現行の一括実行は20テスト群です。アプリ・SQLite・GUIの一部は実際に動かし、ブラウザー入力・リアクション送信・ネットワークは代替処理に置き換えます。成功は、ブラウザー全種類との互換性や実際のYouTube受理数の証明にはなりません。
 
 `tests/run.ps1`が各テストを別のWindows PowerShellプロセスで実行し、終了コードを確認します。一時実行先は`tests/.tmp/run-*`です。全体成功時に削除し、失敗時は調査用に残します。単体実行の一時フォルダーは自動削除しません。利用者の`data/`は読み書きしません。
 
@@ -22,6 +22,7 @@
 | 順序操作 | [test-management-order.ps1](../../tests/test-management-order.ps1) | 選択・スクロール・上下移動 |
 | 一覧表示 | [test-list-visibility.ps1](../../tests/test-list-visibility.ps1) | タブ往復・再表示・明示的非表示 |
 | 小さい画面 | [test-viewports.ps1](../../tests/test-viewports.ps1) | 配置、スクロール、フォーカス追従 |
+| UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の公開、更新中操作の拒否、対象ID、配置の直列化・終了後の保留解除 |
 | 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 結果保持、通知、診断など過去の不具合 |
 | 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 履歴共有、差分編集、同値保存、非表示更新抑制 |
 | 検索・選択肢 | [test-search-scheduling.ps1](../../tests/test-search-scheduling.ps1) | 検索集約、旧結果操作防止、選択肢の再利用 |

@@ -98,6 +98,25 @@ BuildManagement() {
 
 
 RefreshManagement() {
+    global ManagementUpdating, ManagementRefreshPending
+    if !ManagementWindow
+        return
+    if ManagementUpdating {
+        ManagementRefreshPending := true
+        return
+    }
+    ManagementUpdating := true
+    try RenderManagement()
+    finally {
+        ManagementUpdating := false
+        if ManagementRefreshPending {
+            ManagementRefreshPending := false
+            SetTimer(RefreshManagement,-1)
+        }
+    }
+}
+
+RenderManagement() {
     global EditProfileIndex, EditScopeShared
     if !ManagementWindow
         return

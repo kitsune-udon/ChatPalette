@@ -2,6 +2,8 @@
 
 
 ShortcutBlocked() {
+    if PaletteUpdating || ManagementUpdating
+        return true
     if ActiveEditorDialog {
         ToolTip("「" ActiveEditorDialog.Label "」を閉じてから実行してください。")
         SetTimer(() => ToolTip(), -2500)

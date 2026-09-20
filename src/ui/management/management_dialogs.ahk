@@ -1,6 +1,8 @@
 ﻿; Owned editors and their explicit save/cancel lifetime.
 
 OpenDanmakuEditor(isNew) {
+    if ManagementUpdating
+        return
     global DanmakuEditorWindow
     if IsBrowserOperationBusy || ActiveReactionJob || DanmakuEditorWindow
         return
@@ -77,6 +79,8 @@ CloseDanmakuEditor(*) {
 }
 
 TransferItem(*) {
+    if ManagementUpdating
+        return
     index := ManagedList.GetNext()
     if !index || IsBrowserOperationBusy || ActiveReactionJob
         return

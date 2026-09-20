@@ -11,6 +11,8 @@ RefreshManagementAfterCommand(editId) {
     RefreshManagement()
 }
 HandleDanmakuCommand(action, *) {
+    if ManagementUpdating
+        return
     if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
         return
     index := ManagedList.GetNext()
@@ -34,6 +36,8 @@ HandleDanmakuCommand(action, *) {
     SetManagementNotice(result.Label "：保存済み")
 }
 UndoLibraryChange(*) {
+    if ManagementUpdating
+        return
     if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
         return
     editId := GetEditingProfileId()
@@ -47,6 +51,8 @@ UndoLibraryChange(*) {
         SetManagementNotice(label "を取り消しました。")
 }
 ManageProfile(action, *) {
+    if ManagementUpdating
+        return
     if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
         return
     BeginEditorDialog(ManagementWindow,"配信者の編集")

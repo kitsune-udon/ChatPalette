@@ -1,18 +1,31 @@
 ﻿InitializeReactionFeedback() {
+    global ReactionOverlayReady := false, ReactionOverlayBuilding := false
     global ReactionOverlay := 0, ReactionOverlayText := 0, ReactionOverlayStop := 0, ReactionOverlayHint := 0
 }
 
 RenderReactionStatus() {
+    static updating := false
+    if updating {
+        SetTimer(RenderReactionStatus,-1)
+        return
+    }
+    updating := true
+    try RenderLatestReactionStatus()
+    finally updating := false
+}
+
+RenderLatestReactionStatus() {
     static lastRenderedAt := 0, lastPhase := ""
-    phase := ReactionExecutionStatus.Phase
+    snapshot := ReactionExecutionStatus
+    phase := snapshot.Phase
     remaining := 100-(A_TickCount-lastRenderedAt)
-    if !ReactionExecutionStatus.Final && phase = lastPhase && remaining > 0 {
+    if !snapshot.Final && phase = lastPhase && remaining > 0 {
         SetTimer(RenderReactionStatus,-remaining)
         return
     }
     SetTimer(RenderReactionStatus,0)
     lastRenderedAt := A_TickCount, lastPhase := phase
-    message := ReactionExecutionStatus.Message, final := ReactionExecutionStatus.Final
+    message := snapshot.Message, final := snapshot.Final
     SetTimer(HideFinishedReactionProgress, 0)
     PaletteStatusControl.Text := message
     layoutChanged := PaletteStop.Visible != !final
@@ -23,19 +36,21 @@ RenderReactionStatus() {
         if width > 0
             ResizePalette(PaletteWindow,0,width,height)
     }
-    if ReactionOverlayText {
+    if ReactionOverlayReady {
         ReactionOverlayText.Text := message
-        ReactionOverlayHint.Text := ReactionProgressHint()
+        ReactionOverlayHint.Text := ReactionProgressHint(snapshot)
         ReactionOverlayStop.Visible := !final
         ReactionOverlayStop.Enabled := !final
     }
     if final
         SetTimer(HideFinishedReactionProgress, -4000)
+    if snapshot != ReactionExecutionStatus
+        SetTimer(RenderReactionStatus,-1)
 }
 
 
-ReactionProgressHint() {
-    return ReactionExecutionStatus.Final ? "4秒後に表示を消します。結果はCtrl＋Alt＋Q → 管理・ヘルプ → リアクションの実行結果。"
+ReactionProgressHint(snapshot := 0) {
+    return (snapshot ? snapshot.Final : ReactionExecutionStatus.Final) ? "4秒後に表示を消します。結果はCtrl＋Alt＋Q → 管理・ヘルプ → リアクションの実行結果。"
         : "Esc：処理を停止　Ctrl＋Alt＋Q：進捗を表示"
 }
 
@@ -48,22 +63,43 @@ HideFinishedReactionProgress() {
 
 ShowReactionProgress(*) {
     global ReactionOverlay, ReactionOverlayText, ReactionOverlayStop, ReactionOverlayHint
-    if !ReactionOverlay {
-        ReactionOverlay := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x08000000", "リアクション進捗")
-        ReactionOverlay.SetFont("s10", "Yu Gothic UI")
-        ReactionOverlay.AddText("w360 h24", "リアクションの進捗").SetFont("bold")
-        ReactionOverlayText := ReactionOverlay.AddText("w360 r6", "")
-        ReactionOverlayHint := ReactionOverlay.AddText("w360 r3 c526174", "")
-        ReactionOverlayStop := ReactionOverlay.AddButton("w160", "停止")
-        ReactionOverlayStop.OnEvent("Click",CancelReaction)
+    global ReactionOverlayReady, ReactionOverlayBuilding
+    if ReactionOverlayBuilding
+        return
+    if !ReactionOverlayReady {
+        ReactionOverlayBuilding := true
+        try {
+            view := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x08000000", "リアクション進捗")
+            view.SetFont("s10", "Yu Gothic UI")
+            view.AddText("w360 h24", "リアクションの進捗").SetFont("bold")
+            text := view.AddText("w360 r6", "")
+            hint := view.AddText("w360 r3 c526174", "")
+            stop := view.AddButton("w160", "停止")
+            stop.OnEvent("Click",CancelReaction)
+            ; Publish a complete view; no renderer observes construction in progress.
+            previousCritical := A_IsCritical
+            Critical("On")
+            try {
+                ReactionOverlay := view, ReactionOverlayText := text
+                ReactionOverlayHint := hint, ReactionOverlayStop := stop
+                ReactionOverlayReady := true
+            } finally Critical(previousCritical)
+        } catch as failure {
+            if IsSet(view)
+                view.Destroy()
+            throw failure
+        } finally ReactionOverlayBuilding := false
     }
-    ReactionOverlayText.Text := ReactionExecutionStatus.Message
-    ReactionOverlayHint.Text := ReactionProgressHint()
-    ReactionOverlayStop.Visible := !ReactionExecutionStatus.Final
-    ReactionOverlayStop.Enabled := !ReactionExecutionStatus.Final
+    snapshot := ReactionExecutionStatus
+    ReactionOverlayText.Text := snapshot.Message
+    ReactionOverlayHint.Text := ReactionProgressHint(snapshot)
+    ReactionOverlayStop.Visible := !snapshot.Final
+    ReactionOverlayStop.Enabled := !snapshot.Final
     PresentWindow(ReactionOverlay,"x20 y20",0,false)
-    if ReactionExecutionStatus.Final
+    if snapshot.Final
         SetTimer(HideFinishedReactionProgress, -4000)
+    if snapshot != ReactionExecutionStatus
+        SetTimer(RenderReactionStatus,-1)
 }
 
 

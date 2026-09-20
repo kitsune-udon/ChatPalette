@@ -47,6 +47,7 @@ global SettingsDatabasePath := AppDataDirectory "\settings.db"
 global SharedDanmakuItems := []
 global Profiles := [], InputProfileIndex := 1, TargetBrowserHwnd := 0, PaletteWindow := 0, DanmakuEditorWindow := 0
 global AutoMode := 1, IsBrowserOperationBusy := false
+global PaletteUpdating := false, ManagementUpdating := false, ManagementRefreshPending := false
 global DetectedChannel := {State: "unavailable", Author: "", Channel: ""}
 global ActiveEditorDialog := false
 global WorkerRequestActive := false

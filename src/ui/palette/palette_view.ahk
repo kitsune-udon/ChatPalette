@@ -1,5 +1,5 @@
 ﻿BuildPalette() {
-    global PaletteSearchPending := false
+    global PaletteSearchPending := false, PaletteUpdating := false, PaletteRefreshPending := false
     global PaletteTitle, PaletteWindow, PaletteContext, PaletteMode, PaletteProfile, PaletteSearch, PaletteList
     global PaletteInsert, PaletteBind, PaletteChoice, PaletteCount, PaletteInterval, PaletteStart, PaletteStop
     global PaletteOptionLabels, PaletteSettingsStatus, PaletteManageButton, PaletteReactionHeading, PaletteIntervalHint
@@ -134,48 +134,78 @@ RefreshPalette() {
 
 
 RefreshPaletteItems() {
-    CancelScheduledPaletteSearch()
-    position := BeginListRefresh(PaletteList,2)
-    try {
-        global PaletteRows := []
-        PaletteList.Delete()
-        query := Trim(PaletteSearch.Value)
-        profile := GetInputProfile()
-        matched := HasPaletteInputProfile()
-        if profile && matched
-            AddPaletteItems(profile.Items, false, query)
-        AddPaletteItems(SharedDanmakuItems, true, query)
-        PaletteInsert.Enabled := PaletteRows.Length > 0
-        PaletteHint.Text := PaletteRows.Length ? "弾幕は入力のみ。内容を確認してYouTubeで送信します。" : (query != "" ? "一致する弾幕がありません。検索条件を変えてください。" : "「弾幕を追加・編集」から登録できます。共通弾幕は配信者不要です。")
-    } finally {
-        EndListRefresh(PaletteList,position,2)
+    global PaletteUpdating, PaletteRefreshPending, PaletteRows
+    if PaletteUpdating {
+        PaletteRefreshPending := true
+        return
     }
-    PreviewPaletteItem()
+    PaletteUpdating := true
+    try {
+        CancelScheduledPaletteSearch()
+        PaletteInsert.Enabled := false
+        PaletteManageButton.Enabled := false
+        rows := [], query := Trim(PaletteSearch.Value), profile := GetInputProfile()
+        if profile && HasPaletteInputProfile()
+            CollectPaletteItems(rows,profile.Items,false,query,profile.Id)
+        CollectPaletteItems(rows,SharedDanmakuItems,true,query)
+        position := BeginListRefresh(PaletteList,2)
+        try {
+            PaletteList.Delete()
+            for row in rows
+                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key)
+            ; Publish only after the native list and its backing rows agree.
+            PaletteRows := rows
+        } catch as failure {
+            PaletteRows := []
+            PaletteList.Delete()
+            throw failure
+        } finally {
+            EndListRefresh(PaletteList,position,2)
+        }
+        PaletteHint.Text := rows.Length ? "弾幕は入力のみ。内容を確認してYouTubeで送信します。" : (query != "" ? "一致する弾幕がありません。検索条件を変えてください。" : "「弾幕を追加・編集」から登録できます。共通弾幕は配信者不要です。")
+    } finally {
+        PaletteUpdating := false
+        PaletteManageButton.Enabled := true
+        PreviewPaletteItem()
+        if PaletteRefreshPending {
+            PaletteRefreshPending := false
+            SetTimer(RunScheduledPaletteSearch,-1)
+        }
+    }
 }
 
-
-AddPaletteItems(items, shared, query) {
+CollectPaletteItems(rows, items, shared, query, profileId := "") {
     for i, item in items {
         if query != "" && !InStr(item.Name " " item.Text, query)
             continue
         slot := ItemSlot(item)
-        PaletteList.Add("", shared ? "共通" : "配信者", item.Name "　" item.Text, slot ? "Ctrl+Alt+" (slot+(shared ? 2 : 0)) : "")
-        PaletteRows.Push({Shared:shared, Index:i, ProfileId:!shared && GetInputProfile() ? GetInputProfile().Id : "", Text:item.Text})
+        rows.Push({Shared:shared, Index:i, ProfileId:profileId, Text:item.Text,
+            ItemId:item.HasOwnProp("Id") ? item.Id : "", Item:item,
+            Label:item.Name "　" item.Text, Key:slot ? "Ctrl+Alt+" (slot+(shared ? 2 : 0)) : ""})
     }
 }
 
+PaletteItemMatches(row, items) {
+    if row.Index < 1 || row.Index > items.Length
+        return false
+    item := items[row.Index]
+    return (row.ItemId != "" ? item.HasOwnProp("Id") && item.Id == row.ItemId : item = row.Item)
+        && item.Text == row.Text
+}
 
 InsertPaletteItem(*) {
+    if PaletteUpdating
+        return
     if FlushPendingPaletteSearch()
         return
     if IsBrowserOperationBusy || ActiveReactionJob || DanmakuEditorWindow
         return
     index := PaletteList.GetNext()
-    if !index
+    if !index || index > PaletteRows.Length
         return
     row := PaletteRows[index]
     items := row.Shared ? SharedDanmakuItems : (GetInputProfile() && GetInputProfile().Id = row.ProfileId ? GetInputProfile().Items : [])
-    if row.Index > items.Length || items[row.Index].Text != row.Text {
+    if !PaletteItemMatches(row,items) {
         RefreshPalette()
         return
     }
@@ -246,6 +276,8 @@ SavePaletteDefaults(*) {
 
 
 PreviewPaletteItem(*) {
+    if PaletteUpdating
+        return
     index := PaletteList.GetNext()
     PaletteInsert.Enabled := index > 0
     PalettePreview.Value := index && index <= PaletteRows.Length ? PaletteRows[index].Text : ""

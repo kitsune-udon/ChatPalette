@@ -4,6 +4,10 @@ class PanelViewport {
         this.View := view, this.Hwnd := view.Hwnd, this.Width := width, this.Height := height
         this.MinimumWidth := width, this.MinimumHeight := height, this.Layout := layout
         this.X := 0, this.Y := 0, this.Children := [], this.Updating := false
+        this.LastFocus := 0, this.Disposed := false
+        this.FocusHandler := ObjBindMethod(this,"FollowFocus")
+        this.PendingResize := false, this.PendingOffset := 0
+        this.UpdateHandler := ObjBindMethod(this,"FlushUpdates")
         view.Opt("+Resize +MinSize160x160")
         this.CaptureChildren()
         if !layout
@@ -14,29 +18,37 @@ class PanelViewport {
         OnMessage(0x114, this.ScrollHandler)
         OnMessage(0x115, this.ScrollHandler)
         OnMessage(0x20A, this.WheelHandler)
-        ; Only this process: includes Tab and Hotkey controls without Focus events.
-        this.FocusCallback := CallbackCreate(ObjBindMethod(this, "FocusChanged"), , 7)
-        this.FocusHook := DllCall("SetWinEventHook", "UInt", 0x8005, "UInt", 0x8005, "Ptr", 0,
-            "Ptr", this.FocusCallback, "UInt", DllCall("GetCurrentProcessId"), "UInt", 0, "UInt", 0, "Ptr")
+        ; Focus is sampled by an AHK timer only while the panel is visible.
         OnExit(ObjBindMethod(this, "Dispose"))
     }
 
     CaptureChildren() {
-        this.Children := []
+        children := []
         child := DllCall("GetWindow", "Ptr", this.Hwnd, "UInt", 5, "Ptr")
         while child {
             rect := Buffer(16)
-            DllCall("GetWindowRect", "Ptr", child, "Ptr", rect)
+            if !DllCall("GetWindowRect", "Ptr", child, "Ptr", rect)
+                throw Error("画面部品の座標を取得できませんでした。")
             DllCall("MapWindowPoints", "Ptr", 0, "Ptr", this.Hwnd, "Ptr", rect, "UInt", 2)
-            this.Children.Push({Hwnd:child, X:NumGet(rect,0,"Int"), Y:NumGet(rect,4,"Int")})
+            ; Fixed-size native record: HWND followed by two signed coordinates.
+            record := Buffer(A_PtrSize+8)
+            NumPut("Ptr",child,"Int",NumGet(rect,0,"Int"),"Int",NumGet(rect,4,"Int"),record)
+            children.Push(record)
             child := DllCall("GetWindow", "Ptr", child, "UInt", 2, "Ptr")
         }
+        ; Publish only a complete coordinate snapshot.
+        this.Children := children
     }
 
     MoveChildren(x, y) {
-        for child in this.Children
-            DllCall("SetWindowPos", "Ptr", child.Hwnd, "Ptr", 0, "Int", child.X-x, "Int", child.Y-y,
+        snapshot := this.Children
+        for record in snapshot {
+            hwnd := NumGet(record,0,"Ptr")
+            targetX := NumGet(record,A_PtrSize,"Int")-x
+            targetY := NumGet(record,A_PtrSize+4,"Int")-y
+            DllCall("SetWindowPos", "Ptr", hwnd, "Ptr", 0, "Int", targetX, "Int", targetY,
                 "Int", 0, "Int", 0, "UInt", 0x15)
+        }
     }
 
     Show() {
@@ -44,8 +56,15 @@ class PanelViewport {
     }
 
     Resize(*) {
-        if this.Updating
+        if this.Disposed
             return
+        if this.Updating {
+            this.PendingResize := true
+            SetTimer(this.UpdateHandler,-1)
+            return
+        }
+        this.LastFocus := 0
+        SetTimer(this.FocusHandler,50)
         this.Updating := true
         try {
             ; A scrollbar appearing can change the other axis's client size.
@@ -63,7 +82,7 @@ class PanelViewport {
                 }
                 this.MaxX := Max(0, Round(this.Width * A_ScreenDPI / 96) - this.PageX)
                 this.MaxY := Max(0, Round(this.Height * A_ScreenDPI / 96) - this.PageY)
-                this.SetOffset(this.X, this.Y)
+                this.ApplyOffset(this.X, this.Y)
             }
         } finally {
             this.Updating := false
@@ -71,6 +90,35 @@ class PanelViewport {
     }
 
     SetOffset(x, y) {
+        if this.Disposed || !this.HasOwnProp("PageY")
+            return
+        if this.Updating {
+            this.PendingOffset := {X:x,Y:y}
+            SetTimer(this.UpdateHandler,-1)
+            return
+        }
+        this.Updating := true
+        try this.ApplyOffset(x,y)
+        finally this.Updating := false
+    }
+
+    FlushUpdates() {
+        if this.Disposed
+            return
+        if this.Updating {
+            SetTimer(this.UpdateHandler,-10)
+            return
+        }
+        resize := this.PendingResize, offset := this.PendingOffset
+        this.PendingResize := false, this.PendingOffset := 0
+        if resize
+            this.Resize()
+        if offset
+            this.SetOffset(offset.X,offset.Y)
+    }
+
+    ; Only the owner of Updating may apply native moves.
+    ApplyOffset(x, y) {
         this.X := Min(Max(0, x), this.MaxX), this.Y := Min(Max(0, y), this.MaxY)
         for axis in [0, 1] {
             info := Buffer(28, 0)
@@ -83,7 +131,7 @@ class PanelViewport {
     }
 
     Scroll(wParam, lParam, msg, hwnd) {
-        if hwnd != this.Hwnd || lParam
+        if this.Disposed || this.Updating || !this.HasOwnProp("PageY") || hwnd != this.Hwnd || lParam
             return
         vertical := msg = 0x115
         pos := vertical ? this.Y : this.X, page := vertical ? this.PageY : this.PageX
@@ -106,6 +154,8 @@ class PanelViewport {
     }
 
     Wheel(wParam, lParam, msg, hwnd) {
+        if this.Disposed || this.Updating || !this.HasOwnProp("PageY")
+            return
         if DllCall("GetAncestor", "Ptr", hwnd, "UInt", 2, "Ptr") != this.Hwnd
             return
         control := GuiCtrlFromHwnd(hwnd)
@@ -119,17 +169,42 @@ class PanelViewport {
     }
 
     Dispose(*) {
-        if this.FocusHook {
-            DllCall("UnhookWinEvent", "Ptr", this.FocusHook)
-            this.FocusHook := 0
-        }
-        if this.FocusCallback {
-            CallbackFree(this.FocusCallback)
-            this.FocusCallback := 0
-        }
+        if this.Disposed
+            return
+        this.Disposed := true
+        SetTimer(this.UpdateHandler,0)
+        this.PendingResize := false, this.PendingOffset := 0
+        OnMessage(0x114,this.ScrollHandler,0)
+        OnMessage(0x115,this.ScrollHandler,0)
+        OnMessage(0x20A,this.WheelHandler,0)
+        SetTimer(this.FocusHandler,0)
+        this.LastFocus := 0
     }
 
-    FocusChanged(hook, event, control, objectId, childId, thread, time) {
+    FollowFocus() {
+        if this.Disposed
+            return
+        if !DllCall("IsWindowVisible","Ptr",this.Hwnd) {
+            SetTimer(this.FocusHandler,0)
+            this.LastFocus := 0
+            return
+        }
+        if this.Updating
+            return
+        control := DllCall("GetFocus","Ptr")
+        if !control || DllCall("GetAncestor","Ptr",control,"UInt",2,"Ptr") != this.Hwnd {
+            this.LastFocus := 0
+            return
+        }
+        if control = this.LastFocus
+            return
+        this.LastFocus := control
+        this.Updating := true
+        try this.RevealFocusedControl(control)
+        finally this.Updating := false
+    }
+
+    RevealFocusedControl(control) {
         if !DllCall("IsWindow", "Ptr", this.Hwnd) || !this.HasOwnProp("PageY")
             return
         if control = this.Hwnd || DllCall("GetAncestor", "Ptr", control, "UInt", 2, "Ptr") != this.Hwnd
@@ -141,15 +216,20 @@ class PanelViewport {
         if focusedControl && SubStr(focusedControl.Type, 1, 3) = "Tab"
             NumPut("Int", NumGet(rect,4,"Int") + Round(32 * A_ScreenDPI / 96), rect, 12)
         x := this.X, y := this.Y
-        if NumGet(rect,0,"Int") < 0
+        ; Wide controls cannot fit both edges: consistently reveal the right edge.
+        if NumGet(rect,8,"Int")-NumGet(rect,0,"Int") > this.PageX
+            x += NumGet(rect,8,"Int") - this.PageX
+        else if NumGet(rect,0,"Int") < 0
             x += NumGet(rect,0,"Int")
         else if NumGet(rect,8,"Int") > this.PageX
             x += NumGet(rect,8,"Int") - this.PageX
-        if NumGet(rect,4,"Int") < 0
+        if NumGet(rect,12,"Int")-NumGet(rect,4,"Int") > this.PageY
+            y += NumGet(rect,4,"Int")
+        else if NumGet(rect,4,"Int") < 0
             y += NumGet(rect,4,"Int")
         else if NumGet(rect,12,"Int") > this.PageY
             y += NumGet(rect,12,"Int") - this.PageY
         if x != this.X || y != this.Y
-            this.SetOffset(x, y)
+            this.ApplyOffset(x, y)
     }
 }
