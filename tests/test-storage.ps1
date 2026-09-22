@@ -1,4 +1,5 @@
-﻿. (Join-Path $PSScriptRoot 'support.ps1')
+﻿# Test-Session: Headless
+. (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 . (Join-Path $release 'src\browser\reaction_automation.ps1')
 $tokens = @(1..5 | ForEach-Object { [pscustomobject]@{name="reaction$_"; id="id$_"; class='button'; type=50000} })

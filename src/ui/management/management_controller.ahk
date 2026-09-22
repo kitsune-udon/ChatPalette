@@ -1,19 +1,17 @@
 ﻿; GUI adapters select the target once, call a service, then render the result.
 GetEditingProfileId() {
-    return !EditScopeShared && EditProfileIndex > 0 && EditProfileIndex <= Profiles.Length ? Profiles[EditProfileIndex].Id : ""
+    return FindProfileById(Profiles,EditingProfileId) ? EditingProfileId : ""
 }
 GetEditingDanmakuItems() {
     return GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},GetEditingProfileId())
 }
 RefreshManagementAfterCommand(editId) {
-    global EditProfileIndex := FindProfileIndexById(Profiles,editId)
+    global EditingProfileId := FindProfileById(Profiles,editId) ? editId : ""
     RefreshVisiblePalette()
     RefreshManagement()
 }
 HandleDanmakuCommand(action, *) {
-    if ManagementUpdating
-        return
-    if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
+    if !OperationAllowed("edit")
         return
     index := ManagedList.GetNext()
     if !index
@@ -36,9 +34,7 @@ HandleDanmakuCommand(action, *) {
     SetManagementNotice(result.Label "：保存済み")
 }
 UndoLibraryChange(*) {
-    if ManagementUpdating
-        return
-    if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
+    if !OperationAllowed("edit")
         return
     editId := GetEditingProfileId()
     try label := UndoLibraryCommand()
@@ -51,28 +47,25 @@ UndoLibraryChange(*) {
         SetManagementNotice(label "を取り消しました。")
 }
 ManageProfile(action, *) {
-    if ManagementUpdating
-        return
-    if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
+    if !OperationAllowed("edit")
         return
     BeginEditorDialog(ManagementWindow,"配信者の編集")
     try RunProfileDialog(action)
     finally EndEditorDialog()
 }
 RunProfileDialog(action) {
-    global EditProfileIndex, EditScopeShared
     editId := GetEditingProfileId()
     if action != "add" && editId = ""
         return
     value := ""
     ManagementWindow.Opt("+OwnDialogs")
     if action = "add" || action = "rename" {
-        answer := InputBox("このツール内で表示する配信者名",action = "add" ? "配信者を追加" : "配信者名を変更","w360 h140",action = "add" ? "" : Profiles[EditProfileIndex].Name)
+        answer := InputBox("このツール内で表示する配信者名",action = "add" ? "配信者を追加" : "配信者名を変更","w360 h140",action = "add" ? "" : FindProfileById(Profiles,editId).Name)
         if answer.Result != "OK"
             return
         value := answer.Value
     } else if action = "delete" {
-        if MsgBox("「" Profiles[EditProfileIndex].Name "」と弾幕 " Profiles[EditProfileIndex].Items.Length "件を削除します。履歴から取り消せます。","配信者を削除","YesNo Default2") != "Yes"
+        if MsgBox("「" FindProfileById(Profiles,editId).Name "」と弾幕 " FindProfileById(Profiles,editId).Items.Length "件を削除します。履歴から取り消せます。","配信者を削除","YesNo Default2") != "Yes"
             return
     } else if action = "bind" {
         if !IsBrowser(TargetBrowserHwnd) {
@@ -84,7 +77,7 @@ RunProfileDialog(action) {
             SetManagementNotice("チャンネルを取得できませんでした。YouTubeから開き直してください。")
             return
         }
-        if MsgBox("YouTubeのチャンネル「" candidate.Author "」で、配信者「" Profiles[EditProfileIndex].Name "」の弾幕を自動選択します。`n`n現在：" (Profiles[EditProfileIndex].Channel != "" ? Profiles[EditProfileIndex].Channel : "未連携") "`n変更後：" candidate.Channel "`n以前の連携はこのチャンネルに置き換わります。`n`n連携しますか？","チャンネル連携の確認","YesNo") != "Yes"
+        if MsgBox("YouTubeのチャンネル「" candidate.Author "」で、配信者「" FindProfileById(Profiles,editId).Name "」の弾幕を自動選択します。`n`n現在：" (FindProfileById(Profiles,editId).Channel != "" ? FindProfileById(Profiles,editId).Channel : "未連携") "`n変更後：" candidate.Channel "`n以前の連携はこのチャンネルに置き換わります。`n`n連携しますか？","チャンネル連携の確認","YesNo") != "Yes"
             return
         fresh := ResolveBrowserChannel(TargetBrowserHwnd)
         if fresh.State != "ok" || fresh.Channel != candidate.Channel {
@@ -99,19 +92,21 @@ RunProfileDialog(action) {
         return
     }
     if action = "add"
-        editId := result.ProfileId, EditScopeShared := false
+        editId := result.ProfileId
     RefreshManagementAfterCommand(editId)
     SetManagementNotice(result.Label "：保存済み")
 }
 
 
 ChangeManagementTarget(*) {
-    global EditScopeShared := ManagementTarget.Value = 1, EditProfileIndex := ManagementTarget.Value-1
+    if !OperationAllowed("edit")
+        return
+    global EditingProfileId := ManagementTarget.Value > 1 ? Profiles[ManagementTarget.Value-1].Id : ""
     RefreshManagement()
 }
 
 SaveReactionDefaultsFromControls(*) {
-    if IsBrowserOperationBusy || ActiveReactionJob {
+    if !OperationAllowed("preferences") {
         RefreshReactionDefaultControls()
         ReactionDefaultsStatusControl.Text := "実行が終わってから変更してください。"
         return
@@ -127,7 +122,7 @@ SaveReactionDefaultsFromControls(*) {
 }
 
 PrepareReaction(mode) {
-    if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog {
+    if !OperationAllowed("reaction") {
         SetManagementNotice("現在の処理・編集を終了してから実行してください。")
         return
     }
@@ -156,10 +151,10 @@ RefreshReactionRegistration(*) {
     if !IsSet(ReactionRegistrationLabel)
         return
     if !IsBrowser(TargetBrowserHwnd) {
-        ReactionRegistrationLabel.Text := "対象ブラウザー：未選択`nYouTubeからCtrl＋Alt＋Qで開いてください。"
+        ReactionRegistrationLabel.Text := "対象ブラウザー：未選択`nYouTubeから" ShortcutKeyLabel(GetShortcutKey("palette")) "で開いてください。"
         return
     }
-    if IsBrowserOperationBusy || ActiveReactionJob {
+    if !OperationAllowed("preferences") {
         ReactionRegistrationLabel.Text := "設定状態：未確認（処理中）`n終了後、このタブを開き直してください。"
         return
     }

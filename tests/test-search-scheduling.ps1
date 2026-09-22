@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
@@ -27,7 +28,7 @@ try {
     SaveInputProfileSelection(1)
     RefreshPalette()
     CheckChoice(PaletteProfile.Text="Original","profile initially displayed")
-    InputProfileIndex := 0
+    InputProfileId := ""
     RefreshPalette()
     CheckChoice(PaletteProfile.Value=0,"unchanged options clear absent input selection")
     SaveInputProfileSelection(1)
@@ -39,7 +40,7 @@ try {
     CheckChoice(PaletteProfile.Value=0,"delete clears selection")
     SharedDanmakuItems := []
     Loop 500
-        SharedDanmakuItems.Push({Name:"row" A_Index,Text:"text" A_Index,Slot:0})
+        SharedDanmakuItems.Push({Id:"search-" A_Index,Name:"row" A_Index,Text:"text" A_Index,Slot:0})
     RefreshPalette()
     PresentWindow(PaletteWindow,"w560 h740",ResizePalette,false)
     before := SearchRenders
@@ -73,7 +74,7 @@ try {
     before := SearchRenders
     Sleep(160)
     CheckChoice(SearchRenders=before && !PaletteSearchPending,"explicit refresh cancels duplicate timer")
-    SharedDanmakuItems := [{Name:"small",Text:"small",Slot:0}]
+    SharedDanmakuItems := [{Id:"search-small",Name:"small",Text:"small",Slot:0}]
     PaletteSearch.Value := "small"
     before := SearchRenders
     QueuePaletteSearch()
@@ -91,11 +92,4 @@ CheckChoice(value,label) {
         throw Error(label)
 }
 '@
-$source = [IO.File]::ReadAllText((Join-Path $release 'main.ahk'))
-$source = $source.Replace('OnExit(StopBrowserWorker)', $tests)
-[IO.File]::WriteAllText((Join-Path $fixture 'main.ahk'), $source, [Text.UTF8Encoding]::new($true))
-$run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + (Join-Path $fixture 'main.ahk') + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $fixture 'stdout.txt') -RedirectStandardError (Join-Path $fixture 'stderr.txt')
-$null = $run.Handle
-if (!$run.WaitForExit(15000)) { Stop-Process -Id $run.Id; throw 'Search scheduling test timed out' }
-Get-Content -LiteralPath (Join-Path $fixture 'stdout.txt'),(Join-Path $fixture 'stderr.txt')
-if ($run.ExitCode -ne 0) { throw "Search scheduling test failed: $fixture" }
+Invoke-AppTest -Runtime $release -Body $tests

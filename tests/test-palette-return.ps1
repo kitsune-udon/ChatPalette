@@ -1,12 +1,7 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$path = Join-Path $release 'src\browser\browser_service.ahk'
-$s = [IO.File]::ReadAllText($path).Replace('ResolveBrowserChannel(hwnd) {','UnusedResolveBrowserChannel(hwnd) {')
-[IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
-$browserPath = Join-Path $release 'src\browser\browser_service.ahk'
-$browser = [regex]::Replace([IO.File]::ReadAllText($browserPath), '(?ms)^IsBrowser\(hwnd\) \{.*?^\}', 'IsBrowser(hwnd) {`n    return hwnd = 123`n}'.Replace('`n',"`r`n"))
-[IO.File]::WriteAllText($browserPath,$browser,[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
 global ReturnChecks := 0, ResolveCalls := 0
@@ -19,7 +14,6 @@ try {
     SelectProfileFromBrowser(TargetBrowserHwnd)
     added := ExecuteProfileCommand("add","","Linked","/channel/return")
     ExecuteDanmakuCommand("add",added.ProfileId,0,{Name:"New",Text:"new danmaku",Slot:1})
-    EditScopeShared := false
     RefreshManagementAfterCommand(added.ProfileId)
     AssertReturn(GetInputProfile().Id=old.ProfileId,"editing does not change input selection")
     countBefore := PaletteCount.Value
@@ -78,7 +72,7 @@ try {
     ExecuteProfileCommand("rename",entry.ProfileId,"Renamed input profile")
     ReturnToPalette()
     AssertReturn(InStr(PaletteContext.Text,"Renamed input profile"),"profile rename refresh")
-    EditScopeShared := false, EditProfileIndex := FindProfileIndexById(Profiles,old.ProfileId)
+    EditingProfileId := old.ProfileId
     ReturnToPalette()
     AssertReturn(GetInputProfile().Id=entry.ProfileId,"editing another profile does not switch input")
     ExecuteProfileCommand("delete",entry.ProfileId)
@@ -94,13 +88,13 @@ try {
     PaletteList.Modify(0,"-Select")
     PaletteList.Modify(2,"Select")
     OpenPaletteLibrary()
-    AssertReturn(!EditScopeShared && GetEditingProfileId()=editProfile.ProfileId && ManagedList.GetNext()=2,"selected profile row opens correct editor target and item")
+    AssertReturn((GetEditingProfileId() != "") && GetEditingProfileId()=editProfile.ProfileId && ManagedList.GetNext()=2,"selected profile row opens correct editor target and item")
     AssertReturn(ManagementItemButtons[5].Enabled && !ManagementItemButtons[6].Enabled,"palette last row only moves up")
     RefreshPalette()
     PaletteList.Modify(0,"-Select")
     PaletteList.Modify(3,"Select")
     OpenPaletteLibrary()
-    AssertReturn(EditScopeShared && ManagedList.GetNext()=1,"selected shared row opens shared editor")
+    AssertReturn((GetEditingProfileId() = "") && ManagedList.GetNext()=1,"selected shared row opens shared editor")
     AssertReturn(GetInputProfile().Id=editProfile.ProfileId,"opening shared editor preserves input profile")
     PaletteSearch.Value := "profile-second"
     RefreshPalette()
@@ -115,7 +109,7 @@ try {
     SelectProfileFromBrowser(TargetBrowserHwnd)
     RefreshPalette()
     OpenPaletteLibrary()
-    AssertReturn(EditScopeShared,"unlinked automatic target falls back to shared")
+    AssertReturn((GetEditingProfileId() = ""),"unlinked automatic target falls back to shared")
     ExecuteProfileCommand("bind",editProfile.ProfileId,TestChannel.Channel)
     SelectProfileFromBrowser(TargetBrowserHwnd)
     RefreshPalette()
@@ -137,7 +131,7 @@ try {
     }
     ExecuteProfileCommand("delete",editProfile.ProfileId)
     OpenPaletteLibrary()
-    AssertReturn(EditScopeShared,"deleted selected profile is not reused")
+    AssertReturn((GetEditingProfileId() = ""),"deleted selected profile is not reused")
     ; Reopening from the palette must refresh actions synchronously for either scope.
     AutoMode := false, PaletteSearch.Value := ""
     buttonProfile := ExecuteProfileCommand("add","","Button states")
@@ -193,17 +187,13 @@ AssertReturn(value,label) {
     if !value
         throw Error(label)
 }
-ResolveBrowserChannel(hwnd) {
+FixtureResolveChannel(hwnd) {
     global ResolveCalls
     ResolveCalls++
     return TestChannel
 }
 '@
-$path = Join-Path $release 'main.ahk'
-$s = [IO.File]::ReadAllText($path).Replace('OnExit(StopBrowserWorker)',$tests)
-[IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
-$run = Start-Process (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"'+$path+'"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $release 'out.txt') -RedirectStandardError (Join-Path $release 'err.txt')
-$null=$run.Handle
-if (!$run.WaitForExit(15000)) { $run.Kill(); throw 'Return test timeout' }
-Get-Content (Join-Path $release 'out.txt'),(Join-Path $release 'err.txt')
-if ($run.ExitCode -ne 0) { throw 'Palette return checks failed' }
+Invoke-AppTest -Runtime $release -Body $tests -Setup @'
+RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.ResolveChannel := FixtureResolveChannel
+'@

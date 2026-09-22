@@ -1,13 +1,7 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$browser = [IO.File]::ReadAllText((Join-Path $release 'src\browser\browser_service.ahk'))
-$browser = [regex]::Replace($browser, '(?ms)^IsBrowser\(hwnd\) \{.*?^\}', 'IsBrowser(hwnd) {`n    return hwnd = 123`n}'.Replace('`n',"`r`n"))
-[IO.File]::WriteAllText((Join-Path $release 'src\browser\browser_service.ahk'),$browser,[Text.UTF8Encoding]::new($true))
-$worker = [IO.File]::ReadAllText((Join-Path $release 'src\browser\worker_client.ahk')).Replace('SendWorkerRequest(hwnd,','UnusedRealWorkerRequest(hwnd,')
-[IO.File]::WriteAllText((Join-Path $release 'src\browser\worker_client.ahk'),$worker,[Text.UTF8Encoding]::new($true))
-$reaction = [IO.File]::ReadAllText((Join-Path $release 'src\reactions\reaction_controller.ahk')).Replace('WinActive("ahk_id " job.Window)','ReviewWindowActive(job.Window)')
-[IO.File]::WriteAllText((Join-Path $release 'src\reactions\reaction_controller.ahk'),$reaction,[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
 global ReviewChecks := 0, ReviewFocusCalls := 0, ReviewFocusChanges := true, ReviewStatusCalls := 0
@@ -31,22 +25,22 @@ try {
             WinClose("ahk_id " active)
         Sleep(30)
     }
-    ActiveReactionJob := {Mode:"reaction_send",Window:123,Completed:5,Total:10,Interval:0,Cancelled:false}
+    ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Completed:5,Total:10,Interval:0,Cancelled:false})
     ReactionSendNext()
     AssertReview(!ActiveReactionJob && LastReactionResult.Completed=5 && LastReactionResult.Total=10,"focus stop preserves structured counts")
     AssertReview(InStr(LastReactionResult.Message,"5 / 10") && LastReactionResult.Reason="wrong_window","focus stop preserves visible count and reason")
     previous := LastReactionResult
-    ActiveReactionJob := {Mode:"reaction_send",Window:123,Completed:0,Total:10,Interval:0,Cancelled:false}
+    ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Completed:0,Total:10,Interval:0,Cancelled:false})
     CancelReaction()
     AssertReview(LastReactionResult != previous && LastReactionResult.Detail="" && LastReactionResult.Completed=0,"cancellation publishes fresh result")
-    failedJob := {Mode:"reaction_send",Window:123,Completed:3,Total:10,Interval:0,Cancelled:false}
+    failedJob := CreateReactionJob({Mode:"reaction_send",Window:123,Completed:3,Total:10,Interval:0,Cancelled:false})
     ActiveReactionJob := failedJob
     ApplyReactionResult(failedJob,{State:"unknown",Detail:"current attempt detail"})
     AssertReview(LastReactionResult.Detail="current attempt detail" && LastReactionResult.Completed=3 && LastReactionResult.Reason="unknown","failure detail and count are from same attempt")
     snapshot := LastReactionResult
     SetReactionStatus("next attempt running")
     AssertReview(LastReactionResult=snapshot,"progress does not mutate previous final result")
-    ActiveReactionJob := {Mode:"queued",Window:123,Cancelled:false}
+    ActiveReactionJob := CreateReactionJob({Mode:"queued",Window:123,Cancelled:false})
     CancelReaction()
     AssertReview(LastReactionResult.Detail="" && LastReactionResult.Mode="queued","queued cancel does not reuse failure detail")
     ExecuteDanmakuCommand("add","",0,{Name:"visible row",Text:"fixture",Slot:0})
@@ -106,7 +100,7 @@ ReviewWindowActive(hwnd) {
     global ReviewFocusCalls
     return ++ReviewFocusCalls=1
 }
-SendWorkerRequest(hwnd,mode:="resolve",expectedVideo:="",extra:="") {
+FixtureWorkerRequest(hwnd,mode:="resolve",expectedVideo:="",extra:="") {
     if mode = "reaction_configure"
         return {State:"configured",Author:"",Channel:"",Video:"",Detail:""}
     global ReviewStatusCalls
@@ -116,10 +110,8 @@ SendWorkerRequest(hwnd,mode:="resolve",expectedVideo:="",extra:="") {
     return {State:"configured",Author:"",Channel:"",Video:"",Detail:""}
 }
 '@
-$main = [IO.File]::ReadAllText((Join-Path $release 'main.ahk')).Replace('OnExit(StopBrowserWorker)',$tests)
-[IO.File]::WriteAllText((Join-Path $release 'main.ahk'),$main,[Text.UTF8Encoding]::new($true))
-$run=Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"'+(Join-Path $release 'main.ahk')+'"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $release 'out.txt') -RedirectStandardError (Join-Path $release 'error.txt')
-$null=$run.Handle
-if(!$run.WaitForExit(20000)){$run.Kill();throw 'Regression test timeout'}
-Get-Content (Join-Path $release 'out.txt'),(Join-Path $release 'error.txt')
-if($run.ExitCode -ne 0){throw 'Review regression test failed'}
+Invoke-AppTest -Runtime $release -Body $tests -Setup @'
+RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.Foreground := ReviewWindowActive
+RuntimePorts.WorkerRequest := FixtureWorkerRequest
+'@

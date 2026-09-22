@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 $tests = @'
@@ -118,10 +119,4 @@ SqlCheck(value,message) {
         throw Error(message)
 }
 '@
-$source = [IO.File]::ReadAllText((Join-Path $release 'main.ahk')).Replace('OnExit(StopBrowserWorker)',$tests)
-[IO.File]::WriteAllText((Join-Path $release 'main.ahk'),$source,[Text.UTF8Encoding]::new($true))
-$run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"'+(Join-Path $release 'main.ahk')+'"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $release 'stdout.txt') -RedirectStandardError (Join-Path $release 'stderr.txt')
-$null = $run.Handle
-if (!$run.WaitForExit(30000)) { Stop-Process -Id $run.Id; throw 'SQLite test timed out' }
-Get-Content -LiteralPath (Join-Path $release 'stdout.txt'),(Join-Path $release 'stderr.txt')
-if ($run.ExitCode -ne 0) { throw "SQLite test failed: $release" }
+Invoke-AppTest -Runtime $release -Body $tests

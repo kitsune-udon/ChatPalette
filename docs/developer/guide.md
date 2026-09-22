@@ -75,6 +75,16 @@ git diff --cached --check
 
 文書では配布・リポジトリ内の相対パスを使用し、開発者個人の絶対パスや動画情報を含めないでください。
 
+## 検証済みの配布物を一度に作る
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release.ps1 -OutputDirectory .\dist\validated
+```
+
+配布許可リストのソースを一時フォルダーへ固定し、バージョン一致・文字コード・改行・PowerShell構文・文書リンク・全テストを確認した後、その同じソースからZIPを作ります。テスト中に配布対象が変化した場合は拒否します。成功時にはZIPと、ZIPのSHA-256・ソースマニフェストのSHA-256・検査日時・テスト群数を含む`.validation.json`を出力します。公開やpushは行いません。既存の同名出力は上書きしません。失敗した作業フォルダーは調査用に残します。
+
+画面を扱うテストを含むため、操作可能なWindowsセッションで実行します。実ブラウザーの確認はこのコマンドに含めず、検証ガイドのレポートで別途管理します。形式だけ確認する場合は`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-source.ps1`を使います。
+
 ## 配布ZIPを作る
 
 ```powershell

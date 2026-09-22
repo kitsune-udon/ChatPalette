@@ -11,13 +11,8 @@ if (Test-Path -LiteralPath $zipPath) { throw 'Release archive already exists. Us
 $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $stage | Out-Null
-    # Allowlist only. Never traverse data/, .git/, or test execution directories.
-    $files = @(Get-ChildItem -LiteralPath $project -File | Where-Object { $_.Name -in 'main.ahk', 'README.md','LICENSE','VERSION','CHANGELOG.md','.gitignore','.gitattributes','.editorconfig' })
-    $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'src') -Recurse -File | Where-Object { $_.Extension -in '.ahk','.ps1' })
-    $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'docs') -Filter '*.md' -Recurse -File)
-    $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'tests') -Filter '*.ps1' -File)
-    $files += Get-Item -LiteralPath (Join-Path $project 'tests\fixtures\settings.ini')
-    $files += @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File)
+    . (Join-Path $PSScriptRoot 'release-files.ps1')
+    $files = @(Get-ReleaseFiles $project)
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($project.Length + 1)
         $target = Join-Path $stage $relative

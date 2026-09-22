@@ -1,4 +1,5 @@
-﻿. (Join-Path $PSScriptRoot 'support.ps1')
+﻿# Test-Session: Desktop
+. (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 New-Item -ItemType Directory -Path (Join-Path $release 'data') -Force | Out-Null
 $settings = Join-Path $release 'data\settings.ini'

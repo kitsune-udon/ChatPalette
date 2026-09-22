@@ -1,0 +1,110 @@
+﻿# Test-Session: Desktop
+$ErrorActionPreference='Stop'
+. (Join-Path $PSScriptRoot 'app-fixture.ps1')
+Invoke-AppFixture -Body @'
+    global BindingCalls := [], FailBinding := ""
+    RuntimePorts.ShortcutKey := KeyAdapter
+    InstallApplicationShortcuts()
+    saved := CurrentShortcutMap()
+    keys := saved.Clone()
+    keys["palette"] := "^+q", keys["chat_focus"] := "^!q", keys["stop"] := "^+s"
+    SaveShortcutMap(keys)
+    persisted := PreferenceShortcutMap(LoadSettings(SettingsDatabasePath))
+    Assert(GetShortcutKey("palette")="^+q" && persisted["chat_focus"]="^!q" && persisted["stop"]="^+s","all action keys persist including formerly reserved keys and stop")
+    keys["chat_clear"] := "!^Q"
+    rejected := false
+    try SaveShortcutMap(keys)
+    catch
+        rejected := true
+    Assert(rejected && GetShortcutKey("chat_clear")=saved["chat_clear"],"canonical duplicate rejected without changing live keys")
+    keys := CurrentShortcutMap(), left := keys["chat_focus"], keys["chat_focus"] := keys["chat_clear"], keys["chat_clear"] := left
+    SaveShortcutMap(keys)
+    Assert(GetShortcutKey("chat_clear")=left,"two existing keys can be swapped atomically")
+    baseline := CurrentShortcutMap(), keys := baseline.Clone(), keys["chat_focus"] := "^+f"
+    savedPath := SettingsDatabasePath, SettingsDatabasePath := A_ScriptDir "\missing\keys.db"
+    rejected := false
+    try SaveShortcutMap(keys)
+    catch
+        rejected := true
+    SettingsDatabasePath := savedPath
+    Assert(rejected && GetShortcutKey("chat_focus")=baseline["chat_focus"],"persistence failure restores active key")
+    Assert(BindingCalls[-1].Key=baseline["chat_focus"] && BindingCalls[-1].Enabled,"previous binding restored after failure")
+    FailBinding := "^+f", rejected := false
+    try SaveShortcutMap(keys)
+    catch
+        rejected := true
+    Assert(rejected && GetShortcutKey("chat_focus")=baseline["chat_focus"],"registration failure leaves preferences unchanged")
+    FailBinding := ""
+    SaveShortcutMap(saved)
+    shared := ExecuteDanmakuCommand("add","",0,{Name:"first",Text:"first",Slot:1})
+    ExecuteDanmakuCommand("add","",0,{Name:"second",Text:"second",Slot:2})
+    firstId := SharedDanmakuItems[shared.Index].Id, secondId := SharedDanmakuItems[-1].Id
+    SaveShortcutItemAssignments("",secondId,firstId)
+    Assert(ItemSlot(SharedDanmakuItems[shared.Index])=2 && ItemSlot(SharedDanmakuItems[-1])=1,"item slot swap retains identity")
+    panel := ShowShortcutManager("chat_focus")
+    Assert(panel.List.GetCount()=10 && ActiveEditorDialog,"one screen contains every action")
+    Assert(!panel.SaveButton.Enabled && !panel.ItemsSaveButton.Enabled,"unchanged drafts disable both saves")
+    panel.First.Choose(1), panel.UpdateItems.Call()
+    Assert(panel.ItemsSaveButton.Enabled,"item edit enables its save")
+    panel.Key.Value := "^+f"
+    SendMessage(0x111, (0x300 << 16) | GetDlgCtrlID(panel.Key.Hwnd), panel.Key.Hwnd,, "ahk_id " panel.Window.Hwnd)
+    Sleep(30)
+    Assert(panel.SaveButton.Enabled && panel.List.GetText(panel.List.GetNext(),4)="変更あり","native key change stages draft without apply button")
+    panel.Save.Call()
+    Assert(panel.First.Value=1 && panel.ItemsSaveButton.Enabled && !panel.SaveButton.Enabled,"key save preserves unsaved item choice and independent dirty state")
+    Assert(CanonicalReactionKey(GetShortcutKey("chat_focus"))="^+f" && InStr(panel.Status.Text,"保存し"),"screen saves selected action")
+    panel.Stage.Call("^!q"), panel.Save.Call()
+    Assert(CanonicalReactionKey(GetShortcutKey("chat_focus"))="^+f" && InStr(panel.Status.Text,"重複"),"screen retains valid setting on conflict")
+    Assert(!panel.SaveButton.Enabled && panel.List.GetText(1,4)="重複","conflicting rows are marked and save disabled")
+    panel.SaveItems.Call()
+    Assert(!panel.ItemsSaveButton.Enabled && InStr(panel.Status.Text,"重複"),"item save leaves key draft untouched")
+    panel.Stage.Call("^+f")
+    Assert(!panel.SaveButton.Enabled,"reverting key clears dirty state")
+    panel.Stage.Call("^+j")
+    savedPath := SettingsDatabasePath, SettingsDatabasePath := A_ScriptDir "\missing\draft.db"
+    panel.Save.Call()
+    SettingsDatabasePath := savedPath
+    Assert(panel.SaveButton.Enabled && InStr(panel.Status.Text,"保存できません"),"failed save retains draft")
+    global DiscardCalls := 0, AllowDiscard := false
+    RuntimePorts.ConfirmDiscard := ConfirmDraftDiscard
+    panel.Close.Call()
+    Assert(ActiveEditorDialog && DiscardCalls=1,"cancel close retains editor and draft")
+    AllowDiscard := true
+    Assert(ItemSlot(SharedDanmakuItems[-1])=0,"screen can unassign an item without deleting it")
+    panel.Reset.Call(), panel.Close.Call()
+    Assert(CanonicalReactionKey(GetShortcutKey("chat_focus"))="^+f" && !ActiveEditorDialog,"closing unsaved defaults does not apply them")
+    panel := ShowShortcutManager()
+    panel.Close.Call()
+    Assert(!ActiveEditorDialog && DiscardCalls=2,"unchanged editor closes without confirmation")
+    panel := ShowShortcutManager()
+    panel.First.Choose(1), panel.Second.Choose(1), panel.UpdateItems.Call()
+    AllowDiscard := false, panel.Close.Call()
+    Assert(ActiveEditorDialog && DiscardCalls=3,"item-only dirty draft also blocks cancelled close")
+    panel.Scope.Choose(2), panel.ChangeScope.Call()
+    Assert(panel.Scope.Value=1 && panel.Second.Value=1,"cancel scope switch preserves draft")
+    AllowDiscard := true, panel.Close.Call()
+    RuntimePorts.ConfirmDiscard := 0
+    SaveShortcutMap(saved)
+    ; Simulate a v2 database with the former allowed reaction/page collision.
+    CloseSettingsStore()
+    old := SqliteConnection(SettingsDatabasePath)
+    old.Exec("DROP TABLE shortcut_bindings; PRAGMA user_version=2")
+    old.Run("UPDATE preferences SET reaction_key=? WHERE id=1","^!f"), old.Close()
+    migrated := LoadSettings(SettingsDatabasePath)
+    Assert(migrated.ReactionShortcut="^!f" && migrated.ShortcutKeys["chat_focus"]="" && migrated.ShortcutKeys["chat_clear"]="^!c","v2 migration preserves saved reaction priority without duplicate live keys")
+    Assert(OpenSettingsRepository(SettingsDatabasePath).Db.Scalar("PRAGMA user_version")="3","migration publishes v3")
+'@ -Helpers @'
+GetDlgCtrlID(hwnd) {
+    return DllCall("GetDlgCtrlID","Ptr",hwnd,"Int")
+}
+ConfirmDraftDiscard(message) {
+    global DiscardCalls
+    DiscardCalls += 1
+    return AllowDiscard
+}
+KeyAdapter(action,key,enabled) {
+    BindingCalls.Push({Action:action,Key:key,Enabled:enabled})
+    if enabled && key=FailBinding
+        throw Error("synthetic registration failure")
+}
+'@

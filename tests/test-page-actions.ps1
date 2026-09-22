@@ -1,0 +1,88 @@
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'support.ps1')
+$release = New-TestRuntime
+. (Join-Path $release 'src\browser\browser_worker.ps1') -Library
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$script:checks=0
+function Assert($value,$label) { if (!$value) { throw "FAIL: $label" }; $script:checks++ }
+$document=@{Id='';Class='';Type=50030}
+$chat=@{Id='';Class='yt-live-chat-renderer';Type=50033}
+function Launcher([string]$Id='',[string]$Name='') { return @{Id=$Id;Name=$Name;Class='';Type=50000;Enabled=$true;Hidden=$false} }
+foreach ($field in @((Launcher 'reaction-control-panel'),(Launcher 'reaction-button'),(Launcher '' 'Send a reaction'),(Launcher '' 'リアクションを送信'))) {
+    Assert (Test-ReactionLauncher @($field,$chat,$document)) 'recognized launcher in chat'
+    Assert (!(Test-ReactionLauncher @($field,$document))) 'launcher outside chat rejected'
+    Assert (!(Test-ReactionLauncher @($field,$chat))) 'browser chrome rejected'
+    $field.Hidden=$true
+    Assert (!(Test-ReactionLauncher @($field,$chat,$document))) 'hidden launcher rejected'
+    $field.Hidden=$false; $field.Enabled=$false
+    Assert (!(Test-ReactionLauncher @($field,$chat,$document))) 'disabled launcher rejected'
+}
+foreach ($name in @('Heart','ハート','いいね','送信','Send','😀','Show live chat')) {
+    Assert (!(Test-ReactionLauncher @((Launcher '' $name),$chat,$document))) 'individual reaction/send/unrelated button rejected'
+}
+$heart=Launcher '' '❤'
+$heart.Class='style-scope yt-reaction-control-panel-button-view-model'
+$collapsed=@{Id='collapsed-button';Class='style-scope yt-reaction-control-panel-view-model';Type=50026}
+Assert (Test-ReactionLauncher @($heart,$collapsed,$chat,$document)) 'observed Chromium collapsed launcher recognized structurally'
+Assert (!(Test-ReactionLauncher @($heart,$chat,$document))) 'heart without collapsed launcher ancestry rejected'
+$heart.Class='style-scope yt-reaction-button-view-model'
+Assert (!(Test-ReactionLauncher @($heart,$collapsed,$chat,$document))) 'individual sending button never accepted as launcher'
+$noPoint=[pscustomobject]@{}
+$noPoint | Add-Member ScriptMethod TryGetClickablePoint { param($point) return $false }
+Assert ($null -eq (Get-ReactionHoverPoint $noPoint 123)) 'unsupported hover point rejected without moving pointer'
+$script:target=[System.Windows.Automation.AutomationElement]::RootElement
+$script:video='abcdefghijk'; $script:foreground=$true; $script:belongs=$true
+$script:focusCalls=0; $script:hoverCalls=0; $script:missing=$false; $script:kind='chat'; $script:throwOnFocus=$false
+$script:finalVideo='abcdefghijk'; $script:reads=0; $script:loseDuringPoint=$false
+function Read-BrowserVideoId($WindowHandle) { $script:reads++; if ($script:reads -gt 1) { return $script:finalVideo }; return $script:video }
+function Test-ReactionForeground($WindowHandle) { return $script:foreground }
+function Test-ElementWindow($Element,$WindowHandle) { return $script:belongs }
+function Find-ChatInput($WindowHandle) { if (!$script:missing) { return $script:target } }
+function Find-ReactionLauncher($WindowHandle) { if (!$script:missing) { return $script:target } }
+function Get-YouTubeInputRecords($Target,$WindowHandle) {
+    return @(@{Id='input';Name='';Class='yt-live-chat-text-input-field-renderer';Type=50004;Focused=$false;Enabled=$true;Hidden=$false;Editable=$true},$document)
+}
+function Get-ReactionLauncherRecords($Target,$WindowHandle) { return @((Launcher 'reaction-control-panel'),$chat,$document) }
+function Focus-ChatElement($Target) { $script:focusCalls++; if ($script:throwOnFocus) { throw 'focus result unknown' } }
+function Get-FocusedYouTubeInput($WindowHandle,[ref]$VerifiedElement) { $VerifiedElement.Value=$script:target; return $script:kind }
+function Test-FocusedInputIdentity($Element,$WindowHandle) { return $script:belongs }
+function Get-ReactionHoverPoint($Target,$WindowHandle) {
+    if ($script:loseDuringPoint) { $script:foreground=$false }
+    return @{X=20;Y=30}
+}
+function Move-PagePointer($Point) { $script:hoverCalls++; return $true }
+function Get-ReactionInvoker($Target) { throw 'Page actions must never invoke a reaction' }
+function Fetch-Metadata($Video) { throw 'Page actions must never fetch metadata' }
+function Request($Mode,$Expected='') {
+    $script:reads=0
+    return Invoke-WorkerRequest @{Mode=$Mode;Window=123;Seq=1;Video=$Expected}
+}
+Assert ((Request 'chat_focus').State -eq 'focused' -and $script:focusCalls -eq 1) 'chat focus succeeds once'
+Assert ((Request 'reactions_show').State -eq 'hovered' -and $script:hoverCalls -eq 1) 'launcher hovered without registration or invocation'
+$script:missing=$true
+Assert ((Request 'chat_focus').State -eq 'wrong_input') 'missing or ambiguous chat rejected'
+Assert ((Request 'reactions_show').State -eq 'unsupported') 'missing or ambiguous launcher rejected'
+$script:missing=$false; $script:foreground=$false
+foreach ($mode in @('chat_focus','reactions_show')) { Assert ((Request $mode).State -eq 'wrong_window') 'background browser rejected' }
+$script:foreground=$true; $script:finalVideo='ABCDEFGHIJK'
+foreach ($mode in @('chat_focus','reactions_show')) { Assert ((Request $mode).State -eq 'changed') 'navigation during discovery rejected' }
+$script:finalVideo='abcdefghijk'; $script:belongs=$false
+Assert ((Request 'chat_focus').State -eq 'wrong_window') 'wrong window chat rejected'
+Assert ((Request 'reactions_show').State -eq 'unsupported') 'wrong window launcher rejected'
+$script:belongs=$true; $script:video=''
+foreach ($mode in @('chat_focus','reactions_show')) { Assert ((Request $mode).State -eq 'unavailable') 'unknown URL rejected' }
+$script:video='abcdefghijk'; $script:loseDuringPoint=$true
+Assert ((Request 'reactions_show').State -eq 'wrong_window' -and $script:hoverCalls -eq 1) 'foreground switch after geometry lookup prevents pointer movement'
+$script:loseDuringPoint=$false; $script:foreground=$true
+Assert ($script:focusCalls -eq 1 -and $script:hoverCalls -eq 1) 'all rejected requests have no page effects'
+$script:kind='comment'
+Assert ((Request 'verify_chat' 'abcdefghijk').State -eq 'wrong_input') 'clear validation never accepts comments'
+$script:kind='chat'
+Assert ((Request 'verify_chat' 'abcdefghijk').State -eq 'ok') 'clear validation accepts chat'
+$script:belongs=$false
+Assert ((Request 'verify_chat' 'abcdefghijk').State -eq 'wrong_input') 'clear validation requires exact focused identity'
+$script:belongs=$true; $script:throwOnFocus=$true
+Assert ((Request 'chat_focus').State -eq 'unknown' -and $script:focusCalls -eq 2) 'uncertain focus never retries'
+Write-Output "PASS: $script:checks page action checks; no real typing, pointer movement or reactions."

@@ -20,7 +20,7 @@ BuildManagement() {
     global ManagementBack, ReactionLoadButton, ReactionRegistrationLabel, ReactionDefaultLabels, ReactionDefaultExplanation, ManagementKeyIntro
     global ManagementProfileMenu, ManagementListHeading, ManagementSupportGroups, ManagementAddProfileButton, ManagementItemButtons, ManagementScopeHint, ManagementSupportButtons
     global ManagementWindow, ManagementTabs, ManagementTarget, ManagedList, ManagementStatus, ManagementUndo
-    global ManagementTitle, ManagementChannel, ManagementButtons, ReactionDefaultChoiceControl, ReactionDefaultCountControl, ReactionDefaultIntervalControl, ReactionDefaultsStatusControl, KeyLabel
+    global ManagementTitle, ManagementChannel, ReactionDefaultChoiceControl, ReactionDefaultCountControl, ReactionDefaultIntervalControl, ReactionDefaultsStatusControl, KeyLabel
     ManagementWindow := Gui("+Resize +MinSize360x520", "ChatPalette — 管理・設定")
     ManagementWindow.BackColor := "F5F7FA"
     ManagementWindow.SetFont("s10", "Yu Gothic UI")
@@ -35,9 +35,9 @@ BuildManagement() {
     ManagementChannel := ManagementWindow.AddText("x28 y126 w680 h38", "")
     ManagementProfileMenu := ManagementWindow.AddButton("x28 y112 w280 h32","配信者の設定…")
     ManagementProfileMenu.OnEvent("Click",OpenManagedProfileMenu)
-    ManagementButtons := [ManagementProfileMenu]
     ManagementListHeading := ManagementWindow.AddText("x28 y202 w680 h24","弾幕一覧 — 選んで編集")
-    ManagedList := ManagementWindow.AddListView("x28 y218 w680 h210 -Multi NoSortHdr", ["弾幕名", "本文", "キー"])
+    ManagedList := ManagementWindow.AddListView("x28 y218 w680 h210 -Multi NoSortHdr", ["弾幕名", "本文", "キー", "ID"])
+    ManagedList.ModifyCol(4,0)
     ManagedList.OnEvent("ItemSelect",UpdateManagementActions)
     ManagedList.OnEvent("DoubleClick", (*) => OpenDanmakuEditor(false))
     ManagementItemButtons := []
@@ -67,9 +67,9 @@ BuildManagement() {
     ManagementTabs.UseTab(3)
     ManagementSupportButtons := Map(), ManagementSupportGroups := []
     ManagementSupportGroups.Push(ManagementWindow.AddGroupBox("x24 y48 w712 h156","キー操作"))
-    ManagementKeyIntro := ManagementWindow.AddText("x40 y74 w680 h42", "パレットを開く：Ctrl＋Alt＋Q`n弾幕を入力：配信者 1／2・共通 3／4（Ctrl＋Alt）")
+    ManagementKeyIntro := ManagementWindow.AddText("x40 y74 w680 h42", "パレット・弾幕・チャット・リアクションのキーを一元管理できます。")
     KeyLabel := ManagementWindow.AddText("x40 y122 w680 h24", "")
-    ManagementSupportButtons["key"] := ManagementWindow.AddButton("x40 y154 w260 h36", "リアクションのキーを変更…")
+    ManagementSupportButtons["key"] := ManagementWindow.AddButton("x40 y154 w260 h36", "ショートカットを管理…")
     ManagementSupportButtons["key"].OnEvent("Click",EditReactionKey)
     ManagementSupportGroups.Push(ManagementWindow.AddGroupBox("x24 y214 w712 h124","リアクションの準備"))
     ReactionRegistrationLabel := ManagementWindow.AddText("x40 y240 w680 h42", "対象ブラウザー：未確認")
@@ -98,47 +98,33 @@ BuildManagement() {
 
 
 RefreshManagement() {
-    global ManagementUpdating, ManagementRefreshPending
-    if !ManagementWindow
+    if !ManagementWindow || !ManagementRefresh.Begin()
         return
-    if ManagementUpdating {
-        ManagementRefreshPending := true
-        return
-    }
-    ManagementUpdating := true
     try RenderManagement()
     finally {
-        ManagementUpdating := false
-        if ManagementRefreshPending {
-            ManagementRefreshPending := false
-            SetTimer(RefreshManagement,-1)
-        }
+        ManagementRefresh.End()
+        RefreshOperationControls()
     }
 }
 
 RenderManagement() {
-    global EditProfileIndex, EditScopeShared
+    global EditingProfileId
     if !ManagementWindow
         return
-    names := ["共通の弾幕"]
-    for profile in Profiles
-        names.Push(profile.Name)
-    SyncChoiceNames(ManagementTarget,names)
-    if EditProfileIndex < 1 || EditProfileIndex > Profiles.Length
-        EditScopeShared := true, EditProfileIndex := 0
-    ManagementTarget.Choose(EditScopeShared ? 1 : EditProfileIndex+1)
+    model := BuildManagementPresentation(Profiles,SharedDanmakuItems,EditingProfileId,ShortcutKeys)
+    EditingProfileId := model.ProfileId
+    SyncChoiceNames(ManagementTarget,model.Names)
+    ManagementTarget.Choose(model.Choice)
     ManagementTitle.Text := "編集する弾幕"
-    ManagementChannel.Text := EditScopeShared ? "すべてのチャンネルで使う弾幕です。" : "チャンネル：" (Profiles[EditProfileIndex].Channel != "" ? Profiles[EditProfileIndex].Channel : "チャンネル未連携")
-    for button in ManagementButtons
-        button.Enabled := !EditScopeShared
-    position := BeginListRefresh(ManagedList,2)
+    ManagementChannel.Text := model.Channel
+    position := BeginListRefresh(ManagedList,4)
     try {
         ManagedList.Delete()
-        for item in GetEditingDanmakuItems()
-            ManagedList.Add("",item.Name,item.Text,ItemSlot(item) ? "Ctrl+Alt+" (ItemSlot(item)+(EditScopeShared ? 2 : 0)) : "")
+        for row in model.Rows
+            ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)
         ManagedList.ModifyCol(1,160), ManagedList.ModifyCol(2,380), ManagedList.ModifyCol(3,110)
     } finally {
-        EndListRefresh(ManagedList,position,2)
+        EndListRefresh(ManagedList,position,4)
     }
     UpdateManagementActions()
     RefreshManagementUndo()
@@ -154,7 +140,7 @@ RefreshReactionDefaultControls() {
     ReactionDefaultChoiceControl.Choose(DefaultReactionKind)
     ChooseSetting(ReactionDefaultCountControl,ReactionCounts,DefaultReactionCount)
     ChooseSetting(ReactionDefaultIntervalControl,ReactionIntervals,DefaultReactionIntervalMs)
-    KeyLabel.Text := "リアクション：" ReactionKeyLabel()
+    KeyLabel.Text := "パレット：" ShortcutKeyLabel(GetShortcutKey("palette")) " ／ リアクション：" ReactionKeyLabel()
     ReactionDefaultsStatusControl.Text := "保存済み：キー実行に適用。"
         . (DefaultReactionIntervalMs = 0 ? "`n待機なし：処理終了後すぐに次を実行。" : "")
 }
@@ -233,7 +219,7 @@ SelectManagedRow(index) {
 
 
 OpenManagedProfileMenu(*) {
-    if EditScopeShared || ActiveEditorDialog || IsBrowserOperationBusy || ActiveReactionJob
+    if (GetEditingProfileId() = "") || !OperationAllowed("edit")
         return
     menu := Menu()
     for entry in [["名前を変更…","rename"],["チャンネルと連携…","bind"],["チャンネル連携を解除","unbind"],["配信者と弾幕を削除…","delete"]]
@@ -244,11 +230,12 @@ OpenManagedProfileMenu(*) {
 UpdateManagementActions(*) {
     if !IsSet(ManagementItemButtons) || ManagementItemButtons.Length != 7
         return
-    selected := ManagedList.GetNext(), count := ManagedList.GetCount()
+    selected := ManagedList.GetNext(), count := ManagedList.GetCount(), allowed := OperationAllowed("edit")
+    ManagementItemButtons[1].Enabled := allowed
     for i in [2,3,4,7]
-        ManagementItemButtons[i].Enabled := selected > 0
-    ManagementItemButtons[5].Enabled := selected > 1
-    ManagementItemButtons[6].Enabled := selected > 0 && selected < count
+        ManagementItemButtons[i].Enabled := allowed && selected > 0
+    ManagementItemButtons[5].Enabled := allowed && selected > 1
+    ManagementItemButtons[6].Enabled := allowed && selected > 0 && selected < count
 }
 
 
@@ -268,22 +255,21 @@ SetManagementNotice(message) {
 
 ; Reordering updates the two affected rows without rebuilding the list or resetting its viewport.
 RefreshManagedOrder(previous, current) {
-    items := GetEditingDanmakuItems()
+    items := GetEditingDanmakuItems(), shared := GetEditingProfileId() = ""
     ManagedList.Opt("-Redraw")
     try {
         for index in [previous,current] {
             item := items[index]
-            ManagedList.Modify(index,"",item.Name,item.Text,ItemSlot(item) ? "Ctrl+Alt+" (ItemSlot(item)+(EditScopeShared ? 2 : 0)) : "")
+            ManagedList.Modify(index,"",item.Name,item.Text,ItemSlot(item) ? StrReplace(ShortcutKeyLabel(GetShortcutKey((shared ? "shared" : "profile") ItemSlot(item))),"＋","+") : "",item.Id)
         }
         SelectManagedRow(current)
     } finally {
         ManagedList.Opt("+Redraw")
     }
-    UpdateManagementActions()
     RefreshManagementUndo()
 }
 
 RefreshManagementUndo() {
-    ManagementUndo.Enabled := LibraryHistory.Length > 0
-    ManagementUndo.Text := LibraryHistory.Length ? LibraryHistory[-1].Label "を取り消す" : "取り消せる変更はありません"
+    ManagementUndo.Enabled := LibraryHistory.Length > 0 && OperationAllowed("edit")
+    SetControlText(ManagementUndo,LibraryHistory.Length ? LibraryHistory[-1].Label "を取り消す" : "取り消せる変更はありません")
 }

@@ -50,8 +50,8 @@ RenderLatestReactionStatus() {
 
 
 ReactionProgressHint(snapshot := 0) {
-    return (snapshot ? snapshot.Final : ReactionExecutionStatus.Final) ? "4秒後に表示を消します。結果はCtrl＋Alt＋Q → 管理・ヘルプ → リアクションの実行結果。"
-        : "Esc：処理を停止　Ctrl＋Alt＋Q：進捗を表示"
+    return (snapshot ? snapshot.Final : ReactionExecutionStatus.Final) ? "4秒後に表示を消します。結果は" ShortcutKeyLabel(GetShortcutKey("palette")) " → 管理・ヘルプ → リアクションの実行結果。"
+        : "" ShortcutKeyLabel(GetShortcutKey("stop")) "：処理を停止　" ShortcutKeyLabel(GetShortcutKey("palette")) "：進捗を表示"
 }
 
 
@@ -140,7 +140,7 @@ ReactionNotice(state, detail := "", suffix := "", job := 0) {
         "unavailable", "動画またはリアクションボタンを確認できませんでした。YouTubeを開いてやり直してください。")
     if !job && ActiveReactionJob
         job := ActiveReactionJob
-    if suffix = "" && job && job.HasOwnProp("Completed") && job.Mode = "reaction_send"
+    if suffix = "" && job && job.Mode = "reaction_send"
         suffix := " 操作済み " job.Completed " / " job.Total " 回で停止。"
     message := messages.Get(state, messages["unavailable"]) suffix
     SetReactionStatus(message, true,"",detail,job,state)

@@ -6,10 +6,13 @@
         KeyWait("Enter")
         KeyWait("LButton")
     }
-    if !WinActive("ahk_id " hwnd)
+    if !IsTargetForeground(hwnd)
         return false
     if !VerifyInputTarget(hwnd, expectedVideo)
         return false
-    SendText(text)
+    if RuntimePorts.Text
+        RuntimePorts.Text.Call(text)
+    else
+        SendText(text)
     return true
 }

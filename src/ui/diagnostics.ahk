@@ -1,8 +1,9 @@
 ﻿ReadDiagnosticSnapshot() {
     browser := "未選択（YouTubeからパネルを開くと表示）"
-    if TargetBrowserHwnd {
+    hwnd := LastBrowserOperation.HasOwnProp("Window") ? LastBrowserOperation.Window : TargetBrowserHwnd
+    if hwnd {
         try {
-            process := StrLower(WinGetProcessName("ahk_id " TargetBrowserHwnd))
+            process := StrLower(WinGetProcessName("ahk_id " hwnd))
             browsers := Map("chrome.exe","Chrome", "msedge.exe","Edge", "firefox.exe","Firefox",
                 "brave.exe","Brave", "opera.exe","Opera", "vivaldi.exe","Vivaldi")
             browser := browsers.Get(process, "対象外のブラウザー")
@@ -12,9 +13,11 @@
     }
     modes := Map("なし","まだ実行していません", "resolve","配信者の自動判別", "verify","動画の確認",
         "verify_input","チャット欄・コメント欄の確認", "browser_context","現在の動画の確認",
+        "chat_clear","チャット欄のクリア", "chat_focus","チャット欄への移動", "verify_chat","クリア前のチャット欄確認", "reactions_show","リアクションUIの表示操作",
         "reaction_capture","リアクションボタンの登録", "reaction_check","リアクションの検出確認",
         "reaction_send","リアクションボタンの操作", "reaction_status","リアクションの設定状態の確認")
     states := Map("未実行","まだ実行していません", "ok","確認できました", "registered","登録できました",
+        "cleared","クリアキーを送りました（内容は未取得）", "focused","チャット欄へ移動しました", "hovered","表示用UIへマウスを移動しました（表示は未確認）",
         "configured","設定済み（認識は未確認）", "ready","操作対象を確認できました", "operated","ボタンを操作しました（受理は未確認）",
         "wrong_input","入力欄を確認できませんでした", "changed","動画が変わったため中止しました",
         "wrong_window","操作先が変わったため中止しました", "unavailable","情報を取得できませんでした",
@@ -26,7 +29,9 @@
     state := states.Has(LastBrowserOperation.State) ? LastBrowserOperation.State : "不明"
     phase := phases.Has(ReactionExecutionStatus.Phase) ? ReactionExecutionStatus.Phase : "不明"
     return {CapturedAt:FormatTime(, "yyyy/MM/dd HH:mm:ss"), Version:AppVersion, Ahk:A_AhkVersion, OS:A_OSVersion,
-        Browser:browser, Worker:WorkerProcessId && ProcessExist(WorkerProcessId) ? "起動中" : "待機中（必要なときに起動）",
+        Source:AppSourceStatus(), StartedAt:AppStartedAt, Keys:EffectiveShortcutSummary(ReactionShortcut),
+        Stage:LastBrowserOperation.HasOwnProp("Stage") ? LastBrowserOperation.Stage : "単一処理",
+        Browser:browser, Worker:WorkerState.ProcessId && ProcessExist(WorkerState.ProcessId) ? "起動中" : "待機中（必要なときに起動）",
         Auto:AutoMode ? "ON" : "OFF", Settings:FileExist(SettingsDatabasePath) ? "あり" : "なし",
         Operation:modes.Get(mode, "不明な操作"), Result:states.Get(state, "不明な結果"),
         Duration:mode = "なし" ? "—（未実行）" : LastBrowserOperation.Duration " ms",
@@ -37,9 +42,11 @@ BuildDiagnosticReport(snapshot := 0) {
     info := snapshot ? snapshot : ReadDiagnosticSnapshot()
     return "ChatPalette " info.Version
         . "`r`n取得日時: " info.CapturedAt
+        . "`r`n起動日時: " info.StartedAt " / " info.Source
         . "`r`n`r`n[直近の操作]"
         . "`r`n操作: " info.Operation " (" info.ModeCode ")"
         . "`r`n結果: " info.Result " (" info.StateCode ")"
+        . "`r`n段階: " info.Stage
         . "`r`n処理時間: " info.Duration
         . "`r`nリアクション: " info.Phase " (" info.PhaseCode ")"
         . "`r`n`r`n[環境・動作状況]"
@@ -47,6 +54,7 @@ BuildDiagnosticReport(snapshot := 0) {
         . "`r`nブラウザー: " info.Browser
         . "`r`n補助プロセス: " info.Worker
         . "`r`n自動判別: " info.Auto " / 設定ファイル: " info.Settings
+        . "`r`n`r`n[有効なキー]`r`n" info.Keys
 }
 
 ShowDiagnostics(*) {
@@ -77,7 +85,9 @@ CreateDiagnosticPanel() {
     browser := Row(470, "ブラウザー")
     worker := Row(502, "補助プロセス")
     settings := Row(534, "設定")
-    view.AddText("x20 y574 w600 h52 c526174", "コピーには上記の情報と調査用の結果コードが含まれます。`n弾幕本文・動画URL・配信者名・保存先のパスは含まれません。")
+    source := view.AddText("x20 y574 w600 h42 c526174", "")
+    view.AddButton("x20 y616 w180 h26","ショートカットを管理").OnEvent("Click",(*) => ShowShortcutManager())
+    view.AddButton("x212 y616 w180 h26","アプリを再起動").OnEvent("Click",RestartApplication)
     refreshButton := view.AddButton("x20 y84 w128 h34", "最新の状態に更新")
     copyButton := view.AddButton("x164 y84 w230 h34", "表示中の診断情報をコピー")
     feedback := view.AddText("x20 y646 w600 h24 c526174", "")
@@ -98,7 +108,8 @@ CreateDiagnosticPanel() {
         captured.Text := "取得日時：" snapshot.CapturedAt "　（自動更新はしません）"
         operation.Text := snapshot.Operation
         result.Text := snapshot.Result
-        duration.Text := snapshot.Duration
+        duration.Text := snapshot.Duration " ／ " snapshot.Stage
+        source.Text := snapshot.Source "`n起動：" snapshot.StartedAt
         phase.Text := snapshot.Phase
         version.Text := snapshot.Version
         runtime.Text := snapshot.Ahk

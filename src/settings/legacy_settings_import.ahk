@@ -89,7 +89,7 @@ ReadLegacySettings(path) {
                 Text: ReadSettingValue(document, section, "Text" A_Index, ""), Slot: ReadSettingInteger(document, section, "Slot" A_Index, A_Index <= 2 ? A_Index : 0)})
         state.Profiles.Push(p)
     }
-    state.InputProfileIndex := Min(Max(ReadSettingInteger(document, "General", "Current", "0"), 0), state.Profiles.Length)
+    index := Min(Max(ReadSettingInteger(document, "General", "Current", "0"), 0), state.Profiles.Length)
     NormalizeLibrarySlots(state.SharedDanmakuItems)
     ids := Map()
     for profile in state.Profiles {
@@ -98,6 +98,7 @@ ReadLegacySettings(path) {
         ids[profile.Id] := true
         NormalizeLibrarySlots(profile.Items)
     }
+    state.InputProfileId := index ? state.Profiles[index].Id : ""
     return ReadReactionSettings(state, document)
 }
 

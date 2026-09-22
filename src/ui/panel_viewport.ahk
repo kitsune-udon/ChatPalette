@@ -19,7 +19,8 @@ class PanelViewport {
         OnMessage(0x115, this.ScrollHandler)
         OnMessage(0x20A, this.WheelHandler)
         ; Focus is sampled by an AHK timer only while the panel is visible.
-        OnExit(ObjBindMethod(this, "Dispose"))
+        this.ExitHandler := ObjBindMethod(this,"Dispose")
+        OnExit(this.ExitHandler)
     }
 
     CaptureChildren() {
@@ -172,6 +173,7 @@ class PanelViewport {
         if this.Disposed
             return
         this.Disposed := true
+        OnExit(this.ExitHandler,0)
         SetTimer(this.UpdateHandler,0)
         this.PendingResize := false, this.PendingOffset := 0
         OnMessage(0x114,this.ScrollHandler,0)

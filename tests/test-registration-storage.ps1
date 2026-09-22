@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 $workerPath = Join-Path $release 'src\browser\browser_worker.ps1'
@@ -19,12 +20,6 @@ function Invoke-WorkerRequest($Request) {
     }
 '@)
 [IO.File]::WriteAllText($workerPath,$worker,[Text.UTF8Encoding]::new($true))
-$browserPath = Join-Path $release 'src\browser\browser_service.ahk'
-$browser = [regex]::Replace([IO.File]::ReadAllText($browserPath),'(?ms)^IsBrowser\(hwnd\) \{.*?^\}', "IsBrowser(hwnd) {`r`n    return hwnd = 0`r`n}")
-[IO.File]::WriteAllText($browserPath,$browser,[Text.UTF8Encoding]::new($true))
-$clientPath = Join-Path $release 'src\browser\worker_client.ahk'
-$client = [IO.File]::ReadAllText($clientPath).Replace('SendWorkerRequest(hwnd, mode :=', 'FixtureSendWorkerRequest(hwnd, mode :=')
-[IO.File]::WriteAllText($clientPath,$client,[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
 global SqliteChecks := 0
@@ -36,7 +31,7 @@ try {
     tokens .= "]"
     payload := '{"browser":"fixture","tokens":' tokens '}'
     SaveReactionRegistration(payload)
-    SqlCheck(db.Scalar("PRAGMA user_version")="2","schema version")
+    SqlCheck(db.Scalar("PRAGMA user_version")="3","schema version")
     snapshot := LoadReactionRegistrationSnapshot()
     SqlCheck(db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="1","saved registration")
     reply := SendWorkerRequest(0,"reaction_configure","","Payload=" snapshot "`n")
@@ -49,22 +44,22 @@ try {
     SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="👏1","failed save retains worker registration")
     db.Exec("PRAGMA query_only=OFF")
     beforeCancel := LoadReactionRegistrationSnapshot()
-    global ActiveReactionJob := {Mode:"reaction_capture",Window:0,Cancelled:false}
+    global ActiveReactionJob := CreateReactionJob({Mode:"reaction_capture",Window:0,Cancelled:false})
     global CaptureFixturePayload := StrReplace(payload,"👏1","cancelled-first")
     captured := RequestBrowserOperation(0,"reaction_capture")
     SqlCheck(captured.State="captured" && ActiveReactionJob.Cancelled && LoadReactionRegistrationSnapshot()==beforeCancel,"capture response does not persist cancelled request")
     cancelled := FinalizeReactionCapture(ActiveReactionJob,captured)
     SqlCheck(cancelled.State="cancelled" && LoadReactionRegistrationSnapshot()==beforeCancel,"cancel before commit retains DB")
     SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="👏1","cancel before commit retains worker")
-    stale := {Mode:"reaction_capture",Window:0,Cancelled:false}
+    stale := CreateReactionJob({Mode:"reaction_capture",Window:0,Cancelled:false})
     cancelled := FinalizeReactionCapture(stale,{State:"captured",Detail:payload})
     SqlCheck(cancelled.State="cancelled" && LoadReactionRegistrationSnapshot()==beforeCancel,"replaced job cannot commit")
     global ActiveReactionJob := 0
-    workerBefore := WorkerProcessId
+    workerBefore := WorkerState.ProcessId
     SendWorkerRequest(0,"fixture_seed")
     payload := StrReplace(payload,"👏1","updated-first")
     reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:payload})
-    SqlCheck(reply.State="registered" && WorkerProcessId=workerBefore,"capture sync keeps worker alive")
+    SqlCheck(reply.State="registered" && WorkerState.ProcessId=workerBefore,"capture sync keeps worker alive")
     SqlCheck(SendWorkerRequest(0,"fixture_count").Detail="1","capture sync retains video cache")
     SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="updated-first","changed registration reaches existing worker")
     global CancelOnRegistrationSync := true, CommittedAtCancellation := false
@@ -77,10 +72,10 @@ try {
     payload := StrReplace(payload,"updated-first","updated-after-failure")
     reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:payload})
     snapshot := LoadReactionRegistrationSnapshot()
-    SqlCheck(reply.State="sync_failed" && !WorkerProcessId && !RegistrationWorkerPid && InStr(snapshot,"updated-after-failure"),"failed sync stops stale worker and retains committed DB")
-    SqlCheck(!PrepareReactionRegistrations(0) && !WorkerProcessId,"repeated sync failure cannot mark worker ready")
+    SqlCheck(reply.State="sync_failed" && !WorkerState.ProcessId && !WorkerState.RegistrationPid && InStr(snapshot,"updated-after-failure"),"failed sync stops stale worker and retains committed DB")
+    SqlCheck(!PrepareReactionRegistrations(0) && !WorkerState.ProcessId,"repeated sync failure cannot mark worker ready")
     blocked := RequestBrowserOperation(0,"reaction_send","abcdefghijk","Reaction=1`n")
-    SqlCheck(blocked.State="sync_failed" && !WorkerProcessId && LastBrowserOperation.State="sync_failed","public operation blocks sending on failed sync")
+    SqlCheck(blocked.State="sync_failed" && !WorkerState.ProcessId && LastBrowserOperation.State="sync_failed","public operation blocks sending on failed sync")
     FileDelete(flag)
     SqlCheck(PrepareReactionRegistrations(0),"next operation recovers committed snapshot")
     SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="updated-after-failure","retry restores new data instead of stale registration")
@@ -131,7 +126,7 @@ try {
     FileAppend(snapshot,legacy,"UTF-8")
     original := FileRead(legacy,"UTF-8")
     prior := SqliteConnection(SettingsDatabasePath)
-    prior.Exec("DROP TABLE reaction_registrations; PRAGMA user_version=1"), prior.Close()
+    prior.Exec("DROP TABLE reaction_registrations; DROP TABLE shortcut_bindings; PRAGMA user_version=1"), prior.Close()
     migrated := OpenSettingsRepository(SettingsDatabasePath)
     SqlCheck(LoadReactionRegistrationSnapshot()==snapshot && FileRead(legacy,"UTF-8")==original,"v1 migration preserves source")
     CloseSettingsStore()
@@ -141,7 +136,7 @@ try {
     SqlCheck(LoadReactionRegistrationSnapshot()==snapshot,"v2 ignores obsolete JSON")
     CloseSettingsStore()
     prior := SqliteConnection(SettingsDatabasePath)
-    prior.Exec("DROP TABLE reaction_registrations; PRAGMA user_version=1"), prior.Close()
+    prior.Exec("DROP TABLE reaction_registrations; DROP TABLE shortcut_bindings; PRAGMA user_version=1"), prior.Close()
     failed := false
     try OpenSettingsRepository(SettingsDatabasePath)
     catch
@@ -164,7 +159,7 @@ try {
     FileAppend("FAIL: " failure.Message " at " failure.File ":" failure.Line "`n","**")
     ExitApp(1)
 }
-SendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
+FixtureWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
     global CancelOnRegistrationSync, CommittedAtCancellation
     if mode = "reaction_capture" {
         CancelReaction()
@@ -175,11 +170,16 @@ SendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
         CommittedAtCancellation := ActiveReactionJob.RegistrationCommitted && !A_IsCritical
         CancelReaction()
     }
-    return FixtureSendWorkerRequest(hwnd,mode,expectedVideo,extra)
+    return NativeSendWorkerRequest(hwnd,mode,expectedVideo,extra)
 }
 CommitCapturedReactionRegistration(hwnd,reply) {
-    global ActiveReactionJob := {Mode:"reaction_capture",Window:hwnd,Cancelled:false}
-    try return FinalizeReactionCapture(ActiveReactionJob,reply)
+    global ActiveReactionJob := CreateReactionJob({Mode:"reaction_capture",Window:hwnd,Cancelled:false})
+    try {
+        result := FinalizeReactionCapture(ActiveReactionJob,reply)
+        if result.State = "registered" || result.State = "sync_failed"
+            SqlCheck(ActiveReactionJob.RegistrationCommitted && ActiveReactionJob.RegistrationSynced=(result.State="registered"),"save and sync are distinct job states")
+        return result
+    }
     finally global ActiveReactionJob := 0
 }
 SqlCheck(value,message) {
@@ -189,10 +189,7 @@ SqlCheck(value,message) {
         throw Error(message)
 }
 '@
-$source = [IO.File]::ReadAllText((Join-Path $release 'main.ahk')).Replace('OnExit(StopBrowserWorker)',$tests)
-[IO.File]::WriteAllText((Join-Path $release 'main.ahk'),$source,[Text.UTF8Encoding]::new($true))
-$run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"'+(Join-Path $release 'main.ahk')+'"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $release 'stdout.txt') -RedirectStandardError (Join-Path $release 'stderr.txt')
-$null = $run.Handle
-if (!$run.WaitForExit(30000)) { Stop-Process -Id $run.Id; throw 'SQLite test timed out' }
-Get-Content -LiteralPath (Join-Path $release 'stdout.txt'),(Join-Path $release 'stderr.txt')
-if ($run.ExitCode -ne 0) { throw "SQLite test failed: $release" }
+Invoke-AppTest -Runtime $release -Body $tests -Setup @'
+RuntimePorts.BrowserIdentity := (hwnd) => hwnd=0
+RuntimePorts.WorkerRequest := FixtureWorkerRequest
+'@

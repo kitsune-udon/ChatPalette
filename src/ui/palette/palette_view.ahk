@@ -1,5 +1,5 @@
 ﻿BuildPalette() {
-    global PaletteSearchPending := false, PaletteUpdating := false, PaletteRefreshPending := false
+    global PaletteSearchPending := false
     global PaletteTitle, PaletteWindow, PaletteContext, PaletteMode, PaletteProfile, PaletteSearch, PaletteList
     global PaletteInsert, PaletteBind, PaletteChoice, PaletteCount, PaletteInterval, PaletteStart, PaletteStop
     global PaletteOptionLabels, PaletteSettingsStatus, PaletteManageButton, PaletteReactionHeading, PaletteIntervalHint
@@ -21,7 +21,8 @@
     PaletteSearch := PaletteWindow.AddEdit("x16 y140 w524 h28")
     DllCall("SendMessage", "Ptr", PaletteSearch.Hwnd, "UInt", 0x1501, "Ptr", 1, "Str", "弾幕名・本文を検索")
     PaletteSearch.OnEvent("Change", QueuePaletteSearch)
-    PaletteList := PaletteWindow.AddListView("x16 y176 w524 h200 -Multi", ["対象", "弾幕・本文", "キー"])
+    PaletteList := PaletteWindow.AddListView("x16 y176 w524 h200 -Multi", ["対象", "弾幕・本文", "キー", "ID"])
+    PaletteList.ModifyCol(4,0)
     PaletteList.OnEvent("ItemSelect", PreviewPaletteItem)
     PalettePreview := PaletteWindow.AddEdit("x16 y346 w524 h36 ReadOnly -VScroll", "")
     PaletteInsert := PaletteWindow.AddButton("x16 y386 w180 h32 Default", "選んだ弾幕を入力")
@@ -54,7 +55,7 @@
     PaletteWindow.OnEvent("Escape", HidePalette)
     PaletteWindow.OnEvent("Size", ResizePalette)
     PaletteStop.Visible := false
-    PaletteStop.Enabled := false
+    SetControlEnabled(PaletteStop,false)
     ResetPaletteSession()
     RefreshPalette()
     global PaletteViewport := PanelViewport(PaletteWindow,360,620,LayoutPalette)
@@ -108,6 +109,7 @@ OpenPaletteMenu(*) {
     popup.Add("リアクションの標準設定", (*) => ShowManagement(2))
     popup.Add("操作・サポート", (*) => ShowManagement(3))
     popup.Add("リアクションの実行結果", ShowReactionDetails)
+    popup.Add("ショートカットを管理", (*) => ShowShortcutManager())
     popup.Add("診断情報", ShowDiagnostics)
     popup.Add("終了", (*) => ExitApp())
     popup.Show()
@@ -116,43 +118,31 @@ OpenPaletteMenu(*) {
 
 RefreshPalette() {
     PaletteMode.Choose(AutoMode ? 1 : 2)
-    names := []
-    for profile in Profiles
-        names.Push(profile.Name)
-    SyncChoiceNames(PaletteProfile,names)
-    PaletteProfile.Choose(InputProfileIndex)
-    PaletteProfile.Enabled := !AutoMode && Profiles.Length > 0
-    profile := GetInputProfile()
-    matched := HasPaletteInputProfile()
-    if AutoMode && !matched
-        PaletteProfile.Choose(0)
-    PaletteContext.Text := "弾幕の入力対象：" (profile && matched ? profile.Name : "共通の弾幕のみ")
-        . "`n" (AutoMode ? DetectionMessage : "手動選択：下の欄で配信者を選べます。")
+    model := BuildPaletteContext(Profiles,InputProfileId,AutoMode,HasPaletteInputProfile(),DetectionMessage)
+    SyncChoiceNames(PaletteProfile,model.Names)
+    PaletteProfile.Choose(model.Choice)
+    SetControlEnabled(PaletteProfile,model.CanChoose && OperationAllowed("preferences"))
+    PaletteContext.Text := model.Context
     RefreshPaletteItems()
     UpdateTray()
 }
 
 
 RefreshPaletteItems() {
-    global PaletteUpdating, PaletteRefreshPending, PaletteRows
-    if PaletteUpdating {
-        PaletteRefreshPending := true
+    global PaletteRows
+    if !PaletteRefresh.Begin()
         return
-    }
-    PaletteUpdating := true
     try {
         CancelScheduledPaletteSearch()
-        PaletteInsert.Enabled := false
-        PaletteManageButton.Enabled := false
-        rows := [], query := Trim(PaletteSearch.Value), profile := GetInputProfile()
-        if profile && HasPaletteInputProfile()
-            CollectPaletteItems(rows,profile.Items,false,query,profile.Id)
-        CollectPaletteItems(rows,SharedDanmakuItems,true,query)
-        position := BeginListRefresh(PaletteList,2)
+        SetControlEnabled(PaletteInsert,false)
+        SetControlEnabled(PaletteManageButton,false)
+        model := BuildPaletteItems(Profiles,SharedDanmakuItems,InputProfileId,HasPaletteInputProfile(),PaletteSearch.Value,ShortcutKeys)
+        rows := model.Rows
+        position := BeginListRefresh(PaletteList,4)
         try {
             PaletteList.Delete()
             for row in rows
-                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key)
+                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key,row.ItemId)
             ; Publish only after the native list and its backing rows agree.
             PaletteRows := rows
         } catch as failure {
@@ -160,28 +150,12 @@ RefreshPaletteItems() {
             PaletteList.Delete()
             throw failure
         } finally {
-            EndListRefresh(PaletteList,position,2)
+            EndListRefresh(PaletteList,position,4)
         }
-        PaletteHint.Text := rows.Length ? "弾幕は入力のみ。内容を確認してYouTubeで送信します。" : (query != "" ? "一致する弾幕がありません。検索条件を変えてください。" : "「弾幕を追加・編集」から登録できます。共通弾幕は配信者不要です。")
+        PaletteHint.Text := model.Hint
     } finally {
-        PaletteUpdating := false
-        PaletteManageButton.Enabled := true
-        PreviewPaletteItem()
-        if PaletteRefreshPending {
-            PaletteRefreshPending := false
-            SetTimer(RunScheduledPaletteSearch,-1)
-        }
-    }
-}
-
-CollectPaletteItems(rows, items, shared, query, profileId := "") {
-    for i, item in items {
-        if query != "" && !InStr(item.Name " " item.Text, query)
-            continue
-        slot := ItemSlot(item)
-        rows.Push({Shared:shared, Index:i, ProfileId:profileId, Text:item.Text,
-            ItemId:item.HasOwnProp("Id") ? item.Id : "", Item:item,
-            Label:item.Name "　" item.Text, Key:slot ? "Ctrl+Alt+" (slot+(shared ? 2 : 0)) : ""})
+        PaletteRefresh.End()
+        RefreshOperationControls()
     }
 }
 
@@ -189,34 +163,34 @@ PaletteItemMatches(row, items) {
     if row.Index < 1 || row.Index > items.Length
         return false
     item := items[row.Index]
-    return (row.ItemId != "" ? item.HasOwnProp("Id") && item.Id == row.ItemId : item = row.Item)
-        && item.Text == row.Text
+    return item.Id == row.ItemId && item.Text == row.Text
 }
 
 InsertPaletteItem(*) {
-    if PaletteUpdating
+    if PaletteRefresh.Active
         return
     if FlushPendingPaletteSearch()
         return
-    if IsBrowserOperationBusy || ActiveReactionJob || DanmakuEditorWindow
+    if !OperationAllowed("input")
         return
     index := PaletteList.GetNext()
     if !index || index > PaletteRows.Length
         return
     row := PaletteRows[index]
-    items := row.Shared ? SharedDanmakuItems : (GetInputProfile() && GetInputProfile().Id = row.ProfileId ? GetInputProfile().Items : [])
+    profile := row.Shared ? 0 : GetInputProfile()
+    items := row.Shared ? SharedDanmakuItems : (profile && profile.Id = row.ProfileId ? profile.Items : [])
     if !PaletteItemMatches(row,items) {
         RefreshPalette()
         return
     }
-    if row.Shared
-        RequestDanmakuInput(true,row.Index,TargetBrowserHwnd,false,true)
-    else
-        RequestDanmakuInput(false,row.Index,TargetBrowserHwnd,false,true,row.ProfileId)
+    RequestDanmakuInput({ProfileId:row.ProfileId, ItemId:row.ItemId, ExpectedText:row.Text,
+        Window:TargetBrowserHwnd, Origin:"palette"})
 }
 
 
 ChangePaletteMode(*) {
+    if !OperationAllowed("preferences")
+        return
     global AutoMode
     try SaveAutoDetection(PaletteMode.Value = 1)
     catch as failure {
@@ -231,6 +205,8 @@ ChangePaletteMode(*) {
 
 
 SelectPaletteProfile(*) {
+    if !OperationAllowed("preferences")
+        return
     try SaveInputProfileSelection(PaletteProfile.Value)
     catch as failure {
         RefreshPalette()
@@ -263,7 +239,7 @@ StartPaletteReaction(*) {
 }
 
 SavePaletteDefaults(*) {
-    if IsBrowserOperationBusy || ActiveReactionJob
+    if !OperationAllowed("preferences")
         return
     try SaveReactionDefaults(PaletteOptions())
     catch as failure {
@@ -276,11 +252,11 @@ SavePaletteDefaults(*) {
 
 
 PreviewPaletteItem(*) {
-    if PaletteUpdating
+    if PaletteRefresh.Active
         return
     index := PaletteList.GetNext()
-    PaletteInsert.Enabled := index > 0
-    PalettePreview.Value := index && index <= PaletteRows.Length ? PaletteRows[index].Text : ""
+    SetControlEnabled(PaletteInsert,index > 0 && index <= PaletteRows.Length && !PaletteSearchPending && OperationAllowed("input"))
+    SetControlText(PalettePreview,index && index <= PaletteRows.Length ? PaletteRows[index].Text : "")
 }
 
 RefreshPaletteIntervalHint(*) {
@@ -309,7 +285,7 @@ QueuePaletteSearch(*) {
         return
     }
     PaletteSearchPending := true
-    PaletteInsert.Enabled := false
+    SetControlEnabled(PaletteInsert,false)
     PaletteHint.Text := "検索を更新しています…"
     SetTimer(RunScheduledPaletteSearch,-100)
 }

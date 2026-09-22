@@ -13,24 +13,38 @@ CopyProfiles(profiles) {
     return result
 }
 
+CreatePreferences() {
+    return {InputProfileId:InputProfileId, AutoMode:AutoMode, DefaultReactionKind:DefaultReactionKind,
+        DefaultReactionCount:DefaultReactionCount, DefaultReactionIntervalMs:DefaultReactionIntervalMs, ReactionShortcut:ReactionShortcut, ShortcutKeys:ShortcutKeys.Clone()}
+}
 CreateSettingsSnapshot(copyLibrary := true) {
-    return {Profiles:copyLibrary ? CopyProfiles(Profiles) : Profiles, SharedDanmakuItems:copyLibrary ? CopyItems(SharedDanmakuItems) : SharedDanmakuItems, InputProfileIndex:InputProfileIndex, AutoMode:AutoMode,
-        DefaultReactionKind:DefaultReactionKind, DefaultReactionCount:DefaultReactionCount, DefaultReactionIntervalMs:DefaultReactionIntervalMs, ReactionShortcut:ReactionShortcut}
+    state := CreatePreferences()
+    state.Profiles := copyLibrary ? CopyProfiles(Profiles) : Profiles
+    state.SharedDanmakuItems := copyLibrary ? CopyItems(SharedDanmakuItems) : SharedDanmakuItems
+    return state
+}
+; The UI/session option names are translated at this one boundary.
+PreferencesWithReactionOptions(draft) {
+    preferences := CreatePreferences()
+    preferences.DefaultReactionKind := draft.Reaction, preferences.DefaultReactionCount := draft.Count
+    preferences.DefaultReactionIntervalMs := draft.Interval, preferences.ReactionShortcut := draft.Key
+    ValidateSettingsPreferences(preferences)
+    return preferences
 }
 
 ReloadAppSettings() {
     settingsCritical := A_IsCritical
     Critical("On")
     try {
-        global Profiles, SharedDanmakuItems, InputProfileIndex, AutoMode, DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ReactionShortcut
+        global AutoMode, DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ReactionShortcut, ShortcutKeys
         state := LoadSettings(SettingsDatabasePath)
         if IsSet(ReactionsInitialized) && ReactionsInitialized
             ApplyReactionDefaults(state, false)
-        Profiles := state.Profiles, SharedDanmakuItems := state.SharedDanmakuItems
-        InputProfileIndex := state.InputProfileIndex, AutoMode := state.AutoMode
+        PublishLibraryState(state)
+        AutoMode := state.AutoMode
         DefaultReactionKind := state.DefaultReactionKind, DefaultReactionCount := state.DefaultReactionCount
         DefaultReactionIntervalMs := state.DefaultReactionIntervalMs, ReactionShortcut := state.ReactionShortcut
-        RebuildChannelIndex()
+        ShortcutKeys := state.ShortcutKeys.Clone()
         if IsSet(LibraryHistory)
             LibraryHistory.Length := 0
     } finally {
@@ -40,51 +54,48 @@ ReloadAppSettings() {
 
 
 ApplyReactionDefaults(state, persist := true) {
-    global DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ReactionShortcut
-    if !ValidReactionKey(state.ReactionShortcut)
-        throw Error("Ctrl＋Alt、またはCtrl＋Shiftを含む、弾幕・パネル用以外のキーを指定してください。")
-    oldKey := ReactionShortcut
-    changed := CanonicalReactionKey(oldKey) != CanonicalReactionKey(state.ReactionShortcut)
-    ; Key changes cannot run callbacks until persistence succeeds or rollback completes.
+    global DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ReactionShortcut, ShortcutKeys
+    ValidateSettingsPreferences(state)
+    previous := CurrentShortcutMap(), next := PreferenceShortcutMap(state)
     previousCritical := A_IsCritical
     Critical("On")
-    installed := false
+    disabled := [], installed := []
     try {
-        if changed {
-            SetReactionHotkey(state.ReactionShortcut)
-            installed := true
-            SetReactionHotkey(oldKey, false)
+        ; Remove changed bindings first so swapping two keys is safe.
+        for action,key in previous {
+            if CanonicalReactionKey(key) != CanonicalReactionKey(next[action]) {
+                SetShortcutHotkey(action,key,false)
+                disabled.Push(action)
+            }
+        }
+        for action in disabled {
+            SetShortcutHotkey(action,next[action])
+            installed.Push(action)
         }
         if persist
-            SaveSettingsPreferences(state, SettingsDatabasePath)
+            SaveSettingsPreferences(state,SettingsDatabasePath)
         DefaultReactionKind := state.DefaultReactionKind, DefaultReactionCount := state.DefaultReactionCount
         DefaultReactionIntervalMs := state.DefaultReactionIntervalMs, ReactionShortcut := state.ReactionShortcut
+        ShortcutKeys := next.Clone(), ShortcutKeys.Delete("reaction")
     } catch as failure {
-        if installed {
-            SetReactionHotkey(oldKey)
-            SetReactionHotkey(state.ReactionShortcut, false)
-        }
+        for action in installed
+            SetShortcutHotkey(action,next[action],false)
+        for action in disabled
+            SetShortcutHotkey(action,previous[action])
         throw failure
-    } finally {
-        Critical(previousCritical)
-    }
+    } finally Critical(previousCritical)
 }
+
 
 SaveReactionDefaults(draft) {
     settingsCritical := A_IsCritical
     Critical("On")
     try {
-        if !IsInteger(draft.Reaction) || draft.Reaction < 1 || draft.Reaction > ReactionNames.Length || !HasSettingValue(ReactionCounts,draft.Count) || !HasSettingValue(ReactionIntervals,draft.Interval)
-            throw Error("リアクション設定の値が正しくありません。")
-        if !ValidReactionKey(draft.Key)
-            throw Error("Ctrl＋Alt、またはCtrl＋Shiftを含む、弾幕・パネル用以外のキーを指定してください。")
+        preferences := PreferencesWithReactionOptions(draft)
         if draft.Reaction = DefaultReactionKind && draft.Count = DefaultReactionCount
             && draft.Interval = DefaultReactionIntervalMs && draft.Key == ReactionShortcut
             return
-        state := CreateSettingsSnapshot(false)
-        state.DefaultReactionKind := draft.Reaction, state.DefaultReactionCount := draft.Count
-        state.DefaultReactionIntervalMs := draft.Interval, state.ReactionShortcut := draft.Key
-        ApplyReactionDefaults(state)
+        ApplyReactionDefaults(preferences)
     } finally {
         Critical(settingsCritical)
     }
@@ -97,7 +108,7 @@ SaveAutoDetection(enabled) {
     try {
         if AutoMode = (enabled ? 1 : 0)
             return
-        state := CreateSettingsSnapshot(false), state.AutoMode := enabled ? 1 : 0
+        state := CreatePreferences(), state.AutoMode := enabled ? 1 : 0
         SaveSettingsPreferences(state,SettingsDatabasePath)
         AutoMode := state.AutoMode
     } finally {

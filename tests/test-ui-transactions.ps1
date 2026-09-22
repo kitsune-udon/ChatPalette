@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference='Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release=New-TestRuntime
 function Rewrite($relative,$before,$after) {
@@ -9,10 +10,10 @@ function Rewrite($relative,$before,$after) {
 }
 Rewrite 'src/ui/reaction_feedback.ahk' '            text := view.AddText("w360 r6", "")' ('            text := view.AddText("w360 r6", "")'+"`r`n            ProbeOverlayConstruction()")
 Rewrite 'src/ui/palette/palette_view.ahk' '            for row in rows' '            for row in rows {'
-Rewrite 'src/ui/palette/palette_view.ahk' '                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key)' ('                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key)'+"`r`n                ProbeListUpdate()`r`n            }")
+Rewrite 'src/ui/palette/palette_view.ahk' '                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key,row.ItemId)' ('                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key,row.ItemId)'+"`r`n                ProbeListUpdate()`r`n            }")
 Rewrite 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(x, y) {`r`n        ProbeViewport(this)")
-Rewrite 'src/input/input_controller.ahk' 'RequestDanmakuInput(shared,' 'OriginalRequestDanmakuInput(shared,'
-Rewrite 'src/ui/management/management_view.ahk' '        for item in GetEditingDanmakuItems()' '        for item in GetEditingDanmakuItems() {'
+Rewrite 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
+Rewrite 'src/ui/management/management_view.ahk' '        for row in model.Rows' '        for row in model.Rows {'
 Rewrite 'src/ui/management/management_view.ahk' '        ManagedList.ModifyCol(1,160)' ("            ProbeManagementUpdate()`r`n        }`r`n        ManagedList.ModifyCol(1,160)")
 $tests=@'
 OnExit(StopBrowserWorker)
@@ -36,7 +37,7 @@ try {
     try RefreshPaletteItems()
     catch
         failed := true
-    CheckUi(failed && !PaletteUpdating && PaletteRows.Length=0 && PaletteList.GetCount()=0,"failed native update clears incomplete view and unlocks retry")
+    CheckUi(failed && !PaletteRefresh.Active && PaletteRows.Length=0 && PaletteList.GetCount()=0,"failed native update clears incomplete view and unlocks retry")
     RefreshPaletteItems()
     CheckUi(PaletteRows.Length=1,"list rebuild recovers after failure")
     oldRows := PaletteRows
@@ -44,7 +45,7 @@ try {
     ProbeListArmed := true
     RefreshPaletteItems()
     CheckUi(!ProbeListArmed && PaletteRows.Length=2 && PaletteList.GetCount()=2,"list publishes complete snapshot")
-    CheckUi(!PaletteUpdating && InputCalls=0,"update restores interaction without sending")
+    CheckUi(!PaletteRefresh.Active && InputCalls=0,"update restores interaction without sending")
     old := SharedDanmakuItems[1]
     SharedDanmakuItems[1] := old.Clone()
     SharedDanmakuItems[1].Id := NewRecordId()
@@ -58,7 +59,7 @@ try {
     BuildManagement()
     global ProbeManagementArmed := true
     RefreshManagement()
-    CheckUi(!ProbeManagementArmed && !ManagementUpdating && !DanmakuEditorWindow,"management defers nested refresh and blocks editing")
+    CheckUi(!ProbeManagementArmed && !ManagementRefresh.Active && !DanmakuEditorWindow,"management defers nested refresh and blocks editing")
     CheckUi(SharedDanmakuItems.Length=2 && ManagedList.GetCount()=2,"management refresh cannot delete or undo data")
     PresentWindow(PaletteWindow,"w260 h300",ResizePalette)
     ProbeViewportArmed := true
@@ -107,26 +108,26 @@ ProbeListUpdate() {
     if !IsSet(ProbeListArmed) || !ProbeListArmed
         return
     ProbeListArmed := false
-    CheckUi(PaletteUpdating,"list updating state precedes native mutation")
+    CheckUi(PaletteRefresh.Active,"list updating state precedes native mutation")
     PaletteList.Modify(1,"Select Focus")
     InsertPaletteItem()
     OpenPaletteLibrary()
     PreviewPaletteItem()
     RefreshPaletteItems()
-    CheckUi(PaletteRows.Length=1 && PaletteRefreshPending,"old snapshot retained until publish; nested refresh deferred")
+    CheckUi(PaletteRows.Length=1 && PaletteRefresh.Pending,"old snapshot retained until publish; nested refresh deferred")
 }
 ProbeManagementUpdate() {
     global ProbeManagementArmed
     if !IsSet(ProbeManagementArmed) || !ProbeManagementArmed
         return
     ProbeManagementArmed := false
-    CheckUi(ManagementUpdating,"management owns update guard")
+    CheckUi(ManagementRefresh.Active,"management owns update guard")
     SelectManagedRow(1)
     HandleDanmakuCommand("delete")
     OpenDanmakuEditor(true)
     UndoLibraryChange()
     RefreshManagement()
-    CheckUi(ManagementRefreshPending,"nested management refresh coalesces")
+    CheckUi(ManagementRefresh.Pending,"nested management refresh coalesces")
 }
 ProbeViewport(viewport) {
     global ProbeViewportArmed
@@ -142,10 +143,4 @@ RequestDanmakuInput(*) {
     InputCalls++
 }
 '@
-$main=Join-Path $release 'main.ahk'
-[IO.File]::WriteAllText($main,[IO.File]::ReadAllText($main).Replace('OnExit(StopBrowserWorker)',$tests),[Text.UTF8Encoding]::new($true))
-$run=Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"'+$main+'"') -WindowStyle Hidden -PassThru -RedirectStandardOutput "$release/out.txt" -RedirectStandardError "$release/error.txt"
-$null=$run.Handle
-if(!$run.WaitForExit(20000)){$run.Kill();throw 'UI transaction test timeout'}
-Get-Content "$release/out.txt","$release/error.txt"
-if($run.ExitCode -ne 0){throw 'UI transaction test failed'}
+Invoke-AppTest -Runtime $release -Body $tests

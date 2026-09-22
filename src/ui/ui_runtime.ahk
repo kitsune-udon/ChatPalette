@@ -5,15 +5,13 @@
 }
 
 
-
-
-
 BeginWorkerWait(mode) {
     enabled := !!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd)
     managerEnabled := ManagementWindow && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd)
     PaletteWindow.Opt("+Disabled")
     if ManagementWindow
         ManagementWindow.Opt("+Disabled")
+    RefreshOperationControls()
     notification := () => ToolTip(mode = "verify_input" ? "入力欄を確認しています…" : "YouTubeの操作対象を確認しています…")
     SetTimer(notification,-400)
     return {Enabled:enabled, ManagerEnabled:managerEnabled, Notification:notification}
@@ -26,10 +24,11 @@ EndWorkerWait(view) {
     if view.ManagerEnabled
         ManagementWindow.Opt("-Disabled")
     ToolTip()
+    RefreshOperationControls()
 }
 
 ShowInputFailure() {
-    PaletteHint.Text := "入力できませんでした。YouTubeのチャット欄かコメント欄をクリックし、Ctrl＋Alt＋Qを押してください。"
+    PaletteHint.Text := "入力できませんでした。YouTubeのチャット欄かコメント欄をクリックし、" ShortcutKeyLabel(GetShortcutKey("palette")) "を押してください。"
     ToolTip(PaletteHint.Text)
     SetTimer(() => ToolTip(),-3500)
 }
@@ -42,6 +41,7 @@ BeginEditorDialog(view,label) {
         PaletteEnabled:!!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),
         ManagementEnabled:!!DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd)}
     PaletteWindow.Opt("+Disabled"), ManagementWindow.Opt("+Disabled")
+    RefreshOperationControls()
 }
 EndEditorDialog() {
     global ActiveEditorDialog
@@ -53,6 +53,7 @@ EndEditorDialog() {
         PaletteWindow.Opt("-Disabled")
     if state.ManagementEnabled
         ManagementWindow.Opt("-Disabled")
+    RefreshOperationControls()
 }
 
 ; Reactivate the existing editor, including native owned dialogs for profile edits.
@@ -138,4 +139,41 @@ SyncChoiceNames(control, names) {
     control.Add(names)
     control.ChoiceNames := names.Clone()
     return true
+}
+
+RefreshOperationControls() {
+    canEdit := OperationAllowed("edit"), canReact := OperationAllowed("reaction"), canSave := OperationAllowed("preferences")
+    if IsSet(PaletteInsert) {
+        PreviewPaletteItem()
+        SetControlEnabled(PaletteManageButton,canEdit)
+        SetControlEnabled(PaletteBind,canEdit)
+        SetControlEnabled(PaletteStart,canReact)
+        SetControlEnabled(PaletteDefaults,canSave)
+        SetControlEnabled(PaletteMode,canSave)
+        SetControlEnabled(PaletteProfile,!AutoMode && Profiles.Length > 0 && canSave)
+    }
+    if ManagementWindow && IsSet(ManagementItemButtons) {
+        UpdateManagementActions()
+        RefreshManagementUndo()
+        ManagementTarget.Enabled := canEdit
+        ManagementAddProfileButton.Enabled := canEdit
+        ManagementProfileMenu.Enabled := GetEditingProfileId() != "" && canEdit
+        ManagementSupportButtons["key"].Enabled := canEdit
+        for key in ["register","check"]
+            ManagementSupportButtons[key].Enabled := canReact
+        for control in [ReactionDefaultChoiceControl,ReactionDefaultCountControl,ReactionDefaultIntervalControl]
+            control.Enabled := canSave
+    }
+}
+
+; For controls outside tabs only: inactive tabs mask Enabled and retain a separate
+; desired state inside AHK. Tab controls must always receive explicit assignments.
+SetControlEnabled(control, value) {
+    value := !!value
+    if control.Enabled != value
+        control.Enabled := value
+}
+SetControlText(control, text) {
+    if !(control.Text == text)
+        control.Text := text
 }

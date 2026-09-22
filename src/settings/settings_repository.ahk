@@ -13,11 +13,13 @@ class SettingsRepository {
             if this.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
                 throw Error("ChatPaletteの設定データベースではありません。")
             version := this.Db.Scalar("PRAGMA user_version")
-            if version != "1" && version != "2"
+            if version != "1" && version != "2" && version != "3"
                 throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
             this.Db.ConfigureStorage()
             if version = "1"
                 this.Db.Transaction(() => CreateReactionRegistrationSchema(this.Db,this.Path))
+            if version != "3"
+                this.Db.Transaction(() => CreateShortcutSchema(this.Db))
         }
         this.Db.Exec("PRAGMA max_page_count=" (128*1024*1024//Integer(this.Db.Scalar("PRAGMA page_size"))))
     }
@@ -27,6 +29,7 @@ class SettingsRepository {
             . "CREATE TABLE preferences(id INTEGER PRIMARY KEY CHECK(id=1), active_scope TEXT REFERENCES scopes(id) ON DELETE SET NULL, auto_mode INTEGER NOT NULL CHECK(auto_mode IN(0,1)), reaction_kind INTEGER NOT NULL, reaction_count INTEGER NOT NULL, reaction_interval INTEGER NOT NULL, reaction_key TEXT NOT NULL);"
             . "PRAGMA application_id=" SettingsRepository.ApplicationId "; PRAGMA user_version=1")
         CreateReactionRegistrationSchema(this.Db,this.Path)
+        CreateShortcutSchema(this.Db)
     }
     Load() {
         return this.Db.Transaction(ObjBindMethod(this,"ReadState"),false)
@@ -34,7 +37,7 @@ class SettingsRepository {
     ReadState() {
         if Integer(this.Db.Scalar("SELECT COUNT(*) FROM scopes"))>10001 || Integer(this.Db.Scalar("SELECT COUNT(*) FROM items"))>100000
             throw Error("設定の件数が上限を超えています。")
-        state := {Profiles:[],SharedDanmakuItems:[],InputProfileIndex:0}, scopes := Map()
+        state := {Profiles:[],SharedDanmakuItems:[],InputProfileId:""}, scopes := Map()
         scopes.CaseSense := "On"
         for row in this.Db.Rows("SELECT id,name,channel,position FROM scopes ORDER BY position,id") {
             scope := {Id:row[1],Name:row[2],Channel:row[3],Position:Integer(row[4]),Items:[],Rows:Map()}
@@ -60,11 +63,12 @@ class SettingsRepository {
         if prefs.Length != 1
             throw Error("共通設定がありません。")
         row := prefs[1]
-        state.InputProfileIndex := FindProfileIndexById(state.Profiles,row[1])
-        if row[1] != "" && !state.InputProfileIndex
+        state.InputProfileId := row[1]
+        if row[1] != "" && !FindProfileIndexById(state.Profiles,state.InputProfileId)
             throw Error("選択中の配信者がありません。")
         state.AutoMode := Integer(row[2]), state.DefaultReactionKind := Integer(row[3]), state.DefaultReactionCount := Integer(row[4])
         state.DefaultReactionIntervalMs := Integer(row[5]), state.ReactionShortcut := row[6]
+        state.ShortcutKeys := ReadShortcutKeys(this.Db)
         ValidateSettingsPreferences(state)
         validated := BuildLibraryStoragePlan(state,scopes,true)
         for id, scope in scopes
@@ -75,12 +79,33 @@ class SettingsRepository {
         this.Loaded := true
         return state
     }
-    Save(state, library := true, force := false) {
+    EnsureLoaded() {
         if !this.Loaded
             this.Load()
+    }
+    SaveAll(state) {
+        this.EnsureLoaded()
         ValidateSettingsPreferences(state)
-        plan := library ? BuildLibraryStoragePlan(state,this.Scopes,force) : 0
-        values := this.PreferenceRow(state), writePreferences := !this.HasOwnProp("PreferenceValues")
+        plan := BuildLibraryStoragePlan(state,this.Scopes,true)
+        this.Write(plan,this.PreferenceRow(state))
+    }
+    SaveLibrary(library, inputProfileId) {
+        this.EnsureLoaded()
+        plan := BuildLibraryStoragePlan(library,this.Scopes)
+        values := this.PreferenceValues.Clone()
+        values[1] := inputProfileId
+        this.Write(plan,values)
+    }
+    SavePreferences(preferences) {
+        this.EnsureLoaded()
+        ValidateSettingsPreferences(preferences)
+        this.Write(0,this.PreferenceRow(preferences))
+    }
+    Write(plan,values) {
+        scopes := plan ? plan.Scopes : this.Scopes
+        if values[1] != "" && (values[1] = "@shared" || !scopes.Has(values[1]))
+            throw Error("選択中の配信者がありません。")
+        writePreferences := !this.HasOwnProp("PreferenceValues")
         if !writePreferences {
             for i, value in values
                 if !(value == this.PreferenceValues[i])
@@ -93,8 +118,13 @@ class SettingsRepository {
         this.DataVersion := version
     }
     PreferenceRow(state) {
-        active := state.InputProfileIndex >= 1 && state.InputProfileIndex <= state.Profiles.Length ? state.Profiles[state.InputProfileIndex].Id : ""
-        return [active,Integer(state.AutoMode),Integer(state.DefaultReactionKind),Integer(state.DefaultReactionCount),Integer(state.DefaultReactionIntervalMs),state.ReactionShortcut]
+        active := state.InputProfileId
+        values := [active,Integer(state.AutoMode),Integer(state.DefaultReactionKind),Integer(state.DefaultReactionCount),Integer(state.DefaultReactionIntervalMs),state.ReactionShortcut]
+        keys := PreferenceShortcutMap(state)
+        for definition in ShortcutDefinitions()
+            if definition.Id != "reaction"
+                values.Push(keys[definition.Id])
+        return values
     }
     Apply(plan,values,writePreferences) {
         version := this.Db.Scalar("PRAGMA data_version")
@@ -102,8 +132,22 @@ class SettingsRepository {
             throw Error("設定が別の接続で変更されました。再起動して最新の設定を読み込んでください。")
         if plan
             this.ApplyLibrary(plan)
-        if writePreferences
-            this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?,?)",values*)
+        if writePreferences {
+            baseChanged := !this.HasOwnProp("PreferenceValues")
+            if !baseChanged {
+                Loop 6
+                    if !(values[A_Index] == this.PreferenceValues[A_Index])
+                        baseChanged := true
+            }
+            if baseChanged
+                this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?,?)",values[1],values[2],values[3],values[4],values[5],values[6])
+            i := 6
+            for definition in ShortcutDefinitions() {
+                if definition.Id = "reaction"
+                    continue
+                this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=? AND key<>?",values[++i],definition.Id,values[i])
+            }
+        }
         return version
     }
     ApplyLibrary(plan) {

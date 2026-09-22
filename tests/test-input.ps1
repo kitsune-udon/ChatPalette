@@ -1,4 +1,5 @@
-﻿. (Join-Path $PSScriptRoot 'support.ps1')
+﻿# Test-Session: Headless
+. (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
  . (Join-Path $release 'src\browser\input_target.ps1')
 if (!(Get-Command Test-ElementWindow -ErrorAction SilentlyContinue)) { throw 'Standalone input target lacks window validation' }

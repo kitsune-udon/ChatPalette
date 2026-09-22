@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Headless
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 . "$release\src\browser\browser_worker.ps1" -Library

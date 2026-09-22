@@ -17,13 +17,13 @@ LoadSettings(path) {
     return OpenSettingsRepository(path).Load()
 }
 SaveSettings(state,path) {
-    OpenSettingsRepository(path).Save(state,true,true)
+    OpenSettingsRepository(path).SaveAll(state)
 }
-SaveLibrarySettings(state,path) {
-    OpenSettingsRepository(path).Save(state,true,false)
+SaveLibrarySettings(library,inputProfileId,path) {
+    OpenSettingsRepository(path).SaveLibrary(library,inputProfileId)
 }
 SaveSettingsPreferences(state,path) {
-    OpenSettingsRepository(path).Save(state,false)
+    OpenSettingsRepository(path).SavePreferences(state)
 }
 CloseSettingsStore(*) {
     global ActiveSettingsRepository
@@ -38,12 +38,12 @@ CreateSettingsDatabase(path) {
         throw Error("設定の保存先フォルダーがありません。")
     legacy := directory "\settings.ini"
     state := ReadLegacySettings(legacy)
-    if !ValidReactionKey(state.ReactionShortcut)
+    if !ValidLegacyReactionKey(state.ReactionShortcut)
         state.ReactionShortcut := ReactionDefaults.Shortcut
     temporary := path ".creating-" NewRecordId(), store := 0
     try {
         store := SettingsRepository(temporary,true)
-        store.Save(state,true,true)
+        store.SaveAll(state)
         store.CheckIntegrity()
         VerifySettingsMigration(state,store.Load())
         store.Close(), store := 0
@@ -59,12 +59,16 @@ CreateSettingsDatabase(path) {
     }
 }
 VerifySettingsMigration(expected,actual) {
-    if expected.Profiles.Length != actual.Profiles.Length || expected.InputProfileIndex != actual.InputProfileIndex
+    if expected.Profiles.Length != actual.Profiles.Length || expected.InputProfileId != actual.InputProfileId
         throw Error("配信者の移行結果が一致しません。")
     for key in ["AutoMode","DefaultReactionKind","DefaultReactionCount","DefaultReactionIntervalMs","ReactionShortcut"] {
         if !(expected.%key% == actual.%key%)
             throw Error("共通設定の移行結果が一致しません。")
     }
+    expectedKeys := PreferenceShortcutMap(expected), actualKeys := PreferenceShortcutMap(actual)
+    for action,key in expectedKeys
+        if !(actualKeys[action] == key)
+            throw Error("ショートカットの移行結果が一致しません。")
     VerifyMigratedItems(expected.SharedDanmakuItems,actual.SharedDanmakuItems)
     for i, profile in expected.Profiles {
         other := actual.Profiles[i]

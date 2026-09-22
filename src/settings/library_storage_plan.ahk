@@ -23,24 +23,9 @@ BuildLibraryStoragePlan(state, previous, force := false) {
             scope.Rows := old.Rows
             scope.TextBytes := old.TextBytes
         } else {
-            delta := !force && old ? TryLibraryStorageDelta(profile.Items,old) : 0
-            if delta {
-                scope.Rows := delta.Rows, scope.TextBytes := delta.TextBytes
-                scope.Changed := delta.Changed, scope.Deleted := delta.Deleted
-            } else {
-                scope.Rows := BuildItemStorageRows(profile.Items,old ? old.Rows : Map(),force)
-                scope.TextBytes := 0, scope.Changed := [], scope.Deleted := []
-                for itemId, row in scope.Rows {
-                    scope.TextBytes += StorageRowBytes(row)
-                    if !old || !old.Rows.Has(itemId) || !SameStoredItem(row,old.Rows[itemId])
-                        scope.Changed.Push(itemId)
-                }
-                if old {
-                    for itemId in old.Rows
-                        if !scope.Rows.Has(itemId)
-                            scope.Deleted.Push(itemId)
-                }
-            }
+            delta := BuildScopeStorageDelta(profile.Items,old,force)
+            scope.Rows := delta.Rows, scope.TextBytes := delta.TextBytes
+            scope.Changed := delta.Changed, scope.Deleted := delta.Deleted
             touched.Push(scope.Id)
         }
         total += scope.Rows.Count
@@ -54,7 +39,57 @@ BuildLibraryStoragePlan(state, previous, force := false) {
     ; Cross-scope ID uniqueness is checked by the database PRIMARY KEY.
     return {Scopes:scopes,Touched:touched}
 }
-BuildItemStorageRows(items, previous, force := false) {
+; The same reconciliation handles edits, insertions, deletions, moves and undo.
+BuildScopeStorageDelta(items, old, force := false) {
+    first := 1, end := items.Length, oldEnd := old ? old.Items.Length : 0
+    if old && !force {
+        commonEnd := Min(end,oldEnd)
+        while first <= commonEnd && items[first] = old.Items[first]
+            first++
+        while end >= first && oldEnd >= first && items[end] = old.Items[oldEnd]
+            end--, oldEnd--
+    }
+    previous := Map(), previous.CaseSense := "On", changedItems := []
+    if old {
+        Loop Max(0,oldEnd-first+1) {
+            id := old.Items[first+A_Index-1].Id
+            previous[id] := old.Rows[id]
+        }
+    }
+    Loop Max(0,end-first+1) {
+        item := items[first+A_Index-1]
+        if old && item.HasOwnProp("Id") && old.Rows.Has(item.Id) && !previous.Has(item.Id)
+            throw Error("弾幕の識別子が重複しています。")
+        changedItems.Push(item)
+    }
+    preceding := old && first > 1 ? old.Rows[old.Items[first-1].Id].Position : 0
+    boundary := old && oldEnd < old.Items.Length ? old.Rows[old.Items[oldEnd+1].Id].Position : 0
+    updated := BuildItemStorageRows(changedItems,previous,force,preceding,boundary)
+    if !updated {
+        previous := old.Rows
+        updated := BuildItemStorageRows(items,previous,force)
+    }
+    result := {Rows:old ? old.Rows.Clone() : Map(), TextBytes:old && !force ? old.TextBytes : 0, Changed:[], Deleted:[]}
+    if !old
+        result.Rows.CaseSense := "On"
+    for id, row in previous {
+        if !force
+            result.TextBytes -= StorageRowBytes(row)
+        if !updated.Has(id) {
+            result.Rows.Delete(id)
+            result.Deleted.Push(id)
+        }
+    }
+    for id, row in updated {
+        result.Rows[id] := row
+        result.TextBytes += StorageRowBytes(row)
+        if !previous.Has(id) || !SameStoredItem(row,previous[id])
+            result.Changed.Push(id)
+    }
+    return result
+}
+
+BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary := 0) {
     rows := Map(), slots := Map(), positions := [], existing := []
     rows.CaseSense := "On"
     for item in items {
@@ -69,15 +104,15 @@ BuildItemStorageRows(items, previous, force := false) {
             ValidateSettingsText(item.Text,"弾幕本文",true)
         }
         slot := ItemSlot(item)
-        if !HasSettingValue([0,1,2],slot) || (slot && slots.Has(slot))
+        if (slot != 0 && slot != 1 && slot != 2) || (slot && slots.Has(slot))
             throw Error("弾幕キーの割当が重複または不正です。")
         if slot
             slots[slot] := true
-        row := {Id:item.Id,Name:item.Name,Text:item.Text,Slot:slot,Position:0,Item:item}
+        row := unchanged ? priorRow : {Id:item.Id,Name:item.Name,Text:item.Text,Slot:slot,Position:0,Item:item}
         rows[item.Id] := row
         if previous.Has(item.Id) {
             positions.Push(previous[item.Id].Position)
-            existing.Push(row)
+            existing.Push(item.Id)
         }
     }
     ; Sorted available ranks preserve gaps on deletion and only swap two ranks on up/down.
@@ -92,33 +127,43 @@ BuildItemStorageRows(items, previous, force := false) {
             ranks .= position "`n"
         sorted := StrSplit(RTrim(Sort(ranks,"N"),"`n"),"`n")
     }
-    for i, row in existing
-        row.Position := Integer(sorted[i])
-    nextRanks := [], following := 0
-    nextRanks.Length := items.Length
-    Loop items.Length {
-        i := items.Length-A_Index+1
-        nextRanks[i] := following
-        if rows[items[i].Id].Position
-            following := rows[items[i].Id].Position
-    }
-    prior := 0, rebalance := false
-    for i, item in items {
+    for i, id in existing
+        SetStorageRowPosition(rows,id,Integer(sorted[i]))
+    ; Existing IDs already follow the requested order; use their next rank directly.
+    prior := preceding, rebalance := false, nextExisting := 1
+    for item in items {
         row := rows[item.Id]
-        if !row.Position {
-            following := nextRanks[i]
-            row.Position := following ? (prior+following)//2 : prior+1024
-            if row.Position <= prior
+        if row.Position
+            nextExisting++
+        else {
+            following := nextExisting <= existing.Length ? rows[existing[nextExisting]].Position : boundary
+            position := following ? (prior+following)//2 : prior+1024
+            row := SetStorageRowPosition(rows,item.Id,position)
+            if position <= prior
                 rebalance := true
         }
         prior := row.Position
     }
+    if rebalance && (preceding || boundary)
+        return 0 ; Expand to the whole scope when the unchanged neighbors leave no rank gap.
     if rebalance {
         for i, item in items
-            rows[item.Id].Position := i*1024
+            SetStorageRowPosition(rows,item.Id,i*1024)
     }
     return rows
 }
 SameStoredItem(a,b) {
     return a.Name == b.Name && a.Text == b.Text && a.Slot = b.Slot && a.Position = b.Position
+}
+; Published storage rows are immutable, just like library items and undo snapshots.
+SetStorageRowPosition(rows, id, position) {
+    row := rows[id]
+    if row.Position != position {
+        row := row.Clone(), row.Position := position
+        rows[id] := row
+    }
+    return row
+}
+StorageRowBytes(row) {
+    return (StrLen(row.Name)+StrLen(row.Text))*2
 }

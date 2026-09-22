@@ -1,8 +1,10 @@
-﻿; Resolve once, then verify the pinned video immediately before writing text.
-ResolveDanmakuInput(shared, itemReference, hwnd, bySlot := false, expectedProfileId := "") {
+﻿; Entry adapters resolve slots/rows to IDs; the common planner only accepts identities.
+ResolveInputContext(scope, hwnd) {
+    if scope != "shared" && scope != "profile"
+        throw Error("不明な弾幕の対象です。")
     if !IsBrowser(hwnd)
-        throw Error("YouTubeのチャット欄かコメント欄をクリックしてから、Ctrl＋Alt＋Qを押してください。")
-    if !shared && AutoMode {
+        throw Error("YouTubeのチャット欄かコメント欄をクリックしてから、" ShortcutKeyLabel(GetShortcutKey("palette")) "を押してください。")
+    if scope = "profile" && AutoMode {
         selected := SelectProfileFromBrowser(hwnd)
         RefreshVisiblePalette()
         if !selected
@@ -14,38 +16,60 @@ ResolveDanmakuInput(shared, itemReference, hwnd, bySlot := false, expectedProfil
             throw Error("YouTubeの動画を確認できませんでした。")
         video := context.Video
     }
-    profile := GetInputProfile()
-    if !shared && (!profile || (expectedProfileId != "" && profile.Id != expectedProfileId))
+    profile := scope = "profile" ? GetInputProfile() : 0
+    if scope = "profile" && !profile
         throw Error("配信者が変わりました。弾幕を選び直してください。")
-    items := shared ? SharedDanmakuItems : profile.Items
-    index := bySlot ? 0 : itemReference
-    if bySlot {
-        for i,item in items
-            if ItemSlot(item) = itemReference {
-                index := i
-                break
-            }
-    }
-    if index < 1 || index > items.Length
-        throw Error(bySlot ? "このキーに弾幕が割り当てられていません。" : "弾幕を選び直してください。")
-    return {Text:items[index].Text, Window:hwnd, Video:video}
+    return {ProfileId:profile ? profile.Id : "", Window:hwnd, Video:video}
 }
-
-
-RequestDanmakuInput(shared, itemReference, hwnd, bySlot := false, fromPalette := false, expectedProfileId := "") {
-    if IsBrowserOperationBusy || ActiveReactionJob || ActiveEditorDialog
+ResolveDanmakuInput(request) {
+    context := ResolveInputContext(request.ProfileId = "" ? "shared" : "profile",request.Window)
+    return context ? PlanDanmakuInput(request,context) : 0
+}
+ResolveShortcutInput(scope, slot, hwnd) {
+    context := ResolveInputContext(scope,hwnd)
+    if !context
+        return 0
+    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},context.ProfileId)
+    for item in items {
+        if ItemSlot(item) = slot
+            return PlanDanmakuInput({ProfileId:context.ProfileId, ItemId:item.Id, Window:hwnd,
+                Origin:"shortcut", ExpectedText:item.Text},context)
+    }
+    throw Error("このキーに弾幕が割り当てられていません。")
+}
+PlanDanmakuInput(request, context) {
+    if context.ProfileId != request.ProfileId
+        throw Error("配信者が変わりました。弾幕を選び直してください。")
+    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},request.ProfileId)
+    for item in items {
+        if item.Id == request.ItemId {
+            if !(item.Text == request.ExpectedText)
+                break
+            return {Text:item.Text, Window:context.Window, Video:context.Video}
+        }
+    }
+    throw Error("弾幕が変更されました。選び直してください。")
+}
+RequestDanmakuInput(request) {
+    RunDanmakuInput(() => ResolveDanmakuInput(request),request.Origin)
+}
+RequestShortcutInput(scope, slot, hwnd) {
+    RunDanmakuInput(() => ResolveShortcutInput(scope,slot,hwnd),"shortcut")
+}
+RunDanmakuInput(resolve, origin) {
+    if !OperationAllowed("input")
         return
-    try plan := ResolveDanmakuInput(shared,itemReference,hwnd,bySlot,expectedProfileId)
+    try plan := resolve.Call()
     catch as failure {
         PaletteHint.Text := failure.Message
         ToolTip(failure.Message)
         SetTimer(() => ToolTip(),-3000)
         return
     }
-    if !plan
+    if !plan || !OperationAllowed("input")
         return
-    if fromPalette
+    if origin = "palette"
         PaletteWindow.Hide()
-    if !DeliverText(plan.Text,plan.Window,plan.Video,fromPalette)
+    if !DeliverText(plan.Text,plan.Window,plan.Video,origin = "palette")
         ShowInputFailure()
 }

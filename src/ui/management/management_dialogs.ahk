@@ -1,10 +1,8 @@
 ﻿; Owned editors and their explicit save/cancel lifetime.
 
 OpenDanmakuEditor(isNew) {
-    if ManagementUpdating
-        return
     global DanmakuEditorWindow
-    if IsBrowserOperationBusy || ActiveReactionJob || DanmakuEditorWindow
+    if !OperationAllowed("edit")
         return
     index := isNew ? 0 : ManagedList.GetNext()
     if !isNew && !index
@@ -13,19 +11,19 @@ OpenDanmakuEditor(isNew) {
     items := GetEditingDanmakuItems(), original := index ? items[index] : {Name:"",Text:"",Slot:0}
     DanmakuEditorWindow := Gui("+Owner" ManagementWindow.Hwnd,"弾幕を" (isNew ? "追加" : "編集"))
     DanmakuEditorWindow.SetFont("s10","Yu Gothic UI")
-    DanmakuEditorWindow.AddText("w420","編集対象：" (EditScopeShared ? "共通の弾幕" : Profiles[EditProfileIndex].Name))
+    DanmakuEditorWindow.AddText("w420","編集対象：" ((editId = "") ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
     DanmakuEditorWindow.AddText(,"弾幕名")
     name := DanmakuEditorWindow.AddEdit("w420",original.Name)
     DanmakuEditorWindow.AddText(,"本文（1行）")
     text := DanmakuEditorWindow.AddEdit("w420",original.Text)
     DanmakuEditorWindow.AddText(,"キーの割当 — 現在の割当を表示")
-    offset := EditScopeShared ? 2 : 0
+    offset := (editId = "") ? 2 : 0
     labels := ["割当なし"], assigned := Map()
     for item in items
         if ItemSlot(item)
             assigned[ItemSlot(item)] := item.Name
     Loop 2
-        labels.Push("Ctrl＋Alt＋" (offset+A_Index) " — " assigned.Get(A_Index,"未割当"))
+        labels.Push(ShortcutKeyLabel(GetShortcutKey((editId = "" ? "shared" : "profile") A_Index)) " — " assigned.Get(A_Index,"未割当"))
     slot := DanmakuEditorWindow.AddDropDownList("w420 Choose" (ItemSlot(original)+1),labels)
     assignmentHint := DanmakuEditorWindow.AddText("w420 r2","")
     slot.OnEvent("Change",UpdateAssignment)
@@ -71,6 +69,7 @@ CloseDanmakuEditor(*) {
     EndEditorDialog()
     editor.Destroy()
     DanmakuEditorWindow := 0
+    RefreshOperationControls()
     if restoreFocus && DllCall("IsWindowVisible", "Ptr", ManagementWindow.Hwnd)
         && DllCall("IsWindowEnabled", "Ptr", ManagementWindow.Hwnd) {
         WinActivate("ahk_id " ManagementWindow.Hwnd)
@@ -79,16 +78,14 @@ CloseDanmakuEditor(*) {
 }
 
 TransferItem(*) {
-    if ManagementUpdating
-        return
     index := ManagedList.GetNext()
-    if !index || IsBrowserOperationBusy || ActiveReactionJob
+    if !index || !OperationAllowed("edit")
         return
     view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕の移動先")
     view.SetFont("s10","Yu Gothic UI")
     editId := GetEditingProfileId(), destinationIds := [], names := []
     view.AddText("w380 r2","移動する弾幕：" GetEditingDanmakuItems()[index].Name)
-    view.AddText("w380 r2","移動元：" (editId = "" ? "共通の弾幕" : Profiles[EditProfileIndex].Name))
+    view.AddText("w380 r2","移動元：" (editId = "" ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
     view.AddText("w380 r2","移動先を選んでください。移動すると元の一覧から外れ、キーの割当も解除されます。")
     if editId != ""
         names.Push("共通の弾幕"), destinationIds.Push("")
@@ -127,42 +124,16 @@ TransferItem(*) {
 }
 
 EditReactionKey(*) {
-    view := Gui("+Owner" ManagementWindow.Hwnd,"リアクションキーの変更")
-    view.SetFont("s10","Yu Gothic UI")
-    view.AddText("w420","欄を選び、Ctrl＋AltまたはCtrl＋Shiftとキーを押してください。")
-    key := view.AddHotkey("w420",ReactionShortcut)
-    status := view.AddText("w420 r2","「保存」で確定します。パレット・弾幕用のキーは指定できません。")
-    view.AddButton("w180","Ctrl＋Alt＋Rを入力").OnEvent("Click",(*) => key.Value := ReactionDefaults.Shortcut)
-    view.AddButton("x+8 w100 Default","保存").OnEvent("Click",Save)
-    view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
-    view.OnEvent("Close",Close),view.OnEvent("Escape",Close)
-    BeginEditorDialog(view,"リアクションキーの編集")
-    PresentWindow(view)
-    Close(*) {
-        EndEditorDialog()
-        view.Destroy()
-    }
-    Save(*) {
-        if IsBrowserOperationBusy || ActiveReactionJob {
-            status.Text := "処理が終わってから保存してください。"
-            return
-        }
-        try SaveReactionDefaults(CreateReactionOptions(DefaultReactionKind,DefaultReactionCount,DefaultReactionIntervalMs,key.Value))
-        catch as failure {
-            status.Text := failure.Message
-            return
-        }
-        RefreshReactionDefaultControls()
-        Close()
-    }
+    return ShowShortcutManager("reaction")
 }
 
+
 OpenChannelLinkDialog(*) {
-    if IsBrowserOperationBusy || ActiveReactionJob || RestoreActiveEditorDialog()
+    if RestoreActiveEditorDialog() || !OperationAllowed("edit")
         return
     ShowManagement(1)
     if !IsBrowser(TargetBrowserHwnd) {
-        SetManagementNotice("YouTubeを最前面にしてCtrl＋Alt＋Qを押し、もう一度チャンネル連携を開いてください。")
+        SetManagementNotice("YouTubeを最前面にして" ShortcutKeyLabel(GetShortcutKey("palette")) "を押し、もう一度チャンネル連携を開いてください。")
         return
     }
     candidate := ResolveBrowserChannel(TargetBrowserHwnd)
@@ -210,7 +181,6 @@ OpenChannelLinkDialog(*) {
             WinActivate("ahk_id " ManagementWindow.Hwnd)
     }
     Save(*) {
-        global EditProfileIndex, EditScopeShared
         try {
             fresh := ResolveBrowserChannel(TargetBrowserHwnd)
             if fresh.State != "ok" || fresh.Channel != candidate.Channel
@@ -223,7 +193,6 @@ OpenChannelLinkDialog(*) {
             status.Text := "連携できませんでした。" failure.Message
             return
         }
-        EditScopeShared := false
         RefreshManagementAfterCommand(result.ProfileId)
         SetManagementNotice("チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。")
         Close()

@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
@@ -22,14 +23,14 @@ try {
     AssertEmpty(Profiles.Length=0 && SharedDanmakuItems.Length=0, "fresh install has no sample data")
     AssertEmpty(!PaletteInsert.Enabled, "empty palette cannot input")
     BuildManagement()
-    AssertEmpty(EditScopeShared && ManagementTarget.Value=1, "empty management starts with shared library")
+    AssertEmpty((GetEditingProfileId() = "") && ManagementTarget.Value=1, "empty management starts with shared library")
     OpenDanmakuEditor(true)
     AssertEmpty(!!DanmakuEditorWindow, "shared editor needs no author")
     CloseDanmakuEditor()
     state := CreateSettingsSnapshot()
     state.Profiles.Push({Id:NewRecordId(),Name:"first",Channel:"",Items:[]})
     CommitLibraryChange(state,"add")
-    AssertEmpty(Profiles.Length=1 && InputProfileIndex=0,"first added author does not steal input selection")
+    AssertEmpty(Profiles.Length=1 && InputProfileId="","first added author does not steal input selection")
     UndoLibraryChange()
     AssertEmpty(Profiles.Length=0,"undo returns to empty state")
     ReloadAppSettings()
@@ -49,6 +50,28 @@ try {
     catch
         rejectedFraction := true
     AssertEmpty(rejectedFraction, "fractional count rejected instead of truncating records")
+    AssertEmpty(AppSourceStatus()="起動時のソースと一致","startup source matches")
+    versionFile := A_ScriptDir "\VERSION", originalVersion := FileRead(versionFile,"RAW")
+    try {
+        FileAppend("test",versionFile)
+        AssertEmpty(AppSourceStatus()="更新あり：再起動で反映","changed source requests restart")
+    } finally {
+        FileDelete(versionFile)
+        FileAppend(originalVersion,versionFile)
+    }
+    AssertEmpty(AppSourceStatus()="起動時のソースと一致","restored source matches")
+    global RestartChecks := 0
+    RuntimePorts.Restart := () => CountRestart()
+    ActiveEditorDialog := {Label:"unsaved editor"}
+    AssertEmpty(!RestartApplication() && !RestartChecks,"unsaved editor blocks restart")
+    ActiveEditorDialog := false, IsBrowserOperationBusy := true
+    AssertEmpty(!RestartApplication() && !RestartChecks,"browser operation blocks restart")
+    IsBrowserOperationBusy := false
+    ActiveReactionJob := CreateReactionJob({Mode:"queued"})
+    AssertEmpty(!RestartApplication() && !RestartChecks,"queued reaction blocks restart")
+    ActiveReactionJob := 0
+    AssertEmpty(RestartApplication() && RestartChecks=1,"idle restart uses the production gate")
+    RuntimePorts.Restart := 0
     diagnostics := BuildDiagnosticReport()
     AssertEmpty(InStr(diagnostics, AppVersion) && !InStr(diagnostics, A_ScriptDir), "diagnostics include version without private path")
     snapshot := ReadDiagnosticSnapshot()
@@ -73,11 +96,20 @@ try {
         if control.Type = "Text" && control.Text = "確認できました"
             foundResult := true
     AssertEmpty(foundResult, "diagnostic refresh replaces displayed result")
+    for operation in [["chat_focus","focused"],["verify_chat","ok"],["reactions_show","hovered"]] {
+        LastBrowserOperation := {Mode:operation[1],State:operation[2],Duration:10}
+        pageDiagnostic := ReadDiagnosticSnapshot()
+        AssertEmpty(pageDiagnostic.ModeCode=operation[1] && pageDiagnostic.StateCode=operation[2],"page actions have readable diagnostic labels")
+    }
     FileAppend("PASS: empty initialization, UI, shared library, profile lifecycle and reload`n", "*")
     ExitApp(0)
 } catch as failure {
     FileAppend("FAIL: " failure.Message " at " failure.File ":" failure.Line "`n", "*")
     ExitApp(1)
+}
+CountRestart() {
+    global RestartChecks
+    RestartChecks++
 }
 AssertEmpty(condition, message) {
     if !condition
@@ -87,11 +119,4 @@ SameFileBytes(left,right) {
     return left.Size=right.Size && (!left.Size || DllCall("msvcrt\memcmp","Ptr",left,"Ptr",right,"UPtr",left.Size,"CDecl Int")=0)
 }
 '@
-$source = [IO.File]::ReadAllText((Join-Path $release 'main.ahk'))
-$source = $source.Replace('OnExit(StopBrowserWorker)', $tests)
-[IO.File]::WriteAllText((Join-Path $fixture 'main.ahk'), $source, [Text.UTF8Encoding]::new($true))
-$run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + (Join-Path $fixture 'main.ahk') + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $fixture 'stdout.txt') -RedirectStandardError (Join-Path $fixture 'stderr.txt')
-$null = $run.Handle
-if (!$run.WaitForExit(15000)) { Stop-Process -Id $run.Id; throw 'Empty settings test timed out' }
-Get-Content -LiteralPath (Join-Path $fixture 'stdout.txt'),(Join-Path $fixture 'stderr.txt')
-if ($run.ExitCode -ne 0) { throw "Empty settings test failed: $fixture" }
+Invoke-AppTest -Runtime $release -Body $tests

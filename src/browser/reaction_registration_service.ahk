@@ -1,15 +1,14 @@
 ﻿; The application owns durable registration. Workers receive only committed snapshots.
 PrepareReactionRegistrations(hwnd) {
-    global RegistrationWorkerPid
     EnsureWorkerRunning()
-    if IsSet(RegistrationWorkerPid) && RegistrationWorkerPid = WorkerProcessId
+    if IsWorkerRegistrationCurrent()
         return true
     reply := SendWorkerRequest(hwnd,"reaction_configure","","Payload=" LoadReactionRegistrationSnapshot() "`n")
     if reply.State != "configured" {
         StopBrowserWorker()
         return false
     }
-    RegistrationWorkerPid := WorkerProcessId
+    MarkWorkerRegistrationCurrent()
     return true
 }
 SaveCapturedReactionRegistration(reply) {
@@ -26,7 +25,7 @@ SaveCapturedReactionRegistration(reply) {
 SynchronizeCapturedReactionRegistration(hwnd,reply) {
     if reply.State != "saved"
         return reply
-    global RegistrationWorkerPid := 0
+    InvalidateWorkerRegistration()
     try {
         if !PrepareReactionRegistrations(hwnd)
             throw Error("登録情報の同期に失敗しました。")

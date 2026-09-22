@@ -1,4 +1,4 @@
-﻿param([string]$AutoHotkeyPath)
+﻿param([string]$AutoHotkeyPath, [ValidateSet("All","Headless","Desktop")][string]$Group="All", [switch]$List)
 $ErrorActionPreference = 'Stop'
 $base = Join-Path $PSScriptRoot '.tmp'
 $runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N'))
@@ -9,12 +9,27 @@ $oldAhk = $env:AHK_EXE
 try {
     $env:HELPER_TEST_ROOT = $runRoot
     if ($AutoHotkeyPath) { $env:AHK_EXE = $AutoHotkeyPath }
-    foreach ($name in @('test-app.ps1','test-sqlite.ps1','test-registration-storage.ps1','test-palette-return.ps1','test-timing.ps1','test-review-regressions.ps1','test-viewports.ps1','test-ui-transactions.ps1','test-list-visibility.ps1','test-empty-settings.ps1','test-settings-integrity.ps1','test-management-order.ps1','test-performance.ps1','test-search-scheduling.ps1','test-reactions.ps1','test-cache.ps1','test-input.ps1','test-storage.ps1','test-startup.ps1','test-release.ps1')) {
-        & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot $name)
-        if ($LASTEXITCODE -ne 0) { throw "Failed: $name" }
+    $tests = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'test-*.ps1' -File | Sort-Object Name)
+    $tests = @($tests | Where-Object {
+        $header = Get-Content -LiteralPath $_.FullName -TotalCount 1
+        if ($header -notmatch '^# Test-Session: (Headless|Desktop)$') { throw "Missing test session classification: $($_.Name)" }
+        $Group -eq 'All' -or $Matches[1] -eq $Group
+    })
+    if ($List) { $tests.Name; $completed=$true; return }
+    if (!$tests.Count) { throw 'No test scripts found' }
+    foreach ($test in $tests) {
+        $name = $test.Name
+        Write-Output "RUN: $name"
+        $out = Join-Path $runRoot ($name + '.stdout.txt')
+        $err = Join-Path $runRoot ($name + '.stderr.txt')
+        $process = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $name) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+        $null = $process.Handle
+        if (!$process.WaitForExit(120000)) { $process.Kill(); throw "Timed out: $name" }
+        Get-Content -LiteralPath $out,$err
+        if ($process.ExitCode -ne 0) { throw "Failed: $name" }
     }
     $completed = $true
-    Write-Output 'PASS: all tests; no real messages or reactions sent.'
+    Write-Output "PASS: $Group / $($tests.Count) test groups; no real messages or reactions sent."
 } finally {
     $env:HELPER_TEST_ROOT = $oldRoot
     $env:AHK_EXE = $oldAhk

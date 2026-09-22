@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference='Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release=New-TestRuntime
 $tests=@'
@@ -114,10 +115,4 @@ AssertVisible(control,view) {
         && NumGet(rect,8,"Int")<=NumGet(client,8,"Int") && NumGet(rect,12,"Int")<=NumGet(client,12,"Int"),"focused control is reachable in small view: " control.Text)
 }
 '@
-$main=[IO.File]::ReadAllText((Join-Path $release 'main.ahk')).Replace('OnExit(StopBrowserWorker)',$tests)
-[IO.File]::WriteAllText((Join-Path $release 'main.ahk'),$main,[Text.UTF8Encoding]::new($true))
-$run=Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"'+(Join-Path $release 'main.ahk')+'"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $release 'out.txt') -RedirectStandardError (Join-Path $release 'error.txt')
-$null=$run.Handle
-if(!$run.WaitForExit(15000)){$run.Kill();throw 'Viewport test timeout'}
-Get-Content (Join-Path $release 'out.txt'),(Join-Path $release 'error.txt')
-if($run.ExitCode -ne 0){throw 'Viewport test failed'}
+Invoke-AppTest -Runtime $release -Body $tests

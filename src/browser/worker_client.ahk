@@ -1,7 +1,24 @@
-﻿; Worker lifecycle and framed request/reply transport. No GUI dependencies.
+﻿; Only worker_client mutates the transport lifetime.
+class WorkerState {
+    static ProcessId := 0
+    static PipeHandle := 0
+    static SignalHandle := 0
+    static Sequence := 0
+    static RequestActive := false
+    static RegistrationPid := 0
+}
+IsWorkerRegistrationCurrent() {
+    return WorkerState.RegistrationPid = WorkerState.ProcessId && WorkerState.ProcessId != 0
+}
+MarkWorkerRegistrationCurrent() {
+    WorkerState.RegistrationPid := WorkerState.ProcessId
+}
+InvalidateWorkerRegistration() {
+    WorkerState.RegistrationPid := 0
+}
+; Worker lifecycle and framed request/reply transport. No GUI dependencies.
 EnsureWorkerRunning() {
-    global WorkerProcessId, WorkerPipeHandle, WorkerSignalHandle
-    if WorkerProcessId && ProcessExist(WorkerProcessId) && WorkerPipeHandle
+    if WorkerState.ProcessId && ProcessExist(WorkerState.ProcessId) && WorkerState.PipeHandle
         return
     StopBrowserWorker()
     guid := Buffer(16)
@@ -11,17 +28,17 @@ EnsureWorkerRunning() {
     DllCall("ole32\StringFromGUID2", "Ptr", guid, "Ptr", guidText, "Int", 39)
     pipeName := "youtube-helper-" StrGet(guidText, "UTF-16")
     ; Duplex byte pipe, nonblocking server, local clients only, one instance.
-    WorkerPipeHandle := DllCall("CreateNamedPipeW", "Str", "\\.\pipe\" pipeName,
+    WorkerState.PipeHandle := DllCall("CreateNamedPipeW", "Str", "\\.\pipe\" pipeName,
         "UInt", 0x80003, "UInt", 9, "UInt", 1, "UInt", 65536,
         "UInt", 65536, "UInt", 0, "Ptr", 0, "Ptr")
-    if WorkerPipeHandle = -1 || !WorkerPipeHandle {
-        WorkerPipeHandle := 0
+    if WorkerState.PipeHandle = -1 || !WorkerState.PipeHandle {
+        WorkerState.PipeHandle := 0
         throw Error("名前付きパイプを作成できませんでした。")
     }
-    DllCall("ConnectNamedPipe", "Ptr", WorkerPipeHandle, "Ptr", 0)
-    WorkerSignalHandle := DllCall("CreateEventW", "Ptr", 0, "Int", false, "Int", false,
+    DllCall("ConnectNamedPipe", "Ptr", WorkerState.PipeHandle, "Ptr", 0)
+    WorkerState.SignalHandle := DllCall("CreateEventW", "Ptr", 0, "Int", false, "Int", false,
         "Str", pipeName "-ready", "Ptr")
-    if !WorkerSignalHandle
+    if !WorkerState.SignalHandle
         throw Error("補助プロセスの通知を準備できませんでした。")
     q := Chr(34)
     command := q A_WinDir "\System32\WindowsPowerShell\v1.0\powershell.exe" q
@@ -29,29 +46,29 @@ EnsureWorkerRunning() {
         . q A_ScriptDir "\src\browser\browser_worker.ps1" q
         . " -PipeName " q pipeName q
         . " -ParentProcessId " DllCall("GetCurrentProcessId")
-    Run(command, A_ScriptDir, "Hide", &WorkerProcessId)
+    Run(command, A_ScriptDir, "Hide", &pid := 0)
+    WorkerState.ProcessId := pid
 }
 
 StopBrowserWorker(*) {
-    global RegistrationWorkerPid := 0
-    global WorkerProcessId, WorkerPipeHandle, WorkerSignalHandle
-    if WorkerPipeHandle {
-        DllCall("CloseHandle", "Ptr", WorkerPipeHandle)
-        WorkerPipeHandle := 0
+    WorkerState.RegistrationPid := 0
+    if WorkerState.PipeHandle {
+        DllCall("CloseHandle", "Ptr", WorkerState.PipeHandle)
+        WorkerState.PipeHandle := 0
     }
-    if IsSet(WorkerSignalHandle) && WorkerSignalHandle {
-        DllCall("CloseHandle", "Ptr", WorkerSignalHandle)
-        WorkerSignalHandle := 0
+    if WorkerState.SignalHandle {
+        DllCall("CloseHandle", "Ptr", WorkerState.SignalHandle)
+        WorkerState.SignalHandle := 0
     }
-    if WorkerProcessId {
+    if WorkerState.ProcessId {
         try {
             ; Let an idle reader observe EOF first, then terminate a stuck worker.
-            if ProcessWaitClose(WorkerProcessId, 0.25) {
-                ProcessClose(WorkerProcessId)
-                ProcessWaitClose(WorkerProcessId, 2)
+            if ProcessWaitClose(WorkerState.ProcessId, 0.25) {
+                ProcessClose(WorkerState.ProcessId)
+                ProcessWaitClose(WorkerState.ProcessId, 2)
             }
         }
-        WorkerProcessId := 0
+        WorkerState.ProcessId := 0
     }
 }
 
@@ -63,7 +80,7 @@ WritePipeRequest(text) {
     NumPut("UInt", size, frame)
     StrPut(text, frame.Ptr + 4, size + 1, "UTF-8")
     written := 0
-    if !DllCall("WriteFile", "Ptr", WorkerPipeHandle, "Ptr", frame, "UInt", size + 4,
+    if !DllCall("WriteFile", "Ptr", WorkerState.PipeHandle, "Ptr", frame, "UInt", size + 4,
         "UInt*", &written, "Ptr", 0) || written != size + 4
         throw Error("パイプへの送信に失敗しました。")
 }
@@ -71,7 +88,7 @@ WritePipeRequest(text) {
 ReadPipeResponse() {
     header := Buffer(4, 0)
     available := 0, copied := 0
-    if !DllCall("PeekNamedPipe", "Ptr", WorkerPipeHandle, "Ptr", header, "UInt", 4,
+    if !DllCall("PeekNamedPipe", "Ptr", WorkerState.PipeHandle, "Ptr", header, "UInt", 4,
         "UInt*", &copied, "UInt*", &available, "Ptr", 0)
         throw Error("パイプが切断されました。")
     if copied < 4
@@ -83,33 +100,36 @@ ReadPipeResponse() {
         return ""
     frame := Buffer(size + 4)
     received := 0
-    if !DllCall("ReadFile", "Ptr", WorkerPipeHandle, "Ptr", frame, "UInt", frame.Size,
+    if !DllCall("ReadFile", "Ptr", WorkerState.PipeHandle, "Ptr", frame, "UInt", frame.Size,
         "UInt*", &received, "Ptr", 0) || received != frame.Size
         throw Error("応答を受信できませんでした。")
     return StrGet(frame.Ptr + 4, size, "UTF-8")
 }
 
 SendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
-    global WorkerRequestActive, WorkerRequestSequence
-    unavailable := {State: mode = "reaction_send" ? "unknown" : "unavailable", Author: "", Channel: "", Video: ""}
-    if WorkerRequestActive
+    return RuntimePorts.WorkerRequest ? RuntimePorts.WorkerRequest.Call(hwnd,mode,expectedVideo,extra) : NativeSendWorkerRequest(hwnd,mode,expectedVideo,extra)
+}
+
+NativeSendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
+    unavailable := {State: (mode = "reaction_send" || mode = "chat_focus" || mode = "reactions_show") ? "unknown" : "unavailable", Author: "", Channel: "", Video: ""}
+    if WorkerState.RequestActive
         return unavailable
-    WorkerRequestActive := true
+    WorkerState.RequestActive := true
     try {
         EnsureWorkerRunning()
-        seq := ++WorkerRequestSequence
+        seq := ++WorkerState.Sequence
         request := "Seq=" seq "`nWindow=" hwnd "`nMode=" mode "`nVideo=" expectedVideo "`n"
             . extra
         start := A_TickCount
-        limit := (mode = "verify" || mode = "verify_input") ? 2500 : 8000
+        limit := (mode = "verify" || mode = "verify_input" || mode = "verify_chat") ? 2500 : 8000
         sent := false
         while A_TickCount - start < limit {
-            if !WorkerProcessId || !ProcessExist(WorkerProcessId)
+            if !WorkerState.ProcessId || !ProcessExist(WorkerState.ProcessId)
                 break
             if !sent {
                 clientPID := 0
-                if DllCall("GetNamedPipeClientProcessId", "Ptr", WorkerPipeHandle, "UInt*", &clientPID) {
-                    if clientPID != WorkerProcessId
+                if DllCall("GetNamedPipeClientProcessId", "Ptr", WorkerState.PipeHandle, "UInt*", &clientPID) {
+                    if clientPID != WorkerState.ProcessId
                         throw Error("接続元が補助プロセスと一致しません。")
                     WritePipeRequest(request)
                     sent := true
@@ -137,14 +157,14 @@ SendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
         StopBrowserWorker()
         return unavailable
     } finally {
-        WorkerRequestActive := false
+        WorkerState.RequestActive := false
     }
 }
 
 WaitWorkerSignal(timeout) {
     ; Wake on worker notification or input; pump AHK timers/hotkeys without a sleep.
     handles := Buffer(A_PtrSize)
-    NumPut("Ptr", WorkerSignalHandle, handles)
+    NumPut("Ptr", WorkerState.SignalHandle, handles)
     result := DllCall("MsgWaitForMultipleObjectsEx", "UInt", 1, "Ptr", handles,
         "UInt", timeout, "UInt", 0x4FF, "UInt", 4, "UInt")
     if result = 0xFFFFFFFF

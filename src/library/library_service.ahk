@@ -17,48 +17,42 @@ CommitLibraryChange(library, label) {
     return CommitLibraryDraft({Profiles:CopyProfiles(library.Profiles), SharedDanmakuItems:CopyItems(library.SharedDanmakuItems)},label)
 }
 
+; Persist first, then publish from one place for commands, undo, and reload.
+PublishLibraryState(state) {
+    global Profiles := state.Profiles, SharedDanmakuItems := state.SharedDanmakuItems
+    global InputProfileId := state.InputProfileId
+    RebuildChannelIndex()
+}
+SaveLibraryDraft(library) {
+    state := {Profiles:library.Profiles, SharedDanmakuItems:library.SharedDanmakuItems, InputProfileId:InputProfileId}
+    if !FindProfileById(state.Profiles,state.InputProfileId)
+        state.InputProfileId := ""
+    SaveLibrarySettings(library,state.InputProfileId,SettingsDatabasePath)
+    PublishLibraryState(state)
+}
 ; Internal command drafts transfer ownership after successful persistence.
 CommitLibraryDraft(library, label) {
-    global Profiles, SharedDanmakuItems, InputProfileIndex
     previousCritical := A_IsCritical
     Critical("On")
     try {
-        activeId := GetInputProfile() ? GetInputProfile().Id : ""
         before := {Profiles:Profiles, Items:SharedDanmakuItems, Label:label}
-        ; Only library data comes from the caller. Other preferences are always current.
-        state := CreateSettingsSnapshot(false)
-        state.Profiles := library.Profiles
-        state.SharedDanmakuItems := library.SharedDanmakuItems
-        state.InputProfileIndex := FindProfileIndexById(state.Profiles, activeId)
-        SaveLibrarySettings(state, SettingsDatabasePath)
-        Profiles := state.Profiles, SharedDanmakuItems := state.SharedDanmakuItems
-        InputProfileIndex := state.InputProfileIndex
+        SaveLibraryDraft(library)
         LibraryHistory.Push(before)
         if LibraryHistory.Length > 30
             LibraryHistory.RemoveAt(1)
-        RebuildChannelIndex()
     } finally {
         Critical(previousCritical)
     }
 }
-
 UndoLibraryCommand() {
-    global Profiles, SharedDanmakuItems, InputProfileIndex
     previousCritical := A_IsCritical
     Critical("On")
     try {
         if !LibraryHistory.Length
             return ""
         previous := LibraryHistory[-1]
-        state := CreateSettingsSnapshot(false)
-        state.Profiles := previous.Profiles, state.SharedDanmakuItems := previous.Items
-        activeId := GetInputProfile() ? GetInputProfile().Id : ""
-        state.InputProfileIndex := FindProfileIndexById(state.Profiles, activeId)
-        SaveLibrarySettings(state, SettingsDatabasePath)
-        Profiles := state.Profiles, SharedDanmakuItems := state.SharedDanmakuItems
-        InputProfileIndex := state.InputProfileIndex
+        SaveLibraryDraft({Profiles:previous.Profiles,SharedDanmakuItems:previous.Items})
         LibraryHistory.Pop()
-        RebuildChannelIndex()
         return previous.Label
     } finally {
         Critical(previousCritical)
@@ -175,4 +169,25 @@ EditLibraryItems(library, profileId) {
         throw Error("対象の配信者が見つかりません。選び直してください。")
     library.Profiles[index].Items := library.Profiles[index].Items.Clone()
     return library.Profiles[index].Items
+}
+
+SaveShortcutItemAssignments(profileId,firstId,secondId) {
+    if firstId != "" && firstId == secondId
+        throw Error("同じ弾幕を2つのキーへ割り当てることはできません。")
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        library := CreateLibraryDraft(), items := EditLibraryItems(library,profileId), found := Map("",true)
+        for i,item in items {
+            found[item.Id] := true
+            slot := item.Id == firstId ? 1 : (item.Id == secondId ? 2 : 0)
+            if ItemSlot(item) != slot {
+                replacement := item.Clone(), replacement.Slot := slot
+                items[i] := replacement
+            }
+        }
+        if !found.Has(firstId) || !found.Has(secondId)
+            throw Error("対象の弾幕が変更されました。画面を開き直してください。")
+        CommitLibraryDraft(library,"ショートカットの弾幕割当")
+    } finally Critical(previousCritical)
 }

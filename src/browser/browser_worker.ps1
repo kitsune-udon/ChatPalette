@@ -6,6 +6,7 @@ $script:AddressBarCache = @{}
 . (Join-Path $PSScriptRoot 'reaction_automation.ps1')
 . (Join-Path $PSScriptRoot 'video_metadata.ps1')
 . (Join-Path $PSScriptRoot 'input_target.ps1')
+. (Join-Path $PSScriptRoot 'page_actions.ps1')
 
 function Get-VideoId([string]$Address) {
     if ($Address -notmatch '^https?://') { $Address = 'https://' + $Address }
@@ -77,6 +78,7 @@ function Read-BrowserVideoId([long]$WindowHandle) {
 }
 
 function Invoke-WorkerRequest($Request) {
+    if ($Request.Mode -in @('chat_focus','reactions_show')) { return Invoke-PageAction $Request }
     if ($Request.Mode -eq 'reaction_configure') {
         Set-ReactionRegistrationSnapshot $Request.Payload
         return @{Seq=$Request.Seq; Window=$Request.Window; State='configured'}
@@ -90,16 +92,16 @@ function Invoke-WorkerRequest($Request) {
         return Invoke-ReactionRequest $Request
     }
     $reply = @{ Seq = $Request.Seq; State = 'unavailable'; Author = ''; Channel = ''; Video = ''; Window = $Request.Window }
-    if ($Request.Mode -notin @('browser_context', 'resolve', 'verify', 'verify_input')) { return $reply }
+    if ($Request.Mode -notin @('browser_context', 'resolve', 'verify', 'verify_input', 'verify_chat')) { return $reply }
     $video = Read-BrowserVideoId ([long]$Request.Window)
     $reply.Video = $video
     if (-not $video) { return $reply }
     if ($Request.Mode -eq 'browser_context') { $reply.State = 'ok'; return $reply }
-    if ($Request.Mode -eq 'verify_input') {
+    if ($Request.Mode -in @('verify_input','verify_chat')) {
         if ($Request.Video -and $video -cne $Request.Video) { $reply.State = 'changed'; return $reply }
         $verifiedElement = $null
         $kind = Get-FocusedYouTubeInput ([long]$Request.Window) ([ref]$verifiedElement)
-        if (!$kind) { $reply.State = 'wrong_input'; return $reply }
+        if (!$kind -or ($Request.Mode -eq 'verify_chat' -and $kind -ne 'chat')) { $reply.State = 'wrong_input'; return $reply }
         if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
         if (!(Test-FocusedInputIdentity $verifiedElement ([long]$Request.Window))) { $reply.State = 'wrong_input'; return $reply }
         $reply.State = 'ok'

@@ -1,4 +1,5 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
@@ -13,7 +14,7 @@ try {
         id := scope="shared" ? "" : ExecuteProfileCommand("add","","fixture").ProfileId
         Loop 60
             ExecuteDanmakuCommand("add",id,0,{Name:Format("row{:02}",A_Index),Text:"text" A_Index,Slot:A_Index=40 ? 1 : 0})
-        EditScopeShared := id="", EditProfileIndex := FindProfileIndexById(Profiles,id)
+        EditingProfileId := id
         ShowManagement(1)
         SelectManagedRow(40)
         SendMessage(0x1013,34,0,ManagedList.Hwnd) ; Ensure the upper neighbour is visible too.
@@ -59,11 +60,4 @@ AssertReorder(condition,message) {
         throw Error(message)
 }
 '@
-$source = [IO.File]::ReadAllText((Join-Path $release 'main.ahk'))
-$source = $source.Replace('OnExit(StopBrowserWorker)', $tests)
-[IO.File]::WriteAllText((Join-Path $fixture 'main.ahk'), $source, [Text.UTF8Encoding]::new($true))
-$run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + (Join-Path $fixture 'main.ahk') + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $fixture 'stdout.txt') -RedirectStandardError (Join-Path $fixture 'stderr.txt')
-$null = $run.Handle
-if (!$run.WaitForExit(15000)) { Stop-Process -Id $run.Id; throw 'Management reorder test timed out' }
-Get-Content -LiteralPath (Join-Path $fixture 'stdout.txt'),(Join-Path $fixture 'stderr.txt')
-if ($run.ExitCode -ne 0) { throw "Management reorder test failed: $fixture" }
+Invoke-AppTest -Runtime $release -Body $tests

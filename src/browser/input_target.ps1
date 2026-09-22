@@ -44,13 +44,7 @@ function Get-FocusedYouTubeInput([long]$WindowHandle, [ref]$VerifiedElement) {
     $VerifiedElement.Value = $null
     $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
     if ($null -eq $focused -or !(Test-ElementWindow $focused $WindowHandle)) { return '' }
-    $records = @()
-    $element = $focused
-    for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
-        $records += Get-InputRecord $element ($depth -eq 0)
-        if ($element.Current.ControlType.Id -eq 50030 -or $element.Current.NativeWindowHandle -eq $WindowHandle) { break }
-        $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
-    }
+    $records = @(Get-YouTubeInputRecords $focused $WindowHandle)
     $kind = Get-YouTubeInputKind $records
     if (!$kind) { return '' }
     $latest = [System.Windows.Automation.AutomationElement]::FocusedElement
@@ -69,4 +63,15 @@ function Test-FocusedInputIdentity($VerifiedElement, [long]$WindowHandle) {
     if (!(Test-ElementWindow $latest $WindowHandle)) { return $false }
     $record = Get-InputRecord $latest $true
     return $record.Focused -and $record.Enabled -and !$record.Hidden -and $record.Editable
+}
+
+function Get-YouTubeInputRecords($Target, [long]$WindowHandle) {
+    $records = @()
+    $element = $Target
+    for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
+        $records += Get-InputRecord $element ($depth -eq 0)
+        if ($element.Current.ControlType.Id -eq 50030 -or $element.Current.NativeWindowHandle -eq $WindowHandle) { break }
+        $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
+    }
+    return $records
 }

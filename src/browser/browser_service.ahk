@@ -1,5 +1,9 @@
 ﻿; Browser request orchestration, including UI wait lifetime. Transport stays in worker_client.
 IsBrowser(hwnd) {
+    return RuntimePorts.BrowserIdentity ? RuntimePorts.BrowserIdentity.Call(hwnd) : NativeIsBrowser(hwnd)
+}
+
+NativeIsBrowser(hwnd) {
     if !hwnd || !WinExist("ahk_id " hwnd)
         return false
     name := StrLower(WinGetProcessName("ahk_id " hwnd))
@@ -7,6 +11,10 @@ IsBrowser(hwnd) {
 }
 
 RequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
+    return RuntimePorts.BrowserRequest ? RuntimePorts.BrowserRequest.Call(hwnd,mode,expectedVideo,extra) : NativeRequestBrowserOperation(hwnd,mode,expectedVideo,extra)
+}
+
+NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
     global IsBrowserOperationBusy, LastBrowserOperation
     if IsBrowserOperationBusy || !IsBrowser(hwnd)
         return {State: mode = "reaction_send" ? "unknown" : "unavailable", Author: "", Channel: "", Video: ""}
@@ -36,10 +44,18 @@ RequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "
 }
 
 ResolveBrowserChannel(hwnd) {
+    return RuntimePorts.ResolveChannel ? RuntimePorts.ResolveChannel.Call(hwnd) : NativeResolveBrowserChannel(hwnd)
+}
+
+NativeResolveBrowserChannel(hwnd) {
     return RequestBrowserOperation(hwnd)
 }
 
 VerifyInputTarget(hwnd, expectedVideo) {
+    return RuntimePorts.VerifyInput ? RuntimePorts.VerifyInput.Call(hwnd,expectedVideo) : NativeVerifyInputTarget(hwnd,expectedVideo)
+}
+
+NativeVerifyInputTarget(hwnd, expectedVideo) {
     if !WinActive("ahk_id " hwnd)
         return false
     result := RequestBrowserOperation(hwnd, "verify_input", expectedVideo)

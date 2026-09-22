@@ -47,17 +47,17 @@ SelectProfileFromBrowser(hwnd) {
         SetDetectionStatus("動画を確認できません。YouTubeの入力欄から開き直してください。")
         return false
     }
-    found := ChannelIndex.Get(DetectedChannel.Channel, 0)
-    if found <= 0 {
-        SetDetectionStatus(found = -1 ? "チャンネル連携が重複しています。管理画面で確認してください。" : "チャンネル未連携：" DetectedChannel.Author "。「チャンネル連携」から登録できます。")
+    found := ChannelIndex.Get(DetectedChannel.Channel, "")
+    if found = "" {
+        SetDetectionStatus(ChannelIndex.Has(DetectedChannel.Channel) ? "チャンネル連携が重複しています。管理画面で確認してください。" : "チャンネル未連携：" DetectedChannel.Author "。「チャンネル連携」から登録できます。")
         return false
     }
-    try SaveInputProfileSelection(found)
+    try SaveInputProfileId(found)
     catch as failure {
         SetDetectionStatus("配信者を選択できませんでした。" failure.Message)
         return false
     }
-    SetDetectionStatus("自動：" DetectedChannel.Author " → " Profiles[found].Name)
+    SetDetectionStatus("自動：" DetectedChannel.Author " → " FindProfileById(Profiles,found).Name)
     return true
 }
 
@@ -80,20 +80,19 @@ RefreshVisiblePalette() {
 
 ; Editing starts from the selected palette item, without changing the input profile.
 OpenPaletteLibrary(*) {
-    if PaletteUpdating
+    if PaletteRefresh.Active
         return
     if FlushPendingPaletteSearch()
         return
-    global EditScopeShared, EditProfileIndex
-    if IsBrowserOperationBusy || ActiveReactionJob || RestoreActiveEditorDialog()
+    global EditingProfileId
+    if RestoreActiveEditorDialog() || !OperationAllowed("edit")
         return
     if DanmakuEditorWindow {
         PresentWindow(DanmakuEditorWindow)
         return
     }
     target := GetPaletteLibraryTarget()
-    EditProfileIndex := FindProfileIndexById(Profiles,target.ProfileId)
-    EditScopeShared := EditProfileIndex = 0
+    EditingProfileId := target.ProfileId
     ShowManagement(1)
     if target.Index
         SelectManagedRow(target.Index)
@@ -104,7 +103,7 @@ GetPaletteLibraryTarget() {
     if selected && selected <= PaletteRows.Length {
         row := PaletteRows[selected]
         index := row.Shared ? 0 : FindProfileIndexById(Profiles,row.ProfileId)
-        if row.Shared || (index && HasPaletteInputProfile() && index = InputProfileIndex) {
+        if row.Shared || (index && HasPaletteInputProfile() && row.ProfileId = InputProfileId) {
             items := row.Shared ? SharedDanmakuItems : Profiles[index].Items
             if PaletteItemMatches(row,items)
                 return {ProfileId:row.Shared ? "" : row.ProfileId, Index:row.Index}
@@ -118,5 +117,5 @@ GetPaletteLibraryTarget() {
 ; Display and editing use the same validity rule; manual selection survives window loss.
 HasPaletteInputProfile() {
     return !!GetInputProfile() && (!AutoMode || (IsBrowser(TargetBrowserHwnd)
-        && DetectedChannel.State = "ok" && ChannelIndex.Get(DetectedChannel.Channel,0) = InputProfileIndex))
+        && DetectedChannel.State = "ok" && ChannelIndex.Get(DetectedChannel.Channel,"") = InputProfileId))
 }

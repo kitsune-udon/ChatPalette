@@ -1,14 +1,19 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿# Test-Session: Desktop
+$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
-$path = Join-Path $release 'src\browser\browser_service.ahk'
-$s = [IO.File]::ReadAllText($path).Replace('IsBrowser(hwnd) {','UnusedIsBrowser(hwnd) {').Replace('ResolveBrowserChannel(hwnd) {','UnusedResolveBrowserChannel(hwnd) {')
-[IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
 $path = Join-Path $release 'src\ui\palette\palette_view.ahk'
 $s = [IO.File]::ReadAllText($path).Replace('RefreshPalette() {',"RefreshPalette() {`r`n    global PerfRefreshCount := IsSet(PerfRefreshCount) ? PerfRefreshCount+1 : 1")
+[IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
+$path = Join-Path $release 'src\ui\ui_runtime.ahk'
+$s = [IO.File]::ReadAllText($path)
+$s = $s.Replace('        control.Enabled := value', '        control.Enabled := value, PerfNativeWrites++')
+$s = $s.Replace('        control.Text := text', '        control.Text := text, PerfNativeWrites++')
+$s = $s.Replace('SetControlEnabled(control, value) {', "SetControlEnabled(control, value) {`r`n    global PerfNativeWrites")
+$s = $s.Replace('SetControlText(control, text) {', "SetControlText(control, text) {`r`n    global PerfNativeWrites")
 [IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
@@ -75,7 +80,7 @@ try {
     AutoMode := false, SharedDanmakuItems := []
     Loop 60
         SharedDanmakuItems.Push({Id:NewRecordId(),Name:"row" A_Index,Text:"text" A_Index,Slot:0})
-    EditScopeShared := true
+    EditingProfileId := ""
     ShowManagement(1)
     SelectManagedRow(40)
     top := SendMessage(0x1027,0,0,ManagedList.Hwnd)
@@ -100,6 +105,17 @@ try {
     prior := PerfRefreshCount
     RefreshPaletteForTarget()
     CheckPerf(PerfRefreshCount=prior+1,"detection renders exactly once")
+    RefreshOperationControls()
+    writes := PerfNativeWrites
+    Loop 20
+        RefreshOperationControls()
+    CheckPerf(PerfNativeWrites=writes,"unchanged palette controls and preview perform zero native property writes")
+    IsBrowserOperationBusy := true
+    RefreshOperationControls()
+    CheckPerf(PerfNativeWrites>writes && !PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"changed state still updates native controls")
+    IsBrowserOperationBusy := false
+    RefreshOperationControls()
+    CheckPerf(PaletteStart.Enabled && ManagementItemButtons[1].Enabled,"controls recover after busy state")
     FileAppend("PASS: " PerfChecks " performance regression checks`n","*")
     ExitApp()
 } catch as failure {
@@ -124,18 +140,12 @@ CheckPerf(condition,message) {
     if !condition
         throw Error(message)
 }
-IsBrowser(hwnd) {
+FixtureIsBrowser(hwnd) {
     return hwnd=123
 }
-ResolveBrowserChannel(hwnd) {
+FixtureResolveChannel(hwnd) {
     return {State:"ok",Channel:"/channel/a",Author:"A",Video:"fixture0000"}
 }
 '@
-$source = [IO.File]::ReadAllText((Join-Path $release 'main.ahk'))
-$source = $source.Replace('OnExit(StopBrowserWorker)', $tests)
-[IO.File]::WriteAllText((Join-Path $fixture 'main.ahk'), $source, [Text.UTF8Encoding]::new($true))
-$run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + (Join-Path $fixture 'main.ahk') + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $fixture 'stdout.txt') -RedirectStandardError (Join-Path $fixture 'stderr.txt')
-$null = $run.Handle
-if (!$run.WaitForExit(15000)) { Stop-Process -Id $run.Id; throw 'Performance test timed out' }
-Get-Content -LiteralPath (Join-Path $fixture 'stdout.txt'),(Join-Path $fixture 'stderr.txt')
-if ($run.ExitCode -ne 0) { throw "Performance test failed: $fixture" }
+Invoke-AppTest -Runtime $release -Body $tests -Setup 'global PerfNativeWrites := 0
+RuntimePorts.BrowserIdentity := FixtureIsBrowser, RuntimePorts.ResolveChannel := FixtureResolveChannel'
