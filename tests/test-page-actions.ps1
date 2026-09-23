@@ -34,6 +34,7 @@ $noPoint | Add-Member ScriptMethod TryGetClickablePoint { param($point) return $
 Assert ($null -eq (Get-ReactionHoverPoint $noPoint 123)) 'unsupported hover point rejected without moving pointer'
 $script:target=[System.Windows.Automation.AutomationElement]::RootElement
 $script:video='abcdefghijk'; $script:foreground=$true; $script:belongs=$true
+$script:pendingFocus=0; $script:changeAfterFocus=$false; $script:blurAfterFocus=$false; $script:identity=$true
 $script:focusCalls=0; $script:hoverCalls=0; $script:missing=$false; $script:kind='chat'; $script:throwOnFocus=$false
 $script:finalVideo='abcdefghijk'; $script:reads=0; $script:loseDuringPoint=$false
 function Read-BrowserVideoId($WindowHandle) { $script:reads++; if ($script:reads -gt 1) { return $script:finalVideo }; return $script:video }
@@ -45,9 +46,17 @@ function Get-YouTubeInputRecords($Target,$WindowHandle) {
     return @(@{Id='input';Name='';Class='yt-live-chat-text-input-field-renderer';Type=50004;Focused=$false;Enabled=$true;Hidden=$false;Editable=$true},$document)
 }
 function Get-ReactionLauncherRecords($Target,$WindowHandle) { return @((Launcher 'reaction-control-panel'),$chat,$document) }
-function Focus-ChatElement($Target) { $script:focusCalls++; if ($script:throwOnFocus) { throw 'focus result unknown' } }
-function Get-FocusedYouTubeInput($WindowHandle,[ref]$VerifiedElement) { $VerifiedElement.Value=$script:target; return $script:kind }
-function Test-FocusedInputIdentity($Element,$WindowHandle) { return $script:belongs }
+function Focus-ChatElement($Target) {
+    $script:focusCalls++
+    if ($script:throwOnFocus) { throw 'focus result unknown' }
+    if ($script:changeAfterFocus) { $script:finalVideo='ABCDEFGHIJK' }
+    if ($script:blurAfterFocus) { $script:foreground=$false }
+}
+function Get-FocusedYouTubeInput($WindowHandle,[ref]$VerifiedElement) {
+    if ($script:pendingFocus -gt 0) { $script:pendingFocus--; return '' }
+    $VerifiedElement.Value=$script:target; return $script:kind
+}
+function Test-FocusedInputIdentity($Element,$WindowHandle) { return $script:belongs -and $script:identity }
 function Get-ReactionHoverPoint($Target,$WindowHandle) {
     if ($script:loseDuringPoint) { $script:foreground=$false }
     return @{X=20;Y=30}
@@ -62,7 +71,7 @@ function Request($Mode,$Expected='') {
 Assert ((Request 'chat_focus').State -eq 'focused' -and $script:focusCalls -eq 1) 'chat focus succeeds once'
 Assert ((Request 'reactions_show').State -eq 'hovered' -and $script:hoverCalls -eq 1) 'launcher hovered without registration or invocation'
 $script:missing=$true
-Assert ((Request 'chat_focus').State -eq 'wrong_input') 'missing or ambiguous chat rejected'
+Assert ((Request 'chat_focus').State -eq 'chat_missing') 'missing chat is distinguished from focus failure'
 Assert ((Request 'reactions_show').State -eq 'unsupported') 'missing or ambiguous launcher rejected'
 $script:missing=$false; $script:foreground=$false
 foreach ($mode in @('chat_focus','reactions_show')) { Assert ((Request $mode).State -eq 'wrong_window') 'background browser rejected' }
@@ -85,4 +94,18 @@ $script:belongs=$false
 Assert ((Request 'verify_chat' 'abcdefghijk').State -eq 'wrong_input') 'clear validation requires exact focused identity'
 $script:belongs=$true; $script:throwOnFocus=$true
 Assert ((Request 'chat_focus').State -eq 'unknown' -and $script:focusCalls -eq 2) 'uncertain focus never retries'
+$script:throwOnFocus=$false; $script:pendingFocus=2
+$before=$script:focusCalls
+Assert ((Request 'chat_focus').State -eq 'focused' -and $script:focusCalls -eq ($before+1)) 'delayed focus observation succeeds with one focus operation'
+$script:kind=''
+$before=$script:focusCalls
+Assert ((Request 'chat_focus').State -eq 'focus_failed' -and $script:focusCalls -eq ($before+1)) 'unconfirmed focus stops after bounded observation without retrying action'
+$script:kind='comment'
+Assert ((Request 'chat_focus').State -eq 'focus_failed') 'different editable field is never accepted'
+$script:kind='chat'; $script:identity=$false
+Assert ((Request 'chat_focus').State -eq 'focus_failed') 'identity lost during final URL read rejected'
+$script:identity=$true; $script:changeAfterFocus=$true
+Assert ((Request 'chat_focus').State -eq 'changed') 'navigation after focus is rejected'
+$script:changeAfterFocus=$false; $script:finalVideo='abcdefghijk'; $script:blurAfterFocus=$true
+Assert ((Request 'chat_focus').State -eq 'wrong_window') 'foreground loss after focus is rejected'
 Write-Output "PASS: $script:checks page action checks; no real typing, pointer movement or reactions."

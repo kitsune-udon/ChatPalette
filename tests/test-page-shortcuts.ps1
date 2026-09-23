@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'app-fixture.ps1')
 Invoke-AppFixture -Body @'
     global PageCalls := [], ClearCalls := 0, PageForeground := true, PageFailure := "", PageSwitch := false
+    global FocusFailure := ""
     RuntimePorts.BrowserRequest := PageRequest
     RuntimePorts.Foreground := (hwnd) => PageForeground && hwnd=123
     RuntimePorts.ClearChat := () => CountClear()
@@ -18,6 +19,13 @@ Invoke-AppFixture -Body @'
         Assert(!RunPageAction("chat_clear",123) && ClearCalls=1,"failed verification prevents deletion: " state)
     }
     Assert(LastBrowserOperation.Mode="chat_clear" && LastBrowserOperation.Stage="クリア前の確認","failure retains action and failed stage")
+    PageFailure := ""
+    for state,message in Map("chat_missing","見つかりません","chat_ambiguous","複数","focus_failed","フォーカス移動") {
+        FocusFailure := state, PageCalls := []
+        Assert(!RunPageAction("chat_clear",123) && ClearCalls=1 && PageCalls.Length=1,"failed focus never clears: " state)
+        Assert(InStr(PaletteHint.Text,message) && LastBrowserOperation.State=state,"failure reason is retained in hint and diagnostics")
+    }
+    FocusFailure := ""
     PageFailure := "", PageSwitch := true
     Assert(!RunPageAction("chat_clear",123) && ClearCalls=1,"foreground change during verification prevents deletion")
     PageSwitch := false, PageForeground := true, PageCalls := []
@@ -45,7 +53,7 @@ PageRequest(hwnd,mode,video,extra) {
     global PageForeground
     PageCalls.Push({Mode:mode,Video:video})
     if mode="chat_focus"
-        return {State:"focused",Video:"abcdefghijk"}
+        return {State:FocusFailure!="" ? FocusFailure : "focused",Video:"abcdefghijk"}
     if mode="verify_chat" {
         if PageSwitch
             PageForeground := false

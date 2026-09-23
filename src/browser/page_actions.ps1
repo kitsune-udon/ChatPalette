@@ -1,5 +1,6 @@
 ﻿# Page actions never invoke a reaction button or send a chat message.
-function Find-ChatInput([long]$WindowHandle) {
+function Find-ChatInput([long]$WindowHandle, [ref]$Failure = ([ref]$null)) {
+    if ($null -ne $Failure) { $Failure.Value = 'chat_missing' }
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
     $focusable = [System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::IsKeyboardFocusableProperty, $true)
@@ -13,6 +14,10 @@ function Find-ChatInput([long]$WindowHandle) {
         foreach ($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
             try {
                 if (!(Test-ElementWindow $element $WindowHandle)) { continue }
+                # Links can also expose TextPattern; discard non-editable elements
+                # before walking their ancestry through a long live chat.
+                $field = Get-InputRecord $element $true
+                if (!$field.Enabled -or $field.Hidden -or !$field.Editable) { continue }
                 $records = @(Get-YouTubeInputRecords $element $WindowHandle)
                 # Discovery checks the same editable/chat ancestry before moving focus.
                 $records[0].Focused = $true
@@ -21,6 +26,7 @@ function Find-ChatInput([long]$WindowHandle) {
         }
     )
     if ($matches.Count -eq 1) { return $matches[0] }
+    if ($matches.Count -gt 1 -and $null -ne $Failure) { $Failure.Value = 'chat_ambiguous' }
     return $null
 }
 
@@ -83,6 +89,28 @@ function Find-ReactionLauncher([long]$WindowHandle) {
     return $null
 }
 function Focus-ChatElement($Target) { $Target.SetFocus() }
+# SetFocus is issued once. Chromium can publish keyboard focus asynchronously;
+# only observation is retried, and success must refer to the exact target.
+function Wait-ChatFocus($Target, [long]$WindowHandle, [string]$Video) {
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        if (!(Test-ReactionForeground $WindowHandle)) { return 'wrong_window' }
+        $verified = $null
+        $kind = Get-FocusedYouTubeInput $WindowHandle ([ref]$verified)
+        if ($kind -eq 'chat' -and [System.Windows.Automation.Automation]::Compare($Target,$verified)) {
+            if ((Read-BrowserVideoId $WindowHandle) -cne $Video) { return 'changed' }
+            if (!(Test-ReactionForeground $WindowHandle)) { return 'wrong_window' }
+            if (Test-FocusedInputIdentity $Target $WindowHandle) { return 'focused' }
+            return 'focus_failed'
+        }
+        # Do not override a user moving to another identified input.
+        if ($kind) { return 'focus_failed' }
+        if ($timer.ElapsedMilliseconds -ge 350) { break }
+        Start-Sleep -Milliseconds 25
+    } while ($true)
+    if ((Read-BrowserVideoId $WindowHandle) -cne $Video) { return 'changed' }
+    return 'focus_failed'
+}
 function Get-ReactionHoverPoint($Target, [long]$WindowHandle) {
     Add-Type -AssemblyName WindowsBase
     $point = [System.Windows.Point]::new(0,0)
@@ -111,20 +139,18 @@ function Invoke-PageAction($Request) {
         if (!$video) { return $reply }
         if ($Request.Video -and $Request.Video -cne $video) { $reply.State='changed'; return $reply }
         if ($Request.Mode -eq 'chat_focus') {
-            $target = Find-ChatInput $window
-            if ($null -eq $target) { $reply.State='wrong_input'; return $reply }
+            $failure = 'chat_missing'
+            $target = Find-ChatInput $window ([ref]$failure)
+            if ($null -eq $target) { $reply.State=$failure; return $reply }
             if (!(Test-ElementWindow $target $window)) { $reply.State='wrong_window'; return $reply }
             $records = @(Get-YouTubeInputRecords $target $window)
             $records[0].Focused=$true
-            if ((Get-YouTubeInputKind $records) -ne 'chat') { $reply.State='wrong_input'; return $reply }
+            if ((Get-YouTubeInputKind $records) -ne 'chat') { $reply.State='chat_missing'; return $reply }
             if ((Read-BrowserVideoId $window) -cne $video) { $reply.State='changed'; return $reply }
             if (!(Test-ReactionForeground $window)) { $reply.State='wrong_window'; return $reply }
             $reply.State='unknown'
             Focus-ChatElement $target
-            $verified = $null
-            if ((Get-FocusedYouTubeInput $window ([ref]$verified)) -ne 'chat' -or
-                ![System.Windows.Automation.Automation]::Compare($target,$verified)) { $reply.State='wrong_input'; return $reply }
-            $reply.State='focused'
+            $reply.State = Wait-ChatFocus $target $window $video
             return $reply
         }
         if ($Request.Mode -ne 'reactions_show') { return $reply }
