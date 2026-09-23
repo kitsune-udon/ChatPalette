@@ -17,7 +17,6 @@ OpenDanmakuEditor(isNew) {
     DanmakuEditorWindow.AddText(,"本文（1行）")
     text := DanmakuEditorWindow.AddEdit("w420",original.Text)
     DanmakuEditorWindow.AddText(,"キーの割当 — 現在の割当を表示")
-    offset := (editId = "") ? 2 : 0
     labels := ["割当なし"], assigned := Map()
     for item in items
         if ItemSlot(item)
@@ -34,6 +33,7 @@ OpenDanmakuEditor(isNew) {
             ? "保存すると「" assigned[chosen] "」のキーを解除し、この弾幕へ付け替えます。"
             : chosen ? "保存すると、この弾幕にキーを割り当てます。" : "キーでは呼び出さず、パレットから選んで使います。"
     }
+    DanmakuEditorWindow.IsDirty := (*) => !(name.Value == original.Name) || !(text.Value == original.Text) || slot.Value-1 != ItemSlot(original)
     status := DanmakuEditorWindow.AddText("w420 r2","")
     DanmakuEditorWindow.AddButton("w120 Default","保存").OnEvent("Click",Save)
     DanmakuEditorWindow.AddButton("x+8 w120","キャンセル").OnEvent("Click",CloseDanmakuEditor)
@@ -51,7 +51,7 @@ OpenDanmakuEditor(isNew) {
             status.Text := "保存できませんでした。" failure.Message
             return
         }
-        CloseDanmakuEditor()
+        FinishDanmakuEditor()
         RefreshManagementAfterCommand(editId)
         SelectManagedRow(result.Index)
         if WinActive("ahk_id " ManagementWindow.Hwnd)
@@ -60,6 +60,13 @@ OpenDanmakuEditor(isNew) {
 }
 
 CloseDanmakuEditor(*) {
+    if !DanmakuEditorWindow
+        return
+    if DanmakuEditorWindow.IsDirty.Call() && !ConfirmEditorDiscard(DanmakuEditorWindow)
+        return
+    FinishDanmakuEditor()
+}
+FinishDanmakuEditor() {
     global DanmakuEditorWindow
     if !DanmakuEditorWindow
         return
@@ -123,9 +130,7 @@ TransferItem(*) {
     }
 }
 
-EditReactionKey(*) {
-    return ShowShortcutManager("reaction")
-}
+
 
 
 OpenChannelLinkDialog(*) {

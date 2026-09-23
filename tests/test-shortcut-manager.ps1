@@ -9,7 +9,7 @@ Invoke-AppFixture -Body @'
     keys := saved.Clone()
     keys["palette"] := "^+q", keys["chat_focus"] := "^!q", keys["stop"] := "^+s"
     SaveShortcutMap(keys)
-    persisted := PreferenceShortcutMap(LoadSettings(SettingsDatabasePath))
+    persisted := LoadSettings(SettingsDatabasePath).ShortcutKeys.Clone()
     Assert(GetShortcutKey("palette")="^+q" && persisted["chat_focus"]="^!q" && persisted["stop"]="^+s","all action keys persist including formerly reserved keys and stop")
     keys["chat_clear"] := "!^Q"
     rejected := false
@@ -52,9 +52,9 @@ Invoke-AppFixture -Body @'
     Assert(panel.SaveButton.Enabled && panel.List.GetText(panel.List.GetNext(),4)="変更あり","native key change stages draft without apply button")
     panel.Save.Call()
     Assert(panel.First.Value=1 && panel.ItemsSaveButton.Enabled && !panel.SaveButton.Enabled,"key save preserves unsaved item choice and independent dirty state")
-    Assert(CanonicalReactionKey(GetShortcutKey("chat_focus"))="^+f" && InStr(panel.Status.Text,"保存し"),"screen saves selected action")
+    Assert(CanonicalShortcutKey(GetShortcutKey("chat_focus"))="^+f" && InStr(panel.Status.Text,"保存し"),"screen saves selected action")
     panel.Stage.Call("^!q"), panel.Save.Call()
-    Assert(CanonicalReactionKey(GetShortcutKey("chat_focus"))="^+f" && InStr(panel.Status.Text,"重複"),"screen retains valid setting on conflict")
+    Assert(CanonicalShortcutKey(GetShortcutKey("chat_focus"))="^+f" && InStr(panel.Status.Text,"重複"),"screen retains valid setting on conflict")
     Assert(!panel.SaveButton.Enabled && panel.List.GetText(1,4)="重複","conflicting rows are marked and save disabled")
     panel.SaveItems.Call()
     Assert(!panel.ItemsSaveButton.Enabled && InStr(panel.Status.Text,"重複"),"item save leaves key draft untouched")
@@ -72,7 +72,7 @@ Invoke-AppFixture -Body @'
     AllowDiscard := true
     Assert(ItemSlot(SharedDanmakuItems[-1])=0,"screen can unassign an item without deleting it")
     panel.Reset.Call(), panel.Close.Call()
-    Assert(CanonicalReactionKey(GetShortcutKey("chat_focus"))="^+f" && !ActiveEditorDialog,"closing unsaved defaults does not apply them")
+    Assert(CanonicalShortcutKey(GetShortcutKey("chat_focus"))="^+f" && !ActiveEditorDialog,"closing unsaved defaults does not apply them")
     panel := ShowShortcutManager()
     panel.Close.Call()
     Assert(!ActiveEditorDialog && DiscardCalls=2,"unchanged editor closes without confirmation")
@@ -91,7 +91,7 @@ Invoke-AppFixture -Body @'
     old.Exec("DROP TABLE shortcut_bindings; PRAGMA user_version=2")
     old.Run("UPDATE preferences SET reaction_key=? WHERE id=1","^!f"), old.Close()
     migrated := LoadSettings(SettingsDatabasePath)
-    Assert(migrated.ReactionShortcut="^!f" && migrated.ShortcutKeys["chat_focus"]="" && migrated.ShortcutKeys["chat_clear"]="^!c","v2 migration preserves saved reaction priority without duplicate live keys")
+    Assert(migrated.ShortcutKeys["reaction"]="^!f" && migrated.ShortcutKeys["chat_focus"]="" && migrated.ShortcutKeys["chat_clear"]="^!c","v2 migration preserves saved reaction priority without duplicate live keys")
     Assert(OpenSettingsRepository(SettingsDatabasePath).Db.Scalar("PRAGMA user_version")="3","migration publishes v3")
 '@ -Helpers @'
 GetDlgCtrlID(hwnd) {

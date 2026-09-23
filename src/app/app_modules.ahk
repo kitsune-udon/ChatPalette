@@ -40,3 +40,4 @@
 #Include %A_ScriptDir%\src\app\operation_policy.ahk
 #Include %A_ScriptDir%\src\ui\library_presentation.ahk
 #Include %A_ScriptDir%\src\ui\refresh_cycle.ahk
+#Include %A_ScriptDir%\src\ui\browser_feedback.ahk

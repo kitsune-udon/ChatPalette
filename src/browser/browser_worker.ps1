@@ -146,31 +146,34 @@ function Write-PipeReply($Writer, $Reply) {
     $Writer.Flush()
 }
 
-if ($Library) { return }
-$pipe = $null
-$signal = $null
-try {
-    $parent = Get-Process -Id $ParentProcessId
-    if ($parent.HasExited) { exit 1 }
-    $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [IO.Pipes.PipeDirection]::InOut)
-    $pipe.Connect(5000)
-    $signal = [Threading.EventWaitHandle]::OpenExisting($PipeName + '-ready')
-    $null = $signal.Set()
-    $reader = [IO.BinaryReader]::new($pipe, [Text.Encoding]::UTF8, $true)
-    $writer = [IO.BinaryWriter]::new($pipe, [Text.Encoding]::UTF8, $true)
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    while ($true) {
-        # Blocks without polling. Closing/crashing the AHK server breaks the read.
-        $request = Read-PipeRequest $reader
-        try { $reply = Invoke-WorkerRequest $request }
-        catch { $reply = @{ Seq = $request.Seq; Window = $request.Window; State = 'unavailable' } }
-        Write-PipeReply $writer $reply
+function Start-BrowserWorker([string]$PipeName, [int]$ParentProcessId,
+    [scriptblock]$Handler = { param($request) Invoke-WorkerRequest $request }) {
+    $pipe = $null
+    $signal = $null
+    try {
+        $parent = Get-Process -Id $ParentProcessId
+        if ($parent.HasExited) { exit 1 }
+        $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [IO.Pipes.PipeDirection]::InOut)
+        $pipe.Connect(5000)
+        $signal = [Threading.EventWaitHandle]::OpenExisting($PipeName + '-ready')
         $null = $signal.Set()
+        $reader = [IO.BinaryReader]::new($pipe, [Text.Encoding]::UTF8, $true)
+        $writer = [IO.BinaryWriter]::new($pipe, [Text.Encoding]::UTF8, $true)
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        while ($true) {
+            # Blocks without polling. Closing/crashing the AHK server breaks the read.
+            $request = Read-PipeRequest $reader
+            try { $reply = & $Handler $request }
+            catch { $reply = @{ Seq = $request.Seq; Window = $request.Window; State = 'unavailable' } }
+            Write-PipeReply $writer $reply
+            $null = $signal.Set()
+        }
+    } catch { exit 1 }
+    finally {
+        if ($null -ne $pipe) { $pipe.Dispose() }
+        if ($null -ne $signal) { $signal.Dispose() }
     }
-} catch { exit 1 }
-finally {
-    if ($null -ne $pipe) { $pipe.Dispose() }
-    if ($null -ne $signal) { $signal.Dispose() }
 }
+if (!$Library) { Start-BrowserWorker $PipeName $ParentProcessId }

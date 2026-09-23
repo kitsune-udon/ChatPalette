@@ -1,16 +1,6 @@
 ﻿; Pure key validation and normalization; no UI or hotkey registration.
-ValidLegacyReactionKey(key) {
-    return !IsLegacyReservedReactionKey(key) && RegExMatch(key, "^[!^+]*(?:[A-Za-z0-9]|F(?:[1-9]|1[0-2]))$")
-        && InStr(key, "^") && (InStr(key, "!") || InStr(key, "+"))
-}
-
-CanonicalReactionKey(key) {
+CanonicalShortcutKey(key) {
     return (InStr(key,"^") ? "^" : "") (InStr(key,"!") ? "!" : "") (InStr(key,"+") ? "+" : "") StrLower(RegExReplace(key,"[!^+]",""))
-}
-
-IsLegacyReservedReactionKey(key) {
-    plain := StrLower(RegExReplace(key, "[!^+]", ""))
-    return InStr(key, "^") && InStr(key, "!") && !InStr(key, "+") && (plain = "1" || plain = "2" || plain = "3" || plain = "4" || plain = "q")
 }
 
 ShortcutDefinitions() {
@@ -27,22 +17,10 @@ ShortcutDefinitions() {
         {Id:"stop",Label:"リアクションを停止",Default:"Esc",Scope:"実行・待機中"}]
     return definitions
 }
-DefaultShortcutKeys(reactionKey := "") {
+DefaultShortcutKeys() {
     keys := Map()
-    for definition in ShortcutDefinitions() {
-        if definition.Id = "reaction"
-            continue
-        key := definition.Default
-        ; Old versions gave a saved reaction key priority over page actions.
-        if reactionKey != "" && CanonicalReactionKey(key) = CanonicalReactionKey(reactionKey)
-            key := ""
-        keys[definition.Id] := key
-    }
-    return keys
-}
-PreferenceShortcutMap(state) {
-    keys := state.HasOwnProp("ShortcutKeys") ? state.ShortcutKeys.Clone() : DefaultShortcutKeys(state.ReactionShortcut)
-    keys["reaction"] := state.ReactionShortcut
+    for definition in ShortcutDefinitions()
+        keys[definition.Id] := definition.Default
     return keys
 }
 ValidShortcutKey(key) {
@@ -65,7 +43,7 @@ ValidateShortcutMap(keys) {
         }
         if !(definition.Id = "stop" && StrLower(key) = "esc") && !ValidShortcutKey(key)
             throw Error("「" definition.Label "」はCtrl＋Alt、またはCtrl＋Shiftを含むキーを指定してください。")
-        canonical := CanonicalReactionKey(key)
+        canonical := CanonicalShortcutKey(key)
         if used.Has(canonical)
             throw Error("「" used[canonical] "」と「" definition.Label "」のキーが重複しています。")
         used[canonical] := definition.Label

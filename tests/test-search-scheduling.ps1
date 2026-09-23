@@ -5,11 +5,11 @@ $release = New-TestRuntime
 
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
-$path = Join-Path $release 'src\ui\palette\palette_view.ahk'
-$s = [IO.File]::ReadAllText($path).Replace('RefreshPaletteItems() {',"RefreshPaletteItems() {`r`n    global SearchRenders := IsSet(SearchRenders) ? SearchRenders+1 : 1")
-[IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
+Copy-Item (Join-Path $PSScriptRoot 'fixtures\ui-message-probe.ahk') (Join-Path $release 'ui-message-probe.ahk')
 $tests = @'
 OnExit(StopBrowserWorker)
+#Include %A_ScriptDir%\ui-message-probe.ahk
+UiMessageProbe.Start()
 global ChoiceChecks := 0
 try {
     AutoMode := false
@@ -43,42 +43,42 @@ try {
         SharedDanmakuItems.Push({Id:"search-" A_Index,Name:"row" A_Index,Text:"text" A_Index,Slot:0})
     RefreshPalette()
     PresentWindow(PaletteWindow,"w560 h740",ResizePalette,false)
-    before := SearchRenders
+    before := UiMessageProbe.Renders
     for query in ["t","te","text49"] {
         PaletteSearch.Value := query
         QueuePaletteSearch()
         Sleep(15)
     }
-    CheckChoice(PaletteSearchPending && !PaletteInsert.Enabled && SearchRenders=before,"rapid changes defer full rebuild")
+    CheckChoice(PaletteSearchPending && !PaletteInsert.Enabled && UiMessageProbe.Renders=before,"rapid changes defer full rebuild")
     Sleep(160)
-    CheckChoice(!PaletteSearchPending && SearchRenders=before+1 && PaletteRows.Length=11,"one rebuild uses final query")
+    CheckChoice(!PaletteSearchPending && UiMessageProbe.Renders=before+1 && PaletteRows.Length=11,"one rebuild uses final query")
     PaletteSearch.Value := "text50"
     QueuePaletteSearch()
-    before := SearchRenders
+    before := UiMessageProbe.Renders
     InsertPaletteItem()
-    CheckChoice(SearchRenders=before+1 && !PaletteSearchPending && !DanmakuEditorWindow,"pending insertion only refreshes")
+    CheckChoice(UiMessageProbe.Renders=before+1 && !PaletteSearchPending && !DanmakuEditorWindow,"pending insertion only refreshes")
     PaletteSearch.Value := "text40"
     QueuePaletteSearch()
-    before := SearchRenders
+    before := UiMessageProbe.Renders
     OpenPaletteLibrary()
-    CheckChoice(SearchRenders=before+1 && !PaletteSearchPending,"pending editing only refreshes")
+    CheckChoice(UiMessageProbe.Renders=before+1 && !PaletteSearchPending,"pending editing only refreshes")
     QueuePaletteSearch()
-    before := SearchRenders
+    before := UiMessageProbe.Renders
     HidePalette()
     Sleep(160)
-    CheckChoice(!PaletteSearchPending && SearchRenders=before,"closing cancels pending work")
+    CheckChoice(!PaletteSearchPending && UiMessageProbe.Renders=before,"closing cancels pending work")
     ReturnToPalette()
     CheckChoice(PaletteRows.Length=11,"return reflects current query")
     QueuePaletteSearch()
     RefreshPalette()
-    before := SearchRenders
+    before := UiMessageProbe.Renders
     Sleep(160)
-    CheckChoice(SearchRenders=before && !PaletteSearchPending,"explicit refresh cancels duplicate timer")
+    CheckChoice(UiMessageProbe.Renders=before && !PaletteSearchPending,"explicit refresh cancels duplicate timer")
     SharedDanmakuItems := [{Id:"search-small",Name:"small",Text:"small",Slot:0}]
     PaletteSearch.Value := "small"
-    before := SearchRenders
+    before := UiMessageProbe.Renders
     QueuePaletteSearch()
-    CheckChoice(SearchRenders=before+1 && !PaletteSearchPending && PaletteRows.Length=1,"small library searches immediately")
+    CheckChoice(UiMessageProbe.Renders=before+1 && !PaletteSearchPending && PaletteRows.Length=1,"small library searches immediately")
     FileAppend("PASS: " ChoiceChecks " choice cache and search scheduling checks`n","*")
     ExitApp()
 } catch as failure {

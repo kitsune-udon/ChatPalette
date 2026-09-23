@@ -6,24 +6,16 @@ StopHotkeyContext(*) {
     return !!ActiveReactionJob
 }
 GetShortcutKey(action) {
-    return action = "reaction" ? ReactionShortcut : ShortcutKeys[action]
+    return ShortcutKeys[action]
 }
 CurrentShortcutMap() {
-    keys := ShortcutKeys.Clone(), keys["reaction"] := ReactionShortcut
-    return keys
+    return ShortcutKeys.Clone()
 }
-SetReactionHotkey(key, enabled := true) {
-    return RuntimePorts.ReactionKey ? RuntimePorts.ReactionKey.Call(key,enabled) : NativeSetReactionHotkey(key,enabled)
-}
-NativeSetReactionHotkey(key, enabled := true) {
-    NativeSetShortcutHotkey("reaction",key,enabled)
-}
+
 SetShortcutHotkey(action,key,enabled := true) {
     if key = ""
         return
-    if action = "reaction"
-        return SetReactionHotkey(key,enabled)
-    if !ApplicationShortcutsInstalled && action != "stop"
+    if !ApplicationShortcutsInstalled
         return
     return RuntimePorts.ShortcutKey ? RuntimePorts.ShortcutKey.Call(action,key,enabled) : NativeSetShortcutHotkey(action,key,enabled)
 }
@@ -57,7 +49,6 @@ HandleConfiguredShortcut(action,*) {
 }
 SaveShortcutMap(keys) {
     ValidateShortcutMap(keys)
-    state := CreatePreferences(), state.ReactionShortcut := keys["reaction"], state.ShortcutKeys := keys.Clone()
-    state.ShortcutKeys.Delete("reaction")
-    ApplyReactionDefaults(state)
+    state := CreatePreferences(), state.ShortcutKeys := keys.Clone()
+    ApplyPreferences(state)
 }

@@ -231,7 +231,7 @@ ResetPaletteSession(*) {
 }
 
 PaletteOptions() {
-    return CreateReactionOptions(PaletteChoice.Value, ReactionCounts[PaletteCount.Value], ReactionIntervals[PaletteInterval.Value], ReactionShortcut)
+    return CreateReactionOptions(PaletteChoice.Value, ReactionCounts[PaletteCount.Value], ReactionIntervals[PaletteInterval.Value], ShortcutKeys["reaction"])
 }
 
 StartPaletteReaction(*) {

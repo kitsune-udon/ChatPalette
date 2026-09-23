@@ -4,7 +4,9 @@ $ErrorActionPreference='Stop'
 $release=New-TestRuntime
 foreach ($name in @('scripts','docs')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $name) -Destination $release -Recurse }
 New-Item -ItemType Directory -Path (Join-Path $release 'tests\fixtures') -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination (Join-Path $release 'tests\fixtures')
+foreach ($name in @('settings.ini','ui-message-probe.ahk')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('fixtures\'+$name)) -Destination (Join-Path $release 'tests\fixtures')
+}
 Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File | Copy-Item -Destination (Join-Path $release 'tests')
 foreach ($name in @('README.md','LICENSE','CHANGELOG.md')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $name) -Destination $release }
 foreach ($relative in @('data\settings.db','data\reaction_selectors.json','tests\.tmp\private.txt','private.txt')) {
@@ -34,7 +36,7 @@ $archive=[IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
     $names=@($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
     if ($names -match '(^data/|/\.tmp/|^private.txt$|^dist/)') { throw 'Private or temporary files included in release' }
-    foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/settings.ini','tests/app-fixture.ps1','tests/test-app-input-plan.ps1','tests/run.ps1','scripts/build-release.ps1')) {
+    foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/settings.ini','tests/fixtures/ui-message-probe.ahk','tests/app-fixture.ps1','tests/test-app-input-plan.ps1','tests/run.ps1','scripts/build-release.ps1')) {
         if ($names -cnotcontains $required) { throw "Missing release file: $required" }
     }
     foreach ($file in Get-ChildItem -LiteralPath $release -Filter '*.ahk' -File -Recurse) {

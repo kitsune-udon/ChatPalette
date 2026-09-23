@@ -70,7 +70,7 @@ BuildManagement() {
     ManagementKeyIntro := ManagementWindow.AddText("x40 y74 w680 h42", "パレット・弾幕・チャット・リアクションのキーを一元管理できます。")
     KeyLabel := ManagementWindow.AddText("x40 y122 w680 h24", "")
     ManagementSupportButtons["key"] := ManagementWindow.AddButton("x40 y154 w260 h36", "ショートカットを管理…")
-    ManagementSupportButtons["key"].OnEvent("Click",EditReactionKey)
+    ManagementSupportButtons["key"].OnEvent("Click",(*) => ShowShortcutManager())
     ManagementSupportGroups.Push(ManagementWindow.AddGroupBox("x24 y214 w712 h124","リアクションの準備"))
     ReactionRegistrationLabel := ManagementWindow.AddText("x40 y240 w680 h42", "対象ブラウザー：未確認")
     ManagementSupportButtons["register"] := ManagementWindow.AddButton("x40 y288 w320 h36", "① ボタンを設定…")
@@ -140,7 +140,7 @@ RefreshReactionDefaultControls() {
     ReactionDefaultChoiceControl.Choose(DefaultReactionKind)
     ChooseSetting(ReactionDefaultCountControl,ReactionCounts,DefaultReactionCount)
     ChooseSetting(ReactionDefaultIntervalControl,ReactionIntervals,DefaultReactionIntervalMs)
-    KeyLabel.Text := "パレット：" ShortcutKeyLabel(GetShortcutKey("palette")) " ／ リアクション：" ReactionKeyLabel()
+    KeyLabel.Text := "パレット：" ShortcutKeyLabel(GetShortcutKey("palette")) " ／ リアクション：" ShortcutKeyLabel(GetShortcutKey("reaction"))
     ReactionDefaultsStatusControl.Text := "保存済み：キー実行に適用。"
         . (DefaultReactionIntervalMs = 0 ? "`n待機なし：処理終了後すぐに次を実行。" : "")
 }

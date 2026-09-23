@@ -177,3 +177,9 @@ SetControlText(control, text) {
     if !(control.Text == text)
         control.Text := text
 }
+
+ConfirmEditorDiscard(view,message := "未保存の変更を破棄して閉じますか？") {
+    if RuntimePorts.ConfirmDiscard
+        return RuntimePorts.ConfirmDiscard.Call(message)
+    return MsgBox(message,"未保存の変更","YesNo Default2 Icon? Owner" view.Hwnd) = "Yes"
+}

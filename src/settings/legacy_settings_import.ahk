@@ -110,7 +110,8 @@ ReadReactionSettings(state, document) {
     state.DefaultReactionIntervalMs := ReadSettingInteger(document, "General", "ReactionInterval", ReactionDefaults.Interval)
     if !HasSettingValue(ReactionIntervals, state.DefaultReactionIntervalMs)
         state.DefaultReactionIntervalMs := ReactionDefaults.Interval
-    state.ReactionShortcut := ReadSettingValue(document, "General", "ReactionShortcut", ReactionDefaults.Shortcut)
+    key := ReadSettingValue(document, "General", "ReactionShortcut", DefaultShortcutKeys()["reaction"])
+    state.ShortcutKeys := ImportShortcutKeys(ValidLegacyReactionKey(key) ? key : DefaultShortcutKeys()["reaction"])
     return state
 }
 
@@ -144,4 +145,14 @@ ValidateItemSection(document, section, count) {
 RequireSettingCount(document, section) {
     if !document.Has(section) || !document[section].Has("Count")
         throw Error("設定の必須項目がありません：[" section "] Count")
+}
+
+ValidLegacyReactionKey(key) {
+    return !IsLegacyReservedReactionKey(key) && RegExMatch(key, "^[!^+]*(?:[A-Za-z0-9]|F(?:[1-9]|1[0-2]))$")
+        && InStr(key, "^") && (InStr(key, "!") || InStr(key, "+"))
+}
+
+IsLegacyReservedReactionKey(key) {
+    plain := StrLower(RegExReplace(key, "[!^+]", ""))
+    return InStr(key, "^") && InStr(key, "!") && !InStr(key, "+") && (plain = "1" || plain = "2" || plain = "3" || plain = "4" || plain = "q")
 }

@@ -77,7 +77,7 @@ try {
     snapshot := ReadDiagnosticSnapshot()
     snapshotReport := BuildDiagnosticReport(snapshot)
     AssertEmpty(snapshot.Duration = "—（未実行）" && InStr(snapshot.Worker,"必要なとき"), "idle diagnostics explain normal waiting state")
-    LastBrowserOperation := {Mode:"verify_input",State:"wrong_input",Duration:42}
+    RecordBrowserOperation({Mode:"verify_input",State:"wrong_input",Duration:42})
     AssertEmpty(BuildDiagnosticReport(snapshot) = snapshotReport, "copy uses the captured snapshot")
     diagnosticPanel := CreateDiagnosticPanel()
     for control in diagnosticPanel.Window {
@@ -89,7 +89,7 @@ try {
         if control.Type = "Text" && control.Text = "入力欄を確認できませんでした"
             foundResult := true
     AssertEmpty(foundResult, "diagnostic panel uses readable result labels")
-    LastBrowserOperation := {Mode:"verify_input",State:"ok",Duration:12}
+    RecordBrowserOperation({Mode:"verify_input",State:"ok",Duration:12})
     diagnosticPanel.Refresh.Call()
     foundResult := false
     for control in diagnosticPanel.Window
@@ -97,7 +97,7 @@ try {
             foundResult := true
     AssertEmpty(foundResult, "diagnostic refresh replaces displayed result")
     for operation in [["chat_focus","focused"],["verify_chat","ok"],["reactions_show","hovered"]] {
-        LastBrowserOperation := {Mode:operation[1],State:operation[2],Duration:10}
+        RecordBrowserOperation({Mode:operation[1],State:operation[2],Duration:10})
         pageDiagnostic := ReadDiagnosticSnapshot()
         AssertEmpty(pageDiagnostic.ModeCode=operation[1] && pageDiagnostic.StateCode=operation[2],"page actions have readable diagnostic labels")
     }

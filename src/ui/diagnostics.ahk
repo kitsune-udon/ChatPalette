@@ -1,6 +1,6 @@
 ﻿ReadDiagnosticSnapshot() {
     browser := "未選択（YouTubeからパネルを開くと表示）"
-    hwnd := LastBrowserOperation.HasOwnProp("Window") ? LastBrowserOperation.Window : TargetBrowserHwnd
+    hwnd := LastBrowserOperation.Window ? LastBrowserOperation.Window : TargetBrowserHwnd
     if hwnd {
         try {
             process := StrLower(WinGetProcessName("ahk_id " hwnd))
@@ -11,31 +11,16 @@
             browser := "対象のウィンドウは閉じられています"
         }
     }
-    modes := Map("なし","まだ実行していません", "resolve","配信者の自動判別", "verify","動画の確認",
-        "verify_input","チャット欄・コメント欄の確認", "browser_context","現在の動画の確認",
-        "chat_clear","チャット欄のクリア", "chat_focus","チャット欄への移動", "verify_chat","クリア前のチャット欄確認", "reactions_show","リアクションUIの表示操作",
-        "reaction_capture","リアクションボタンの登録", "reaction_check","リアクションの検出確認",
-        "reaction_send","リアクションボタンの操作", "reaction_status","リアクションの設定状態の確認")
-    states := Map("未実行","まだ実行していません", "ok","確認できました", "registered","登録できました",
-        "cleared","クリアキーを送りました（内容は未取得）", "focused","チャット欄へ移動しました", "hovered","表示用UIへマウスを移動しました（表示は未確認）",
-        "configured","設定済み（認識は未確認）", "ready","操作対象を確認できました", "operated","ボタンを操作しました（受理は未確認）",
-        "chat_missing","入力可能なチャット欄が見つかりません", "chat_ambiguous","チャット入力欄が複数あります",
-        "focus_failed","チャット欄へのフォーカス移動を確認できませんでした",
-        "wrong_input","入力欄を確認できませんでした", "changed","動画が変わったため中止しました",
-        "wrong_window","操作先が変わったため中止しました", "unavailable","情報を取得できませんでした",
-        "unknown","操作結果を確認できませんでした", "cancelled","中止しました", "not_registered","操作ボタンが未登録です",
-        "menu_closed","リアクションメニューが見つかりません", "unsupported","操作対象を識別できませんでした",
-        "cooldown","操作間隔が短いため停止しました", "save_failed","登録情報を保存できませんでした", "sync_failed","登録情報を同期できませんでした")
     phases := Map("idle","待機中", "queued","キーを離すのを待っています", "running","実行中", "finished","終了")
-    mode := modes.Has(LastBrowserOperation.Mode) ? LastBrowserOperation.Mode : "不明"
-    state := states.Has(LastBrowserOperation.State) ? LastBrowserOperation.State : "不明"
+    mode := LastBrowserOperation.Mode
+    state := LastBrowserOperation.State
     phase := phases.Has(ReactionExecutionStatus.Phase) ? ReactionExecutionStatus.Phase : "不明"
     return {CapturedAt:FormatTime(, "yyyy/MM/dd HH:mm:ss"), Version:AppVersion, Ahk:A_AhkVersion, OS:A_OSVersion,
-        Source:AppSourceStatus(), StartedAt:AppStartedAt, Keys:EffectiveShortcutSummary(ReactionShortcut),
-        Stage:LastBrowserOperation.HasOwnProp("Stage") ? LastBrowserOperation.Stage : "単一処理",
+        Source:AppSourceStatus(), StartedAt:AppStartedAt, Keys:EffectiveShortcutSummary(),
+        Stage:LastBrowserOperation.Stage,
         Browser:browser, Worker:WorkerState.ProcessId && ProcessExist(WorkerState.ProcessId) ? "起動中" : "待機中（必要なときに起動）",
         Auto:AutoMode ? "ON" : "OFF", Settings:FileExist(SettingsDatabasePath) ? "あり" : "なし",
-        Operation:modes.Get(mode, "不明な操作"), Result:states.Get(state, "不明な結果"),
+        Operation:BrowserOperationLabel(mode), Result:BrowserResultInfo(state).Summary,
         Duration:mode = "なし" ? "—（未実行）" : LastBrowserOperation.Duration " ms",
         Phase:phases.Get(phase, "不明"), ModeCode:mode, StateCode:state, PhaseCode:phase}
 }

@@ -111,7 +111,7 @@ SaveReactionDefaultsFromControls(*) {
         ReactionDefaultsStatusControl.Text := "実行が終わってから変更してください。"
         return
     }
-    draft := CreateReactionOptions(ReactionDefaultChoiceControl.Value,ReactionCounts[ReactionDefaultCountControl.Value],ReactionIntervals[ReactionDefaultIntervalControl.Value],ReactionShortcut)
+    draft := CreateReactionOptions(ReactionDefaultChoiceControl.Value,ReactionCounts[ReactionDefaultCountControl.Value],ReactionIntervals[ReactionDefaultIntervalControl.Value],ShortcutKeys["reaction"])
     try SaveReactionDefaults(draft)
     catch as failure {
         RefreshReactionDefaultControls()

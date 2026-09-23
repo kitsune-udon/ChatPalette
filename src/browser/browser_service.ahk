@@ -34,7 +34,7 @@ NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extr
             : {State:"sync_failed",Author:"",Channel:"",Video:""}
         ; Display-only queries must not erase the operation the user is investigating.
         if mode != "reaction_status"
-            LastBrowserOperation := {Mode:mode, State:reply.State, Duration:A_TickCount-started}
+            RecordBrowserOperation({Mode:mode, State:reply.State, Window:hwnd, Duration:A_TickCount-started})
         return reply
     } finally {
         IsBrowserOperationBusy := false

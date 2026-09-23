@@ -1,15 +1,13 @@
 ﻿; Feature module. The worker adapter is in reaction_automation.ps1.
 InitReactions() {
     InstallKeybdHook()
-    global DefaultReactionKind, ReactionShortcut, ActiveReactionJob
+    global DefaultReactionKind, ActiveReactionJob
     global DefaultReactionCount
     global DefaultReactionIntervalMs
     ActiveReactionJob := 0
     global ReactionExecutionStatus := {Phase: "idle", Message: "", Final: false}
     global LastReactionResult := {Message:"まだ実行していません。",Detail:"",Completed:0,Total:0,Mode:"",Reason:"idle"}
     global ReactionApplied := ""
-    SetReactionHotkey(ReactionShortcut)
-    SetShortcutHotkey("stop",GetShortcutKey("stop"))
     global ReactionsInitialized := true
 }
 
@@ -306,7 +304,7 @@ QuickReaction(*) {
     hwnd := queuedJob.Window
     batchStarted := false
     try {
-        key := RegExReplace(ReactionShortcut, "[!^+#<>]", "")
+        key := RegExReplace(ShortcutKeys["reaction"], "[!^+#<>]", "")
         if !WaitShortcutRelease([key, "Control", "Alt", "Shift"])
             return
         if ActiveReactionJob != queuedJob || queuedJob.Cancelled || !IsTargetForeground(hwnd)

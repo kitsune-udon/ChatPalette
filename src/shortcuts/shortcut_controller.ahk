@@ -26,9 +26,7 @@ NativeWaitShortcutRelease(keys) {
 }
 
 
-ReactionKeyLabel(key := "") {
-    return ShortcutKeyLabel(key != "" ? key : ReactionShortcut)
-}
+
 
 HandleDanmakuShortcut(shared,slot) {
     if ShortcutBlocked()
@@ -81,30 +79,18 @@ RunPageAction(action, hwnd) {
     } catch {
         result := {State:"unknown"}
     } finally {
-        LastBrowserOperation := {Mode:action,State:result.State,Stage:stage,Window:hwnd,Duration:A_TickCount-started}
+        RecordBrowserOperation({Mode:action,State:result.State,Stage:stage,Window:hwnd,Duration:A_TickCount-started})
     }
-    messages := Map("focused","チャット入力欄へ移動しました。",
-        "cleared","チャット入力欄をクリアしました。",
-        "hovered","リアクション表示用のUIへマウスを移動しました。",
-        "chat_missing","入力可能なチャット欄が見つかりません。チャットの表示と入力可能な状態を確認してください。",
-        "chat_ambiguous","チャット入力欄が複数見つかったため、移動を中止しました。操作する欄をクリックしてください。",
-        "focus_failed","チャット欄へのフォーカス移動を確認できませんでした。入力欄をクリックしてください。",
-        "wrong_input","チャット入力欄のフォーカスを確認できないため、操作を中止しました。",
-        "unsupported","リアクション表示用のUIを確認できません。YouTubeの♡にマウスを重ねてください。",
-        "changed","動画が変わったため中止しました。",
-        "wrong_window","操作先が変わったため中止しました。",
-        "unknown","操作結果を確認できませんでした。自動では再実行しません。")
-    message := messages.Get(result.State,"操作できませんでした。YouTubeの動画ページを最前面にしてやり直してください。")
+    info := BrowserResultInfo(result.State)
+    message := info.Summary (info.Advice != "" ? "。" info.Advice : "。")
     PaletteHint.Text := message
     ToolTip(message)
     SetTimer(() => ToolTip(),-3000)
     return result.State = "focused" || result.State = "cleared" || result.State = "hovered"
 }
 
-EffectiveShortcutSummary(reactionKey := "") {
+EffectiveShortcutSummary() {
     keys := CurrentShortcutMap(), summary := ""
-    if reactionKey != ""
-        keys["reaction"] := reactionKey
     for definition in ShortcutDefinitions()
         summary .= (summary = "" ? "" : "`n") ShortcutKeyLabel(keys[definition.Id]) "：" definition.Label "（" definition.Scope "）"
     return summary

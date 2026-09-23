@@ -36,7 +36,7 @@ Invoke-AppFixture -Body @'
     Assert(!RunPageAction("reactions_show",123) && !PageCalls.Length,"page actions do not interfere with running reactions")
     ActiveReactionJob := 0
     ShowManagement(1)
-    EditReactionKey()
+    ShowShortcutManager()
     Assert(!RunPageAction("chat_focus",123) && !PageCalls.Length,"editor prevents page actions")
     WinClose("ahk_id " ActiveEditorDialog.Window.Hwnd)
     Sleep(30)

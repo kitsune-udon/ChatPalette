@@ -5,6 +5,7 @@ class RuntimePorts {
     static Restart := 0
     static BrowserRequest := 0
     static WorkerRequest := 0
+    static WorkerScript := ""
     static BrowserIdentity := 0
     static ResolveChannel := 0
     static VerifyInput := 0
@@ -13,7 +14,6 @@ class RuntimePorts {
     static ClearChat := 0
     static Clock := 0
     static TimingPrecision := 0
-    static ReactionKey := 0
     static ShortcutKey := 0
     static ShortcutRelease := 0
 }

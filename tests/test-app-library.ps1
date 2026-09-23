@@ -58,7 +58,7 @@ Invoke-AppFixture -Body @'
     RefreshPaletteItems()
     Assert(PaletteRows.Length=1 && PaletteRows[1].Shared,"search includes body and preserves scope")
     PaletteSearch.Value := ""
-    SaveReactionDefaults(CreateReactionOptions(3,10,100,ReactionShortcut))
+    SaveReactionDefaults(CreateReactionOptions(3,10,100,ShortcutKeys["reaction"]))
     ResetPaletteSession()
     PaletteCount.Choose(3)
     Assert(PaletteOptions().Count=100 && DefaultReactionCount=10,"session setting does not modify defaults")
@@ -108,7 +108,7 @@ Invoke-AppFixture -Body @'
     Assert(!ChannelIndex.Has("/channel/service-only"),"service unbind refreshes index")
     Assert((GetInputProfile() ? GetInputProfile().Id : "")=oldInputId,"service commands preserve input identity")
     stale := CreateSettingsSnapshot()
-    SaveReactionDefaults(CreateReactionOptions(4,10,50,ReactionShortcut))
+    SaveReactionDefaults(CreateReactionOptions(4,10,50,ShortcutKeys["reaction"]))
     stale.DefaultReactionKind := 1
     CommitLibraryChange(stale,"stale caller")
     actualState := LoadSettings(SettingsDatabasePath)

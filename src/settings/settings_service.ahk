@@ -15,7 +15,7 @@ CopyProfiles(profiles) {
 
 CreatePreferences() {
     return {InputProfileId:InputProfileId, AutoMode:AutoMode, DefaultReactionKind:DefaultReactionKind,
-        DefaultReactionCount:DefaultReactionCount, DefaultReactionIntervalMs:DefaultReactionIntervalMs, ReactionShortcut:ReactionShortcut, ShortcutKeys:ShortcutKeys.Clone()}
+        DefaultReactionCount:DefaultReactionCount, DefaultReactionIntervalMs:DefaultReactionIntervalMs, ShortcutKeys:ShortcutKeys.Clone()}
 }
 CreateSettingsSnapshot(copyLibrary := true) {
     state := CreatePreferences()
@@ -27,7 +27,7 @@ CreateSettingsSnapshot(copyLibrary := true) {
 PreferencesWithReactionOptions(draft) {
     preferences := CreatePreferences()
     preferences.DefaultReactionKind := draft.Reaction, preferences.DefaultReactionCount := draft.Count
-    preferences.DefaultReactionIntervalMs := draft.Interval, preferences.ReactionShortcut := draft.Key
+    preferences.DefaultReactionIntervalMs := draft.Interval, preferences.ShortcutKeys["reaction"] := draft.Key
     ValidateSettingsPreferences(preferences)
     return preferences
 }
@@ -36,14 +36,14 @@ ReloadAppSettings() {
     settingsCritical := A_IsCritical
     Critical("On")
     try {
-        global AutoMode, DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ReactionShortcut, ShortcutKeys
+        global AutoMode, DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ShortcutKeys
         state := LoadSettings(SettingsDatabasePath)
         if IsSet(ReactionsInitialized) && ReactionsInitialized
-            ApplyReactionDefaults(state, false)
+            ApplyPreferences(state, false)
         PublishLibraryState(state)
         AutoMode := state.AutoMode
         DefaultReactionKind := state.DefaultReactionKind, DefaultReactionCount := state.DefaultReactionCount
-        DefaultReactionIntervalMs := state.DefaultReactionIntervalMs, ReactionShortcut := state.ReactionShortcut
+        DefaultReactionIntervalMs := state.DefaultReactionIntervalMs
         ShortcutKeys := state.ShortcutKeys.Clone()
         if IsSet(LibraryHistory)
             LibraryHistory.Length := 0
@@ -53,17 +53,17 @@ ReloadAppSettings() {
 }
 
 
-ApplyReactionDefaults(state, persist := true) {
-    global DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ReactionShortcut, ShortcutKeys
+ApplyPreferences(state, persist := true) {
+    global DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ShortcutKeys
     ValidateSettingsPreferences(state)
-    previous := CurrentShortcutMap(), next := PreferenceShortcutMap(state)
+    previous := CurrentShortcutMap(), next := state.ShortcutKeys.Clone()
     previousCritical := A_IsCritical
     Critical("On")
     disabled := [], installed := []
     try {
         ; Remove changed bindings first so swapping two keys is safe.
         for action,key in previous {
-            if CanonicalReactionKey(key) != CanonicalReactionKey(next[action]) {
+            if CanonicalShortcutKey(key) != CanonicalShortcutKey(next[action]) {
                 SetShortcutHotkey(action,key,false)
                 disabled.Push(action)
             }
@@ -75,8 +75,8 @@ ApplyReactionDefaults(state, persist := true) {
         if persist
             SaveSettingsPreferences(state,SettingsDatabasePath)
         DefaultReactionKind := state.DefaultReactionKind, DefaultReactionCount := state.DefaultReactionCount
-        DefaultReactionIntervalMs := state.DefaultReactionIntervalMs, ReactionShortcut := state.ReactionShortcut
-        ShortcutKeys := next.Clone(), ShortcutKeys.Delete("reaction")
+        DefaultReactionIntervalMs := state.DefaultReactionIntervalMs
+        ShortcutKeys := next
     } catch as failure {
         for action in installed
             SetShortcutHotkey(action,next[action],false)
@@ -93,9 +93,9 @@ SaveReactionDefaults(draft) {
     try {
         preferences := PreferencesWithReactionOptions(draft)
         if draft.Reaction = DefaultReactionKind && draft.Count = DefaultReactionCount
-            && draft.Interval = DefaultReactionIntervalMs && draft.Key == ReactionShortcut
+            && draft.Interval = DefaultReactionIntervalMs && draft.Key == ShortcutKeys["reaction"]
             return
-        ApplyReactionDefaults(preferences)
+        ApplyPreferences(preferences)
     } finally {
         Critical(settingsCritical)
     }

@@ -9,7 +9,7 @@ try {
     BuildManagement()
     AutoMode := false
     TargetBrowserHwnd := 123
-    LastBrowserOperation := {Mode:"reaction_send",State:"menu_closed",Duration:100}
+    RecordBrowserOperation({Mode:"reaction_send",State:"menu_closed",Duration:100})
     RefreshReactionRegistration()
     AssertReview(ReviewStatusCalls=1,"display query reaches worker after registration handshake")
     AssertReview(LastBrowserOperation.Mode="reaction_send" && LastBrowserOperation.State="menu_closed","display query preserves failure")

@@ -9,10 +9,8 @@ $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 New-Item -ItemType Directory -Path "$fixture\data" -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination "$fixture\data\settings.ini" -Force
-$worker = [IO.File]::ReadAllText("$release\src\browser\browser_worker.ps1")
-$worker = $worker.Replace('function Invoke-WorkerRequest($Request) {', 'function Invoke-FixtureBaseRequest($Request) {')
 $mock = @'
-function Invoke-WorkerRequest($Request) {
+function Invoke-FixtureRequest($Request) {
     if ($Request.Mode -eq 'fixture_native') {
         $element = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr][long]$Request.Element)
         $record = Get-ReactionRecord $element
@@ -21,7 +19,7 @@ function Invoke-WorkerRequest($Request) {
     }
     if ($Request.FixtureExit -eq '1') { exit 1 }
     if ($Request.FixtureDelay) { Start-Sleep -Milliseconds ([int]$Request.FixtureDelay) }
-    return Invoke-FixtureBaseRequest $Request
+    return Invoke-WorkerRequest $Request
 }
 function Read-BrowserVideoId([long]$WindowHandle) { return 'abcdefghijk' }
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
@@ -32,10 +30,10 @@ $script:fakeInvoke | Add-Member ScriptMethod Invoke { }
 function Get-ReactionInvoker($Target) { return $script:fakeInvoke }
 function Find-RegisteredReactions([long]$WindowHandle, $Saved) { return @{ Elements=@($script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget) } }
 '@
-$worker = $worker.Replace('if ($Library) { return }', $mock + "`n" + 'if ($Library) { return }')
-[IO.File]::WriteAllText("$fixture\src\browser\browser_worker.ps1", $worker, [Text.UTF8Encoding]::new($true))
+Write-TestWorker -Runtime $release -Definitions $mock
     $frame = @'
 OnExit(StopBrowserWorker)
+InstallApplicationShortcuts()
 global Checks := 0
 try {
 '@ + "`r`n" + $Body + @'
@@ -79,8 +77,7 @@ FixtureRequest(hwnd, mode, video, extra) {
 FixtureReactionWindowActive(hwnd) {
     return hwnd = 123
 }
-FixtureReactionKey(key, enabled := true) {
-    NativeSetReactionHotkey(key, enabled)
+FixtureShortcutKey(action,key, enabled := true) {
     if IsSet(KeyCalls)
         KeyCalls.Push({Key:key, Enabled:enabled})
 }
@@ -98,12 +95,13 @@ FixtureShortcutRelease(keys) {
     Invoke-AppTest -Runtime $release -Body ($frame + "`r`n" + $Helpers) -TimeoutMs $TimeoutMs -Setup @'
 global FixtureInputMode := false, FixtureResolveCount := 0, FixtureCurrentVideo := "", FixtureSent := []
 global FixtureStarts := [], KeyCalls := [], ShortcutReleaseReplacement := 0, ShortcutReleaseResult := true
+RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
 RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
 RuntimePorts.ResolveChannel := FixtureResolveChannel
 RuntimePorts.VerifyInput := FixtureVerifyInput
 RuntimePorts.Foreground := FixtureReactionWindowActive
 RuntimePorts.Text := CaptureFixtureInput
-RuntimePorts.ReactionKey := FixtureReactionKey
+RuntimePorts.ShortcutKey := FixtureShortcutKey
 RuntimePorts.ShortcutRelease := FixtureShortcutRelease
 RuntimePorts.BrowserRequest := FixtureRequest
 

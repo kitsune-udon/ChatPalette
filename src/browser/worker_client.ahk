@@ -40,10 +40,11 @@ EnsureWorkerRunning() {
         "Str", pipeName "-ready", "Ptr")
     if !WorkerState.SignalHandle
         throw Error("補助プロセスの通知を準備できませんでした。")
+    script := RuntimePorts.WorkerScript != "" ? RuntimePorts.WorkerScript : A_ScriptDir "\src\browser\browser_worker.ps1"
     q := Chr(34)
     command := q A_WinDir "\System32\WindowsPowerShell\v1.0\powershell.exe" q
         . " -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "
-        . q A_ScriptDir "\src\browser\browser_worker.ps1" q
+        . q script q
         . " -PipeName " q pipeName q
         . " -ParentProcessId " DllCall("GetCurrentProcessId")
     Run(command, A_ScriptDir, "Hide", &pid := 0)

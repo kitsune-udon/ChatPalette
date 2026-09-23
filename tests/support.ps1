@@ -36,3 +36,12 @@ function Invoke-AhkTest {
     Get-Content -LiteralPath $out,$err
     if ($run.ExitCode -ne 0) { throw "Test failed ($($run.ExitCode)): $Runtime" }
 }
+
+function Write-TestWorker {
+    param([string]$Runtime, [string]$Definitions)
+    $source = @'
+param([string]$PipeName, [int]$ParentProcessId)
+. (Join-Path $PSScriptRoot 'browser_worker.ps1') -Library -PipeName $PipeName -ParentProcessId $ParentProcessId
+'@ + "`r`n" + $Definitions + "`r`nStart-BrowserWorker `$PipeName `$ParentProcessId -Handler { param(`$request) Invoke-FixtureRequest `$request }"
+    [IO.File]::WriteAllText((Join-Path $Runtime 'src\browser\fixture_worker.ps1'),$source,[Text.UTF8Encoding]::new($true))
+}

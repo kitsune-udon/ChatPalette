@@ -5,18 +5,11 @@ $release = New-TestRuntime
 
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
-$path = Join-Path $release 'src\ui\palette\palette_view.ahk'
-$s = [IO.File]::ReadAllText($path).Replace('RefreshPalette() {',"RefreshPalette() {`r`n    global PerfRefreshCount := IsSet(PerfRefreshCount) ? PerfRefreshCount+1 : 1")
-[IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
-$path = Join-Path $release 'src\ui\ui_runtime.ahk'
-$s = [IO.File]::ReadAllText($path)
-$s = $s.Replace('        control.Enabled := value', '        control.Enabled := value, PerfNativeWrites++')
-$s = $s.Replace('        control.Text := text', '        control.Text := text, PerfNativeWrites++')
-$s = $s.Replace('SetControlEnabled(control, value) {', "SetControlEnabled(control, value) {`r`n    global PerfNativeWrites")
-$s = $s.Replace('SetControlText(control, text) {', "SetControlText(control, text) {`r`n    global PerfNativeWrites")
-[IO.File]::WriteAllText($path,$s,[Text.UTF8Encoding]::new($true))
+Copy-Item (Join-Path $PSScriptRoot 'fixtures\ui-message-probe.ahk') (Join-Path $release 'ui-message-probe.ahk')
 $tests = @'
 OnExit(StopBrowserWorker)
+#Include %A_ScriptDir%\ui-message-probe.ahk
+UiMessageProbe.Start()
 global PerfChecks := 0
 try {
     a := ExecuteProfileCommand("add","","A","/channel/a").ProfileId
@@ -67,11 +60,11 @@ try {
     ExecuteDanmakuCommand("edit","",1,{Name:"branch",Text:"branch",Slot:2})
     CheckPerf(Fingerprint({Profiles:held.Profiles,SharedDanmakuItems:held.Items})==signature,"edit after undo does not mutate prior branch")
     oldPath := SettingsDatabasePath, SettingsDatabasePath := A_ScriptDir "\missing\settings.ini"
-    SaveReactionDefaults(CreateReactionOptions(DefaultReactionKind,DefaultReactionCount,DefaultReactionIntervalMs,ReactionShortcut))
+    SaveReactionDefaults(CreateReactionOptions(DefaultReactionKind,DefaultReactionCount,DefaultReactionIntervalMs,ShortcutKeys["reaction"]))
     SaveAutoDetection(AutoMode)
     CheckPerf(true,"unchanged preferences skip file access")
     failed := false
-    try SaveReactionDefaults(CreateReactionOptions(DefaultReactionKind=1 ? 2 : 1,DefaultReactionCount,DefaultReactionIntervalMs,ReactionShortcut))
+    try SaveReactionDefaults(CreateReactionOptions(DefaultReactionKind=1 ? 2 : 1,DefaultReactionCount,DefaultReactionIntervalMs,ShortcutKeys["reaction"]))
     catch
         failed := true
     CheckPerf(failed,"changed preferences still save transactionally")
@@ -88,9 +81,9 @@ try {
     CheckPerf(ManagedList.GetNext()=40 && SendMessage(0x1027,0,0,ManagedList.Hwnd)=top,"management full refresh preserves selection and viewport: selected=" ManagedList.GetNext() " top=" top " actual=" SendMessage(0x1027,0,0,ManagedList.Hwnd))
     RefreshPalette()
     PaletteWindow.Hide()
-    prior := PerfRefreshCount
+    prior := UiMessageProbe.Renders
     RefreshVisiblePalette()
-    CheckPerf(PerfRefreshCount=prior,"hidden palette is not rebuilt")
+    CheckPerf(UiMessageProbe.Renders=prior,"hidden palette is not rebuilt")
     ExecuteDanmakuCommand("edit","",1,{Name:"fresh",Text:"fresh",Slot:0})
     ReturnToPalette()
     CheckPerf(PaletteRows[1].Text="fresh","return renders current data")
@@ -102,17 +95,17 @@ try {
     RefreshPaletteItems()
     CheckPerf(PaletteRows.Length=1 && PaletteRows[1].Text="text60" && PaletteList.GetNext()=1,"search selection remains valid")
     AutoMode := true, TargetBrowserHwnd := 123
-    prior := PerfRefreshCount
+    prior := UiMessageProbe.Renders
     RefreshPaletteForTarget()
-    CheckPerf(PerfRefreshCount=prior+1,"detection renders exactly once")
+    CheckPerf(UiMessageProbe.Renders=prior+1,"detection renders exactly once")
     RefreshOperationControls()
-    writes := PerfNativeWrites
+    writes := UiMessageProbe.Writes
     Loop 20
         RefreshOperationControls()
-    CheckPerf(PerfNativeWrites=writes,"unchanged palette controls and preview perform zero native property writes")
+    CheckPerf(UiMessageProbe.Writes=writes,"unchanged palette controls and preview perform zero native property writes")
     IsBrowserOperationBusy := true
     RefreshOperationControls()
-    CheckPerf(PerfNativeWrites>writes && !PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"changed state still updates native controls")
+    CheckPerf(UiMessageProbe.Writes>writes && !PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"changed state still updates native controls")
     IsBrowserOperationBusy := false
     RefreshOperationControls()
     CheckPerf(PaletteStart.Enabled && ManagementItemButtons[1].Enabled,"controls recover after busy state")
@@ -147,5 +140,4 @@ FixtureResolveChannel(hwnd) {
     return {State:"ok",Channel:"/channel/a",Author:"A",Video:"fixture0000"}
 }
 '@
-Invoke-AppTest -Runtime $release -Body $tests -Setup 'global PerfNativeWrites := 0
-RuntimePorts.BrowserIdentity := FixtureIsBrowser, RuntimePorts.ResolveChannel := FixtureResolveChannel'
+Invoke-AppTest -Runtime $release -Body $tests -Setup 'RuntimePorts.BrowserIdentity := FixtureIsBrowser, RuntimePorts.ResolveChannel := FixtureResolveChannel'

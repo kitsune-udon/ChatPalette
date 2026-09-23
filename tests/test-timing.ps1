@@ -21,7 +21,7 @@ try {
             AssertTiming(LastReactionResult.Reason=mode,"failure reason preserved: " mode)
     }
     TimingMode := "random"
-    SaveReactionDefaults(CreateReactionOptions(RandomReactionKind,10,200,ReactionShortcut))
+    SaveReactionDefaults(CreateReactionOptions(RandomReactionKind,10,200,ShortcutKeys["reaction"]))
     restored := LoadSettings(SettingsDatabasePath)
     AssertTiming(restored.DefaultReactionKind=RandomReactionKind && restored.DefaultReactionIntervalMs=200,"random persistence")
     global RandomChoices := []

@@ -38,8 +38,6 @@ CreateSettingsDatabase(path) {
         throw Error("設定の保存先フォルダーがありません。")
     legacy := directory "\settings.ini"
     state := ReadLegacySettings(legacy)
-    if !ValidLegacyReactionKey(state.ReactionShortcut)
-        state.ReactionShortcut := ReactionDefaults.Shortcut
     temporary := path ".creating-" NewRecordId(), store := 0
     try {
         store := SettingsRepository(temporary,true)
@@ -61,11 +59,11 @@ CreateSettingsDatabase(path) {
 VerifySettingsMigration(expected,actual) {
     if expected.Profiles.Length != actual.Profiles.Length || expected.InputProfileId != actual.InputProfileId
         throw Error("配信者の移行結果が一致しません。")
-    for key in ["AutoMode","DefaultReactionKind","DefaultReactionCount","DefaultReactionIntervalMs","ReactionShortcut"] {
+    for key in ["AutoMode","DefaultReactionKind","DefaultReactionCount","DefaultReactionIntervalMs"] {
         if !(expected.%key% == actual.%key%)
             throw Error("共通設定の移行結果が一致しません。")
     }
-    expectedKeys := PreferenceShortcutMap(expected), actualKeys := PreferenceShortcutMap(actual)
+    expectedKeys := expected.ShortcutKeys, actualKeys := actual.ShortcutKeys
     for action,key in expectedKeys
         if !(actualKeys[action] == key)
             throw Error("ショートカットの移行結果が一致しません。")

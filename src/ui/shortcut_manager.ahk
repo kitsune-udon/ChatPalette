@@ -82,17 +82,17 @@ CreateShortcutManager(selectedAction := "reaction") {
     KeysDirty() {
         saved := CurrentShortcutMap()
         for id,value in draft
-            if CanonicalReactionKey(value) != CanonicalReactionKey(saved[id])
+            if CanonicalShortcutKey(value) != CanonicalShortcutKey(saved[id])
                 return true
         return false
     }
     UpdateKeys() {
         saved := CurrentShortcutMap()
         for i,definition in definitions {
-            value := draft[definition.Id], canonical := CanonicalReactionKey(value)
-            state := canonical != CanonicalReactionKey(saved[definition.Id]) ? "変更あり" : ""
+            value := draft[definition.Id], canonical := CanonicalShortcutKey(value)
+            state := canonical != CanonicalShortcutKey(saved[definition.Id]) ? "変更あり" : ""
             for other in definitions
-                if canonical != "" && other.Id != definition.Id && canonical = CanonicalReactionKey(draft[other.Id])
+                if canonical != "" && other.Id != definition.Id && canonical = CanonicalShortcutKey(draft[other.Id])
                     state := "重複"
             list.Modify(i,"",definition.Label,ShortcutKeyLabel(value),definition.Scope,state)
         }
@@ -128,7 +128,7 @@ CreateShortcutManager(selectedAction := "reaction") {
         }
     }
     ResetKeys(*) {
-        draft := DefaultShortcutKeys(), draft["reaction"] := ReactionDefaults.Shortcut
+        draft := DefaultShortcutKeys()
         RenderKeys(1)
     }
     RefreshItems(*) {
@@ -162,14 +162,8 @@ CreateShortcutManager(selectedAction := "reaction") {
             itemStatus.Text := "同じ弾幕を両方のキーには割り当てられません。"
         }
     }
-    ConfirmDiscard(message) {
-        if RuntimePorts.ConfirmDiscard
-            return RuntimePorts.ConfirmDiscard.Call(message)
-        view.Opt("+OwnDialogs")
-        return MsgBox(message,"未保存の変更","YesNo Default2 Icon? Owner" view.Hwnd) = "Yes"
-    }
     ChangeScope(*) {
-        if ItemsDirty() && !ConfirmDiscard("未保存の弾幕割当を破棄して対象を変更しますか？") {
+        if ItemsDirty() && !ConfirmEditorDiscard(view,"未保存の弾幕割当を破棄して対象を変更しますか？") {
             scope.Choose(loadedScope)
             return
         }
@@ -187,7 +181,7 @@ CreateShortcutManager(selectedAction := "reaction") {
         }
     }
     Close(*) {
-        if (KeysDirty() || ItemsDirty()) && !ConfirmDiscard("未保存の変更を破棄して閉じますか？")
+        if (KeysDirty() || ItemsDirty()) && !ConfirmEditorDiscard(view,"未保存の変更を破棄して閉じますか？")
             return
         viewport.Dispose()
         EndEditorDialog()

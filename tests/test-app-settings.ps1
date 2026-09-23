@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 Invoke-AppFixture -Body @'
     preferences := CreatePreferences()
     Assert(!preferences.HasOwnProp("Profiles") && !preferences.HasOwnProp("SharedDanmakuItems"),"preferences carry no library payload")
+    Assert(preferences.ShortcutKeys.Count=10 && !preferences.HasOwnProp("ReactionShortcut"),"all shortcuts have one state owner")
     libraryBefore := Profiles, sharedBefore := SharedDanmakuItems, historyBefore := LibraryHistory.Length
     preferences.DefaultReactionCount := 10
     SaveSettingsPreferences(preferences,SettingsDatabasePath)
@@ -18,14 +19,14 @@ Invoke-AppFixture -Body @'
     catch
         failed := true
     SettingsDatabasePath := savedPath
-    Assert(failed && ReactionShortcut=oldPreferences.ReactionShortcut && DefaultReactionCount=oldPreferences.DefaultReactionCount,"failed preference save preserves live defaults")
-    Assert(KeyCalls.Length=4 && KeyCalls[4].Key=oldPreferences.ReactionShortcut && KeyCalls[4].Enabled && KeyCalls[3].Key="^+r" && !KeyCalls[3].Enabled,"failed preference save restores old hotkey and removes new key")
-    priorKey := ReactionShortcut
+    Assert(failed && ShortcutKeys["reaction"]=oldPreferences.ShortcutKeys["reaction"] && DefaultReactionCount=oldPreferences.DefaultReactionCount,"failed preference save preserves live defaults")
+    Assert(KeyCalls.Length=4 && KeyCalls[4].Key=oldPreferences.ShortcutKeys["reaction"] && KeyCalls[4].Enabled && KeyCalls[3].Key="^+r" && !KeyCalls[3].Enabled,"failed preference save restores old hotkey and removes new key")
+    priorKey := ShortcutKeys["reaction"]
     failed := false
     try SaveReactionDefaults(CreateReactionOptions(1,1,100,"^!q"))
     catch
         failed := true
-    Assert(failed && ReactionShortcut=priorKey,"reserved key rejected transactionally")
+    Assert(failed && ShortcutKeys["reaction"]=priorKey,"reserved key rejected transactionally")
     for interval in ReactionIntervals {
         SaveReactionDefaults(CreateReactionOptions(1,1,interval,priorKey))
         Assert(LoadSettings(SettingsDatabasePath).DefaultReactionIntervalMs=interval,"interval persisted " interval)

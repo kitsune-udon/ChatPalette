@@ -67,8 +67,9 @@ class SettingsRepository {
         if row[1] != "" && !FindProfileIndexById(state.Profiles,state.InputProfileId)
             throw Error("選択中の配信者がありません。")
         state.AutoMode := Integer(row[2]), state.DefaultReactionKind := Integer(row[3]), state.DefaultReactionCount := Integer(row[4])
-        state.DefaultReactionIntervalMs := Integer(row[5]), state.ReactionShortcut := row[6]
+        state.DefaultReactionIntervalMs := Integer(row[5])
         state.ShortcutKeys := ReadShortcutKeys(this.Db)
+        state.ShortcutKeys["reaction"] := row[6]
         ValidateSettingsPreferences(state)
         validated := BuildLibraryStoragePlan(state,scopes,true)
         for id, scope in scopes
@@ -119,8 +120,8 @@ class SettingsRepository {
     }
     PreferenceRow(state) {
         active := state.InputProfileId
-        values := [active,Integer(state.AutoMode),Integer(state.DefaultReactionKind),Integer(state.DefaultReactionCount),Integer(state.DefaultReactionIntervalMs),state.ReactionShortcut]
-        keys := PreferenceShortcutMap(state)
+        values := [active,Integer(state.AutoMode),Integer(state.DefaultReactionKind),Integer(state.DefaultReactionCount),Integer(state.DefaultReactionIntervalMs),state.ShortcutKeys["reaction"]]
+        keys := state.ShortcutKeys
         for definition in ShortcutDefinitions()
             if definition.Id != "reaction"
                 values.Push(keys[definition.Id])

@@ -2,9 +2,8 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$workerPath = Join-Path $release 'src\browser\browser_worker.ps1'
-$worker = [IO.File]::ReadAllText($workerPath).Replace('function Invoke-WorkerRequest($Request) {', @'
-function Invoke-WorkerRequest($Request) {
+$mock = @'
+function Invoke-FixtureRequest($Request) {
     if ($Request.Mode -eq 'fixture_seed') {
         $script:Videos['abcdefghijk'] = @{Author='fixture';Channel='/channel/test';Time=[DateTime]::UtcNow}
         return @{Seq=$Request.Seq;Window=$Request.Window;State='ok'}
@@ -18,8 +17,10 @@ function Invoke-WorkerRequest($Request) {
     if ($Request.Mode -eq 'reaction_configure' -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'reject-sync'))) {
         return @{Seq=$Request.Seq;Window=$Request.Window;State='unavailable'}
     }
-'@)
-[IO.File]::WriteAllText($workerPath,$worker,[Text.UTF8Encoding]::new($true))
+    return Invoke-WorkerRequest $Request
+}
+'@
+Write-TestWorker -Runtime $release -Definitions $mock
 $tests = @'
 OnExit(StopBrowserWorker)
 global SqliteChecks := 0
@@ -190,6 +191,7 @@ SqlCheck(value,message) {
 }
 '@
 Invoke-AppTest -Runtime $release -Body $tests -Setup @'
+RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
 RuntimePorts.BrowserIdentity := (hwnd) => hwnd=0
 RuntimePorts.WorkerRequest := FixtureWorkerRequest
 '@

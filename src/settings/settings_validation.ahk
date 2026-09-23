@@ -3,9 +3,8 @@ ValidateSettingsPreferences(state) {
     if !HasSettingValue([0,1],state.AutoMode) || !HasSettingValue(ReactionCounts,state.DefaultReactionCount)
         || !HasSettingValue(ReactionIntervals,state.DefaultReactionIntervalMs)
         || !IsInteger(state.DefaultReactionKind) || state.DefaultReactionKind < 1 || state.DefaultReactionKind > ReactionNames.Length
-        || !ValidShortcutKey(state.ReactionShortcut)
         throw Error("共通設定の値が正しくありません。")
-    ValidateShortcutMap(PreferenceShortcutMap(state))
+    ValidateShortcutMap(state.ShortcutKeys)
 }
 ValidateSettingsText(value, label, required := false) {
     if InStr(value,"`r") || InStr(value,"`n") || (required && !Trim(value))

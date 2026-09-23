@@ -11,7 +11,7 @@ Invoke-AppFixture -Body @'
     WinWaitActive("ahk_id " ManagementWindow.Hwnd,,2)
     EditingProfileId := ""
     RefreshManagement()
-    EditReactionKey()
+    ShowShortcutManager()
     keyDialog := ActiveEditorDialog.Window
     otherWindow := Gui(,"Focus test")
     otherWindow.Show("w200 h100")
@@ -67,6 +67,31 @@ Invoke-AppFixture -Body @'
     WinWaitActive("ahk_id " DanmakuEditorWindow.Hwnd,,2)
     CloseDanmakuEditor()
     Assert(WinActive("ahk_id " ManagementWindow.Hwnd) && SharedDanmakuItems.Length=beforeFocusSave,"cancel restores panel without saving")
+    global DiscardCount := 0, DiscardAllowed := false
+    RuntimePorts.ConfirmDiscard := ConfirmEditorTest
+    OpenDanmakuEditor(true)
+    CloseDanmakuEditor()
+    Assert(!DanmakuEditorWindow && DiscardCount=0,"unchanged editor closes without asking")
+    OpenDanmakuEditor(true)
+    for control in DanmakuEditorWindow
+        if control.Type="Edit" {
+            nameControl := control
+            break
+        }
+    nameControl.Value := "draft"
+    CloseDanmakuEditor()
+    Assert(DanmakuEditorWindow && ActiveEditorDialog && DiscardCount=1 && nameControl.Value="draft","cancelled discard preserves input and modal owner")
+    nameControl.Value := ""
+    CloseDanmakuEditor()
+    Assert(!DanmakuEditorWindow && DiscardCount=1,"reverted edit closes without asking")
+    OpenDanmakuEditor(true)
+    for control in DanmakuEditorWindow
+        if control.Type="Edit"
+            control.Value := "discarded"
+    DiscardAllowed := true
+    CloseDanmakuEditor()
+    Assert(!DanmakuEditorWindow && !ActiveEditorDialog && DiscardCount=2 && SharedDanmakuItems.Length=beforeFocusSave,"confirmed discard saves nothing")
+    RuntimePorts.ConfirmDiscard := 0
     ManagementWindow.Hide()
     modal := Gui(,"key editing fixture")
     PaletteWindow.Opt("+Disabled")
@@ -77,4 +102,10 @@ Invoke-AppFixture -Body @'
     PaletteWindow.Opt("-Disabled"), modal.Destroy()
 
 
+'@ -Helpers @'
+ConfirmEditorTest(message) {
+    global DiscardCount
+    DiscardCount++
+    return DiscardAllowed
+}
 '@

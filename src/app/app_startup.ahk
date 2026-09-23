@@ -4,7 +4,7 @@ InitializeApplication() {
     try StartupSource := CaptureAppSource()
     global AppVersion := Trim(FileRead(A_ScriptDir "\VERSION", "UTF-8"))
     global ApplicationShortcutsInstalled := false, ShortcutKeys := DefaultShortcutKeys()
-    global LastBrowserOperation := {Mode:"なし", State:"未実行", Duration:0}
+    RecordBrowserOperation({Mode:"なし", State:"未実行", Duration:0})
     global AppDataDirectory := A_ScriptDir "\data"
     global SettingsDatabasePath := AppDataDirectory "\settings.db"
     global SharedDanmakuItems := []

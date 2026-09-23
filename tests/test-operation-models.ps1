@@ -75,9 +75,9 @@ Invoke-AppFixture -Body @'
     Assert(!PaletteInsert.Enabled && !PaletteDefaults.Enabled && !ManagementItemButtons[1].Enabled,"worker state disables conflicting controls")
     IsBrowserOperationBusy := false
     RefreshOperationControls()
-    EditReactionKey()
+    ShowShortcutManager()
     Assert(!OperationAllowed("input") && OperationAllowed("preferences"),"editor state permits its own settings save")
-    SaveReactionDefaults(CreateReactionOptions(2,10,25,ReactionShortcut))
+    SaveReactionDefaults(CreateReactionOptions(2,10,25,ShortcutKeys["reaction"]))
     Assert(DefaultReactionCount=10,"preferences save succeeds inside editor")
     WinClose("ahk_id " ActiveEditorDialog.Window.Hwnd)
     Sleep(30)
