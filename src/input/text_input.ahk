@@ -10,9 +10,12 @@
         return false
     if !VerifyInputTarget(hwnd, expectedVideo)
         return false
+    SendInputText(text)
+    return true
+}
+SendInputText(text) {
     if RuntimePorts.Text
         RuntimePorts.Text.Call(text)
     else
         SendText(text)
-    return true
 }

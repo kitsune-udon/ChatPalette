@@ -108,4 +108,26 @@ $script:identity=$true; $script:changeAfterFocus=$true
 Assert ((Request 'chat_focus').State -eq 'changed') 'navigation after focus is rejected'
 $script:changeAfterFocus=$false; $script:finalVideo='abcdefghijk'; $script:blurAfterFocus=$true
 Assert ((Request 'chat_focus').State -eq 'wrong_window') 'foreground loss after focus is rejected'
+$script:blurAfterFocus=$false; $script:foreground=$true
+$focused=Request 'chat_focus'
+Assert (![string]::IsNullOrEmpty($focused.Detail)) 'successful focus returns an identity token'
+$script:reads=0
+$verified=Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=2;Video='abcdefghijk';FocusToken=$focused.Detail}
+Assert ($verified.State -eq 'ok') 'focused element token is accepted once'
+$script:reads=0
+Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=3;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'consumed token cannot be reused'
+$focused=Request 'chat_focus'; $script:reads=0
+Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=4;Video='abcdefghijk';FocusToken='stale'}).State -eq 'wrong_input') 'stale or foreign token rejected'
+$focused=Request 'chat_focus'
+$script:FocusedChat.Window=999; $script:reads=0
+Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=5;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'token for another window rejected'
+$focused=Request 'chat_focus'
+$other=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition)
+Assert ($null -ne $other) 'desktop supplies a distinct element for identity rejection'
+$script:FocusedChat.Element=$other; $script:reads=0
+Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=6;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'another chat-kind element cannot substitute for the focused target'
+$focused=Request 'chat_focus'; $script:kind='comment'; $script:reads=0
+Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=7;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'comment field rejects deferred delivery'
+$script:kind='chat'; $script:reads=0
+Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=8;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'failed verification also consumes the token'
 Write-Output "PASS: $script:checks page action checks; no real typing, pointer movement or reactions."

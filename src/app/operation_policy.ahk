@@ -15,7 +15,7 @@ EvaluateOperation(action, state) {
     return {Allowed:true, Reason:"", Message:""}
 }
 CurrentOperationState() {
-    return {Refreshing:PaletteRefresh.Active || ManagementRefresh.Active, BrowserBusy:IsBrowserOperationBusy,
+    return {Refreshing:PaletteRefresh.Active || ManagementRefresh.Active, BrowserBusy:IsBrowserOperationBusy || !!ActiveChatFocus,
         ReactionActive:!!ActiveReactionJob, EditorLabel:ActiveEditorDialog ? ActiveEditorDialog.Label : (DanmakuEditorWindow ? "弾幕の編集" : "")}
 }
 OperationPolicy(action) {

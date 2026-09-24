@@ -132,6 +132,7 @@ function Move-PagePointer($Point) {
 function Invoke-PageAction($Request) {
     $reply = @{Seq=$Request.Seq; Window=$Request.Window; State='unavailable'; Video=''}
     $window = [long]$Request.Window
+    if ($Request.Mode -eq 'chat_focus') { $script:FocusedChat = $null }
     try {
         if (!(Test-ReactionForeground $window)) { $reply.State='wrong_window'; return $reply }
         $video = Read-BrowserVideoId $window
@@ -151,6 +152,11 @@ function Invoke-PageAction($Request) {
             $reply.State='unknown'
             Focus-ChatElement $target
             $reply.State = Wait-ChatFocus $target $window $video
+            if ($reply.State -eq 'focused') {
+                $token = [guid]::NewGuid().ToString('N')
+                $script:FocusedChat = @{Token=$token;Window=$window;Video=$video;Element=$target}
+                $reply.Detail = $token
+            }
             return $reply
         }
         if ($Request.Mode -ne 'reactions_show') { return $reply }

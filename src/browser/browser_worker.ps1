@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 $script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)
 $script:AddressBarCache = @{}
+$script:FocusedChat = $null
 . (Join-Path $PSScriptRoot 'reaction_automation.ps1')
 . (Join-Path $PSScriptRoot 'video_metadata.ps1')
 . (Join-Path $PSScriptRoot 'input_target.ps1')
@@ -93,6 +94,11 @@ function Invoke-WorkerRequest($Request) {
     }
     $reply = @{ Seq = $Request.Seq; State = 'unavailable'; Author = ''; Channel = ''; Video = ''; Window = $Request.Window }
     if ($Request.Mode -notin @('browser_context', 'resolve', 'verify', 'verify_input', 'verify_chat')) { return $reply }
+    $focus = $null
+    if ($Request.FocusToken) {
+        $focus = $script:FocusedChat
+        $script:FocusedChat = $null # Consume even when verification fails.
+    }
     $video = Read-BrowserVideoId ([long]$Request.Window)
     $reply.Video = $video
     if (-not $video) { return $reply }
@@ -102,6 +108,14 @@ function Invoke-WorkerRequest($Request) {
         $verifiedElement = $null
         $kind = Get-FocusedYouTubeInput ([long]$Request.Window) ([ref]$verifiedElement)
         if (!$kind -or ($Request.Mode -eq 'verify_chat' -and $kind -ne 'chat')) { $reply.State = 'wrong_input'; return $reply }
+        if ($Request.FocusToken) {
+            if ($null -eq $focus -or $focus.Token -cne $Request.FocusToken -or
+                $focus.Window -ne [long]$Request.Window -or $focus.Video -cne $video -or
+                $kind -ne 'chat' -or !(Test-ReactionForeground ([long]$Request.Window)) -or
+                ![System.Windows.Automation.Automation]::Compare($focus.Element,$verifiedElement)) {
+                $reply.State = 'wrong_input'; return $reply
+            }
+        }
         if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
         if (!(Test-FocusedInputIdentity $verifiedElement ([long]$Request.Window))) { $reply.State = 'wrong_input'; return $reply }
         $reply.State = 'ok'

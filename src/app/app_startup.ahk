@@ -9,7 +9,7 @@ InitializeApplication() {
     global SettingsDatabasePath := AppDataDirectory "\settings.db"
     global SharedDanmakuItems := []
     global Profiles := [], InputProfileId := "", TargetBrowserHwnd := 0, PaletteWindow := 0, DanmakuEditorWindow := 0
-    global AutoMode := 1, IsBrowserOperationBusy := false
+    global AutoMode := 1, IsBrowserOperationBusy := false, ActiveChatFocus := 0
     global PaletteRefresh := RefreshCycle(RunScheduledPaletteSearch), ManagementRefresh := RefreshCycle(RefreshManagement)
     global DetectedChannel := {State: "unavailable", Author: "", Channel: ""}
     global ActiveEditorDialog := false

@@ -8,7 +8,7 @@ BrowserOperationLabel(mode) {
     return modes.Get(mode,"不明な操作：" mode)
 }
 BrowserResultInfo(state) {
-    static states := Map("未実行","まだ実行していません", "ok","確認できました", "registered","登録できました",
+    static states := Map("inserted","保留した弾幕を入力しました", "input_cancelled","対象変更・期限切れなどにより保留した弾幕入力を中止しました", "未実行","まだ実行していません", "ok","確認できました", "registered","登録できました",
         "cleared","クリアキーを送りました（内容は未取得）", "focused","チャット欄へ移動しました", "hovered","表示用UIへマウスを移動しました（表示は未確認）",
         "configured","設定済み（認識は未確認）", "ready","操作対象を確認できました", "operated","ボタンを操作しました（受理は未確認）",
         "chat_missing","入力可能なチャット欄が見つかりません", "chat_ambiguous","チャット入力欄が複数あります",

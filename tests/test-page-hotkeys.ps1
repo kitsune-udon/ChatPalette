@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 $body = @'
-global HotkeyCalls := [], HotkeyChecks := 0
+global HotkeyCalls := [], HotkeyChecks := 0, QueueKeys := false
 global FixtureBrowser := Gui(,"ChatPalette isolated page shortcut test")
 global FixtureChat := FixtureBrowser.AddEdit("w320","unsent fixture text")
 other := FixtureBrowser.AddButton("w160","Another control")
@@ -17,13 +17,12 @@ try {
     other.Focus()
     SendLevel(1)
     SetKeyDelay(40,40)
-    for entry in [["f",1],["c",3],["e",4]] {
-        SendEvent("{Control down}{Alt down}" entry[1] "{Alt up}{Control up}")
+    for entry in [["f",1,"chat_focus","focused"],["c",3,"chat_clear","cleared"],["e",4,"reactions_show","hovered"]] {
+        SendTestKeys("{Control down}{Alt down}" entry[1] "{Alt up}{Control up}")
         deadline := A_TickCount+3000
-        while HotkeyCalls.Length<entry[2] && A_TickCount<deadline
+        while (HotkeyCalls.Length<entry[2] || LastBrowserOperation.Mode!=entry[3] || LastBrowserOperation.State!=entry[4]) && A_TickCount<deadline
             Sleep(10)
-        Sleep(50)
-        CheckHotkey(HotkeyCalls.Length=entry[2],"real binding dispatches " entry[1])
+        CheckHotkey(HotkeyCalls.Length=entry[2] && LastBrowserOperation.State=entry[4],"real binding dispatches " entry[1] " calls=" HotkeyCalls.Length " state=" LastBrowserOperation.State " active=" (!!WinActive("ahk_id " FixtureBrowser.Hwnd)))
         if entry[1]="f"
             CheckHotkey(DllCall("GetFocus","Ptr")=FixtureChat.Hwnd && FixtureChat.Value="unsent fixture text","F focuses without modifying draft")
         if entry[1]="c"
@@ -32,27 +31,40 @@ try {
             CheckHotkey(HotkeyCalls[4].Mode="reactions_show","E selects non-sending page operation")
     }
     CheckHotkey(HotkeyCalls[3].Video="abcdefghijk","verification uses the focused page's video")
+    ExecuteDanmakuCommand("add","",0,{Name:"queued",Text:"queued text",Slot:1})
+    global QueueSent := []
+    RuntimePorts.Text := (text) => QueueSent.Push(text)
+    AutoMode := false, QueueKeys := true
+    before := HotkeyCalls.Length
+    SendTestKeys("{Control down}{Alt down}f{Alt up}{Control up}")
+    deadline := A_TickCount+4000
+    while (!QueueSent.Length || ActiveChatFocus) && A_TickCount<deadline
+        Sleep(10)
+    CheckHotkey(QueueSent.Length=1 && QueueSent[1]="queued text" && !ActiveChatFocus,"real F then danmaku shortcut is delivered once")
+    CheckHotkey(HotkeyCalls.Length=before+3 && HotkeyCalls[-1].Mode="verify_chat","queued native shortcut waits for focus and verification")
+    QueueKeys := false
+    HotkeyCalls.RemoveAt(5,HotkeyCalls.Length-4)
     remapped := CurrentShortcutMap(), remapped["chat_focus"] := "^+j"
     SaveShortcutMap(remapped)
-    SendEvent("{Control down}{Shift down}j{Shift up}{Control up}")
+    SendTestKeys("{Control down}{Shift down}j{Shift up}{Control up}")
     deadline := A_TickCount+3000
     while HotkeyCalls.Length<5 && A_TickCount<deadline
         Sleep(10)
     CheckHotkey(HotkeyCalls.Length=5 && HotkeyCalls[5].Mode="chat_focus","remapped key dispatches production action")
-    SendEvent("{Control down}{Alt down}f{Alt up}{Control up}")
+    SendTestKeys("{Control down}{Alt down}f{Alt up}{Control up}")
     Sleep(150)
     CheckHotkey(HotkeyCalls.Length=5,"old key is removed after remapping")
     RuntimePorts.BrowserIdentity := (hwnd) => false
-    SendEvent("{Control down}{Shift down}j{Shift up}{Control up}")
+    SendTestKeys("{Control down}{Shift down}j{Shift up}{Control up}")
     Sleep(150)
     CheckHotkey(HotkeyCalls.Length=5,"remapped page key remains browser-only")
-    SendEvent("{Control down}{Alt down}q{Alt up}{Control up}")
+    SendTestKeys("{Control down}{Alt down}q{Alt up}{Control up}")
     Sleep(150)
     CheckHotkey(DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd),"palette key remains available outside browsers")
     remapped["stop"] := "^+s"
     SaveShortcutMap(remapped)
     global ActiveReactionJob := CreateReactionJob({Mode:"queued"})
-    SendEvent("{Control down}{Shift down}s{Shift up}{Control up}")
+    SendTestKeys("{Control down}{Shift down}s{Shift up}{Control up}")
     Sleep(150)
     CheckHotkey(!ActiveReactionJob,"remapped stop key cancels queued operation outside browsers")
     FixtureBrowser.Destroy()
@@ -65,14 +77,33 @@ try {
 ShortcutFixtureRequest(hwnd,mode,video,extra) {
     HotkeyCalls.Push({Mode:mode,Video:video})
     if mode="chat_focus" {
+        if QueueKeys {
+            SetTimer(SendQueuedKeys,-20)
+            Sleep(150)
+        }
         FixtureChat.Focus()
-        return {State:"focused",Video:"abcdefghijk"}
+        return {State:"focused",Video:"abcdefghijk",Detail:"fixture-token"}
     }
+    if mode="browser_context"
+        return {State:"ok",Video:"abcdefghijk"}
     if mode="verify_chat"
         return {State:DllCall("GetFocus","Ptr")=FixtureChat.Hwnd ? "ok" : "wrong_input",Video:video}
     if mode="reactions_show"
         return {State:"hovered",Video:"abcdefghijk"}
     throw Error("Unexpected browser operation: " mode)
+}
+; Emit each complete key chord before dispatching its hook callbacks. Otherwise
+; the test driver itself can be suspended with synthetic modifiers still down.
+SendTestKeys(keys) {
+    previousCritical := A_IsCritical
+    Critical("On")
+    try SendEvent(keys)
+    finally Critical(previousCritical)
+    Sleep(-1)
+}
+SendQueuedKeys() {
+    SendLevel(1)
+    SendTestKeys("{Control down}{Alt down}3{Alt up}{Control up}")
 }
 CheckHotkey(value,label) {
     global HotkeyChecks

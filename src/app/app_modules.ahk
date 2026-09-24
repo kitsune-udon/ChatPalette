@@ -41,3 +41,4 @@
 #Include %A_ScriptDir%\src\ui\library_presentation.ahk
 #Include %A_ScriptDir%\src\ui\refresh_cycle.ahk
 #Include %A_ScriptDir%\src\ui\browser_feedback.ahk
+#Include %A_ScriptDir%\src\shortcuts\focused_input.ahk
