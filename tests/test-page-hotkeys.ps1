@@ -31,6 +31,12 @@ try {
             CheckHotkey(HotkeyCalls[4].Mode="reactions_show","E selects non-sending page operation")
     }
     CheckHotkey(HotkeyCalls[3].Video="abcdefghijk","verification uses the focused page's video")
+    ; Exercise production delivery in our own edit, including literal AHK syntax.
+    FixtureChat.Focus()
+    literal := "日本語の弾幕 {Enter} ^!+#"
+    SendInputText(literal)
+    Sleep(100)
+    CheckHotkey(FixtureChat.Value=literal,"IME-off delivery preserves Unicode and literal key syntax")
     ExecuteDanmakuCommand("add","",0,{Name:"queued",Text:"queued text",Slot:1})
     global QueueSent := []
     RuntimePorts.Text := (text) => QueueSent.Push(text)

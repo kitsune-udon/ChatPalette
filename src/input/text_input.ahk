@@ -17,5 +17,6 @@ SendInputText(text) {
     if RuntimePorts.Text
         RuntimePorts.Text.Call(text)
     else
-        SendText(text)
+        ; VK_IME_OFF is idempotent; send it and literal text in one ordered batch.
+        SendInput("{vk1A}{Text}" text)
 }
