@@ -16,6 +16,7 @@ Invoke-AppFixture -Body @'
     Assert(FixtureResolveCount=1,"delivery never re-resolves profile or list index")
     FixtureCurrentVideo := "aaaaaaaaaaa"
     Assert(DeliverText(plan.Text,plan.Window,plan.Video) && FixtureSent[1]="A-one","unchanged target delivers the frozen text")
+    Assert(!DeliverText(plan.Text,plan.Window,plan.Video,true) && FixtureSent.Length=1,"closed palette target returns input failure without typing")
     rejected := false
     try ResolveDanmakuInput({ProfileId:"input-b",ItemId:Profiles[2].Items[1].Id,ExpectedText:"B-one",Window:123,Origin:"palette"})
     catch

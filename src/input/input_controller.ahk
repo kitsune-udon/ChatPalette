@@ -37,7 +37,7 @@ ResolveShortcutInput(scope, slot, hwnd) {
     throw Error("このキーに弾幕が割り当てられていません。")
 }
 PlanDanmakuInput(request, context) {
-    if context.ProfileId != request.ProfileId
+    if !(context.ProfileId == request.ProfileId)
         throw Error("配信者が変わりました。弾幕を選び直してください。")
     items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},request.ProfileId)
     for item in items {

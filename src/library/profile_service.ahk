@@ -6,7 +6,7 @@ FindProfileIndexById(profiles, id) {
     if id = ""
         return 0
     for i, profile in profiles
-        if profile.Id = id
+        if profile.Id == id
             return i
     return 0
 }
@@ -24,7 +24,7 @@ SaveInputProfileId(id) {
     previousCritical := A_IsCritical
     Critical("On")
     try {
-        if id = InputProfileId || (id != "" && !FindProfileById(Profiles,id))
+        if id == InputProfileId || (id != "" && !FindProfileById(Profiles,id))
             return
         state := CreatePreferences()
         state.InputProfileId := id

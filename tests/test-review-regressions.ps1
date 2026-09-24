@@ -2,9 +2,18 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+# Inject only into the isolated runtime: simulate failure just before scheduling a retry.
+$controller=Join-Path $release 'src\reactions\reaction_controller.ahk'
+$source=[IO.File]::ReadAllText($controller)
+$retry='            SetTimer(ReactionCountdown, -1000)'
+if (!$source.Contains($retry)) { throw 'Missing registration retry injection point' }
+$source=$source.Replace($retry,"            ReviewBeforeCaptureRetry()`r`n"+$retry)
+$queue='        SetTimer(QuickReaction, -1)'
+if (!$source.Contains($queue)) { throw 'Missing quick reaction injection point' }
+[IO.File]::WriteAllText($controller,$source.Replace($queue,"        ReviewBeforeQuickStart()`r`n"+$queue),[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
-global ReviewChecks := 0, ReviewFocusCalls := 0, ReviewFocusChanges := true, ReviewStatusCalls := 0
+global ReviewChecks := 0, ReviewFocusCalls := 0, ReviewFocusChanges := true, ReviewStatusCalls := 0, ReviewContextCalls := 0, ReviewCaptureRetryFailure := false, ReviewQuickStartFailure := false, ReviewTargetChange := false, ReviewReplacementJob := 0
 try {
     BuildManagement()
     AutoMode := false
@@ -24,6 +33,55 @@ try {
         if active != PaletteWindow.Hwnd
             WinClose("ahk_id " active)
         Sleep(30)
+    }
+    ReviewQuickStartFailure := true
+    QueueQuickReaction()
+    AssertReview(!ActiveReactionJob && LastReactionResult.Reason="unavailable" && LastReactionResult.Detail="quick start failure","quick start failure releases job and preserves error")
+    Critical("On")
+    try {
+        QueueQuickReaction()
+        AssertReview(ActiveReactionJob && ActiveReactionJob.Phase="queued","quick shortcut can be queued again after failure")
+        CancelReaction()
+        AssertReview(!ActiveReactionJob && LastReactionResult.Reason="cancelled","queued shortcut remains cancellable")
+    } finally Critical("Off")
+    AssertReview(!ScheduleReaction("reaction_send",3),"closed browser rejects scheduled start")
+    AssertReview(!ActiveReactionJob && LastReactionResult.Reason="unavailable","failed activation releases reaction ownership")
+    AssertReview(!ScheduleReaction("reaction_send",3) && !ActiveReactionJob && ReviewContextCalls=2,"another scheduled attempt reaches browser lookup after failed start")
+    replacement := CreateReactionJob({Mode:"queued",Window:123})
+    ReviewReplacementJob := replacement
+    AssertReview(!ScheduleReaction("reaction_send",3) && ActiveReactionJob=replacement,"context reply cannot overwrite a newer reaction job")
+    FinishReactionJob(replacement)
+    browser := Gui()
+    browser.Show("w200 h100")
+    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=browser.Hwnd
+    TargetBrowserHwnd := browser.Hwnd
+    try {
+        ReviewTargetChange := true
+        AssertReview(ScheduleReaction("reaction_capture",60),"scheduled registration retains original window across context lookup")
+        AssertReview(ActiveReactionJob.Window=browser.Hwnd && TargetBrowserHwnd=123,"job uses the queried window even when palette target changes")
+        AssertReview(ActiveReactionJob && ActiveReactionJob.Phase="waiting","successful start retains waiting job")
+        CancelReaction()
+        AssertReview(!ActiveReactionJob && LastReactionResult.Reason="cancelled","scheduled registration remains cancellable")
+    } finally {
+        CancelReaction()
+        browser.Destroy()
+        RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+        TargetBrowserHwnd := 123
+    }
+    RuntimePorts.Foreground := (hwnd) => hwnd=123
+    try {
+        ActiveReactionJob := CreateReactionJob({Mode:"reaction_capture",Window:123,Video:"abcdefghijk"})
+        ReactionCountdown()
+        AssertReview(ActiveReactionJob && ActiveReactionJob.Phase="waiting","unsupported capture retains scheduled wait")
+        CancelReaction()
+        AssertReview(!ActiveReactionJob,"registration wait can be cancelled")
+        ReviewCaptureRetryFailure := true
+        ActiveReactionJob := CreateReactionJob({Mode:"reaction_capture",Window:123,Video:"abcdefghijk"})
+        ReactionCountdown()
+        AssertReview(!ActiveReactionJob && LastReactionResult.Reason="unavailable" && LastReactionResult.Detail="capture retry failure","retry preparation failure releases job and preserves error")
+    } finally {
+        CancelReaction()
+        RuntimePorts.Foreground := ReviewWindowActive
     }
     ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Completed:5,Total:10,Interval:0,Cancelled:false})
     ReactionSendNext()
@@ -104,6 +162,20 @@ AssertReview(condition,label) {
         throw Error(label)
     ReviewChecks++
 }
+ReviewBeforeQuickStart() {
+    global ReviewQuickStartFailure
+    if ReviewQuickStartFailure {
+        ReviewQuickStartFailure := false
+        throw Error("quick start failure")
+    }
+}
+ReviewBeforeCaptureRetry() {
+    global ReviewCaptureRetryFailure
+    if ReviewCaptureRetryFailure {
+        ReviewCaptureRetryFailure := false
+        throw Error("capture retry failure")
+    }
+}
 ReviewWindowActive(hwnd) {
     global ReviewFocusCalls
     return ++ReviewFocusCalls=1
@@ -111,6 +183,21 @@ ReviewWindowActive(hwnd) {
 FixtureWorkerRequest(hwnd,mode:="resolve",expectedVideo:="",extra:="") {
     if mode = "reaction_configure"
         return {State:"configured",Author:"",Channel:"",Video:"",Detail:""}
+    if mode = "reaction_capture"
+        return {State:"unsupported",Author:"",Channel:"",Video:"abcdefghijk",Detail:"menu unavailable"}
+    if mode = "browser_context" {
+        global ReviewContextCalls, ReviewTargetChange, TargetBrowserHwnd, ReviewReplacementJob, ActiveReactionJob
+        ReviewContextCalls++
+        if ReviewReplacementJob {
+            ActiveReactionJob := ReviewReplacementJob
+            ReviewReplacementJob := 0
+        }
+        if ReviewTargetChange {
+            ReviewTargetChange := false
+            TargetBrowserHwnd := 123
+        }
+        return {State:"ok",Author:"",Channel:"",Video:"abcdefghijk",Detail:""}
+    }
     global ReviewStatusCalls
     ReviewStatusCalls++
     if mode != "reaction_status"

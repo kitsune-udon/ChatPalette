@@ -1,9 +1,8 @@
 ﻿param([string]$ProjectRoot=(Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'release-files.ps1')
-$version=([IO.File]::ReadAllText((Join-Path $ProjectRoot 'VERSION'))).Trim()
-if ($version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$' -or
-    [IO.File]::ReadAllText((Join-Path $ProjectRoot 'README.md')) -notmatch ('現在のバージョン：\*\*'+[regex]::Escape($version)+'\*\*')) { throw 'README/VERSION mismatch' }
+$version=Get-ReleaseVersion $ProjectRoot
+if ([IO.File]::ReadAllText((Join-Path $ProjectRoot 'README.md')) -notmatch ('現在のバージョン：\*\*'+[regex]::Escape($version)+'\*\*')) { throw 'README/VERSION mismatch' }
 $utf8=[Text.UTF8Encoding]::new($false,$true)
 foreach($file in @(Get-ReleaseFiles $ProjectRoot)) {
     $bytes=[IO.File]::ReadAllBytes($file.FullName)

@@ -14,7 +14,11 @@ OpenSettingsRepository(path) {
     return ActiveSettingsRepository
 }
 LoadSettings(path) {
-    return OpenSettingsRepository(path).Load()
+    try return OpenSettingsRepository(path).Load()
+    catch as failure {
+        CloseSettingsStore()
+        throw failure
+    }
 }
 SaveSettings(state,path) {
     OpenSettingsRepository(path).SaveAll(state)
@@ -57,7 +61,7 @@ CreateSettingsDatabase(path) {
     }
 }
 VerifySettingsMigration(expected,actual) {
-    if expected.Profiles.Length != actual.Profiles.Length || expected.InputProfileId != actual.InputProfileId
+    if expected.Profiles.Length != actual.Profiles.Length || !(expected.InputProfileId == actual.InputProfileId)
         throw Error("配信者の移行結果が一致しません。")
     for key in ["AutoMode","DefaultReactionKind","DefaultReactionCount","DefaultReactionIntervalMs"] {
         if !(expected.%key% == actual.%key%)

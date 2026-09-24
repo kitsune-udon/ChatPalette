@@ -18,16 +18,17 @@ ChooseSetting(control, values, selected) {
 }
 
 
-BeginWorkerWait(mode) {
-    enabled := !!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd)
-    managerEnabled := ManagementWindow && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd)
+CreateWorkerWait(mode) {
+    return {Enabled:!!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),
+        ManagerEnabled:ManagementWindow && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),
+        Notification:() => ShowStatusTip(mode = "verify_input" ? "入力欄を確認しています…" : "YouTubeの操作対象を確認しています…")}
+}
+BeginWorkerWait(view) {
     PaletteWindow.Opt("+Disabled")
     if ManagementWindow
         ManagementWindow.Opt("+Disabled")
     RefreshOperationControls()
-    notification := () => ShowStatusTip(mode = "verify_input" ? "入力欄を確認しています…" : "YouTubeの操作対象を確認しています…")
-    SetTimer(notification,-400)
-    return {Enabled:enabled, ManagerEnabled:managerEnabled, Notification:notification}
+    SetTimer(view.Notification,-400)
 }
 
 EndWorkerWait(view) {
@@ -55,9 +56,9 @@ BeginEditorDialog(view,label) {
     PaletteWindow.Opt("+Disabled"), ManagementWindow.Opt("+Disabled")
     RefreshOperationControls()
 }
-EndEditorDialog() {
+EndEditorDialog(view) {
     global ActiveEditorDialog
-    if !ActiveEditorDialog
+    if !ActiveEditorDialog || ActiveEditorDialog.Window != view
         return
     state := ActiveEditorDialog
     ActiveEditorDialog := 0

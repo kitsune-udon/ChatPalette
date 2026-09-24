@@ -15,8 +15,14 @@ Rewrite 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(
 Rewrite 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
 Rewrite 'src/ui/management/management_view.ahk' '        for row in model.Rows' '        for row in model.Rows {'
 Rewrite 'src/ui/management/management_view.ahk' '        ManagedList.ModifyCol(1,160)' ("            ProbeManagementUpdate()`r`n        }`r`n        ManagedList.ModifyCol(1,160)")
-Rewrite 'src/ui/shortcut_manager.ahk' '    try panel.Viewport.Show()' ("    try {`r`n        if IsSet(ProbeShortcutFailure) && ProbeShortcutFailure`r`n            throw Error(""fixture shortcut presentation failure"")`r`n        panel.Viewport.Show()`r`n    }")
+Rewrite 'src/ui/shortcut_manager.ahk' '        panel.Viewport.Show()' ("        if IsSet(ProbeShortcutFailure) && ProbeShortcutFailure`r`n            throw Error(""fixture shortcut presentation failure"")`r`n        panel.Viewport.Show()")
 Rewrite 'src/ui/window_presenter.ahk' 'PresentWindow(view, options := "", layout := 0, activate := true) {' ('PresentWindow(view, options := "", layout := 0, activate := true) {' + "`r`n    if IsSet(ProbeEditorFailure) && ProbeEditorFailure && ActiveEditorDialog && ActiveEditorDialog.Window = view`r`n        throw Error(""fixture editor presentation failure"")")
+Rewrite 'src/ui/management/management_dialogs.ahk' '    moveButton.OnEvent("Click",Move)' ('    moveButton.OnEvent("Click",Move)' + "`r`n    global ProbeCommitAction := Move")
+Rewrite 'src/ui/management/management_dialogs.ahk' '    view.AddButton("w180 Default","連携する").OnEvent("Click",Save)' ('    view.AddButton("w180 Default","連携する").OnEvent("Click",Save)' + "`r`n    global ProbeCommitAction := Save")
+Rewrite 'src/ui/management/management_controller.ahk' 'RefreshManagementAfterCommand(editId) {' ('RefreshManagementAfterCommand(editId) {' + "`r`n    if IsSet(ProbeAfterSaveFailure) && ProbeAfterSaveFailure`r`n        throw Error(""fixture post-save refresh failure"")")
+Rewrite 'src/ui/palette/palette_view.ahk' 'RefreshPalette() {' ('RefreshPalette() {' + "`r`n    if IsSet(ProbeShortcutRefreshFailure) && ProbeShortcutRefreshFailure`r`n        throw Error(""fixture shortcut refresh failure"")")
+Rewrite 'src/ui/ui_runtime.ahk' 'RefreshOperationControls() {' ('RefreshOperationControls() {' + "`r`n    global ProbeWaitFailure`r`n    if IsSet(ProbeWaitFailure) && ProbeWaitFailure && IsBrowserOperationBusy {`r`n        ProbeWaitFailure := false`r`n        throw Error(""fixture wait preparation failure"")`r`n    }")
+Rewrite 'src/ui/ui_runtime.ahk' 'RefreshOperationControls() {' ('RefreshOperationControls() {' + "`r`n    global ProbeEditorBeginFailure`r`n    if IsSet(ProbeEditorBeginFailure) && ProbeEditorBeginFailure && ActiveEditorDialog {`r`n        ProbeEditorBeginFailure := false`r`n        throw Error(""fixture editor begin failure"")`r`n    }")
 $tests=@'
 OnExit(StopBrowserWorker)
 global UiChecks := 0, ProbeListArmed := false, ProbeViewportArmed := false, InputCalls := 0
@@ -57,6 +63,7 @@ try {
     PaletteRows := []
     InsertPaletteItem()
     CheckUi(InputCalls=0,"stale index is rejected")
+    SharedDanmakuItems[1] := old
     RefreshPaletteItems()
     BuildManagement()
     global ProbeShortcutFailure := true
@@ -85,6 +92,17 @@ try {
         CheckUi(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"editor presentation failure restores parents")
     }
     ProbeEditorFailure := false
+    global ProbeEditorBeginFailure := false
+    for openEditor in [() => OpenDanmakuEditor(true),TransferItem,OpenChannelLinkDialog,ShowShortcutManager,() => ManageProfile("unbind")] {
+        ManagedList.Modify(1,"Select Focus")
+        ProbeEditorBeginFailure := true
+        failed := false
+        try openEditor.Call()
+        catch as failure
+            failed := failure.Message == "fixture editor begin failure"
+        CheckUi(failed && !ActiveEditorDialog && !DanmakuEditorWindow,"editor begin failure releases ownership and draft window")
+        CheckUi(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"editor begin failure restores parent windows")
+    }
     RuntimePorts.BrowserIdentity := 0, RuntimePorts.ResolveChannel := 0, RuntimePorts.BrowserRequest := 0
     TargetBrowserHwnd := 0
     global ProbeManagementArmed := true
@@ -105,6 +123,75 @@ try {
     PaletteViewport.Dispose()
     PaletteViewport.FlushUpdates()
     CheckUi(!PaletteViewport.PendingOffset && !PaletteViewport.PendingResize,"disposed viewport drops pending work")
+    destination := ExecuteProfileCommand("add","","destination").ProfileId
+    EditingProfileId := ""
+    RefreshManagement()
+    ManagedList.Modify(1,"Select Focus")
+    movedId := SharedDanmakuItems[1].Id
+    TransferItem()
+    global ProbeAfterSaveFailure := true
+    failed := false
+    try ProbeCommitAction.Call()
+    catch as failure
+        failed := failure.Message == "fixture post-save refresh failure"
+    CheckUi(failed && !ActiveEditorDialog,"move closes committed editor before failed refresh")
+    saved := LoadSettings(SettingsDatabasePath)
+    CheckUi(GetLibraryItems(saved,destination).Length=1 && GetLibraryItems(saved,destination)[1].Id=movedId,"move remains saved after refresh failure")
+    ProbeAfterSaveFailure := false
+    RefreshManagement()
+    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=ManagementWindow.Hwnd
+    RuntimePorts.ResolveChannel := (hwnd) => {State:"ok",Author:"new channel",Channel:"/channel/new",Video:"abcdefghijk"}
+    RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"not_registered"}
+    TargetBrowserHwnd := ManagementWindow.Hwnd
+    beforeProfiles := Profiles.Length
+    OpenChannelLinkDialog()
+    ProbeAfterSaveFailure := true
+    failed := false
+    try ProbeCommitAction.Call()
+    catch as failure
+        failed := failure.Message == "fixture post-save refresh failure"
+    CheckUi(failed && !ActiveEditorDialog,"channel link closes committed editor before failed refresh")
+    saved := LoadSettings(SettingsDatabasePath)
+    CheckUi(saved.Profiles.Length=beforeProfiles+1 && saved.Profiles[-1].Channel="/channel/new","channel link remains saved after refresh failure")
+    ProbeAfterSaveFailure := false
+    RuntimePorts.ShortcutKey := (action,key,enabled) => 0
+    panel := ShowShortcutManager("chat_focus")
+    panel.Stage.Call("^+j")
+    global ProbeShortcutRefreshFailure := true
+    panel.Save.Call()
+    CheckUi(!panel.SaveButton.Enabled && InStr(panel.Status.Text,"保存済み"),"key save remains committed when external refresh fails")
+    CheckUi(LoadSettings(SettingsDatabasePath).ShortcutKeys["chat_focus"]="^+j","key persisted despite refresh failure")
+    panel.First.Choose(2), panel.UpdateItems.Call()
+    panel.SaveItems.Call()
+    CheckUi(!panel.ItemsSaveButton.Enabled && InStr(panel.ItemStatus.Text,"保存済み"),"item save baseline advances before external refresh")
+    CheckUi(ItemSlot(LoadSettings(SettingsDatabasePath).SharedDanmakuItems[1])=1,"item assignment persisted despite refresh failure")
+    RuntimePorts.ConfirmDiscard := (*) => false
+    panel.Close.Call()
+    CheckUi(!ActiveEditorDialog,"committed drafts close without discard confirmation")
+    ProbeShortcutRefreshFailure := false
+    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+    global ProbeWaitFailure := false
+    for managerEnabled in [true,false] {
+        ManagementWindow.Opt(managerEnabled ? "-Disabled" : "+Disabled")
+        ProbeWaitFailure := true
+        failed := false
+        try NativeRequestBrowserOperation(123,"browser_context")
+        catch as failure
+            failed := failure.Message == "fixture wait preparation failure"
+        CheckUi(failed && !IsBrowserOperationBusy,"failed wait preparation releases operation ownership")
+        CheckUi(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && !!DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd)=managerEnabled,"failed wait preparation restores prior parent enabled state")
+    }
+    ManagementWindow.Opt("-Disabled")
+    priorEditor := Gui(), currentEditor := Gui()
+    BeginEditorDialog(priorEditor,"prior fixture")
+    EndEditorDialog(priorEditor)
+    BeginEditorDialog(currentEditor,"current fixture")
+    EndEditorDialog(priorEditor)
+    CheckUi(ActiveEditorDialog && ActiveEditorDialog.Window=currentEditor,"stale editor cannot release current ownership")
+    CheckUi(!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && !DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"stale close keeps current editor parents disabled")
+    EndEditorDialog(currentEditor)
+    CheckUi(!ActiveEditorDialog && DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"owning editor restores parents")
+    priorEditor.Destroy(), currentEditor.Destroy()
     FileAppend("PASS: " UiChecks " UI publication and reentry checks; no browser operations`n","*")
     ExitApp()
 } catch as failure {

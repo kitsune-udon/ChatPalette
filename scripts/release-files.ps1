@@ -1,4 +1,10 @@
-﻿function Get-ReleaseFiles([string]$project) {
+﻿function Get-ReleaseVersion([string]$Project) {
+    $version = ([IO.File]::ReadAllText((Join-Path $Project 'VERSION'))).Trim()
+    if ($version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid VERSION' }
+    return $version
+}
+
+function Get-ReleaseFiles([string]$project) {
     # Allowlist only. Never traverse data/, .git/, or test execution directories.
     $files = @(Get-ChildItem -LiteralPath $project -File | Where-Object { $_.Name -in 'main.ahk', 'README.md','LICENSE','VERSION','CHANGELOG.md','.gitignore','.gitattributes','.editorconfig' })
     $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'src') -Recurse -File | Where-Object { $_.Extension -in '.ahk','.ps1' })

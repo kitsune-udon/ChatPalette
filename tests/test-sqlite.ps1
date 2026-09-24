@@ -125,6 +125,23 @@ try {
         SqlCheck(DefaultReactionIntervalMs=(phase="pending" ? 250 : 500),"process crash respects transaction boundary " phase)
         CloseSettingsStore()
     }
+    recoveryPath := A_ScriptDir "\load-recovery.db"
+    recoveryState := CreateSettingsSnapshot()
+    recovery := SettingsRepository(recoveryPath,true)
+    recovery.SaveAll(recoveryState)
+    recovery.Db.Backup(recoveryPath ".good")
+    recovery.Db.Run("DELETE FROM preferences")
+    recovery.Close()
+    failed := false
+    try LoadSettings(recoveryPath)
+    catch
+        failed := true
+    SqlCheck(failed && !ActiveSettingsRepository,"failed load releases active connection before repair")
+    FileMove(recoveryPath,recoveryPath ".bad",false)
+    FileMove(recoveryPath ".good",recoveryPath,false)
+    VerifySettingsMigration(recoveryState,LoadSettings(recoveryPath))
+    SqlCheck(true,"repaired database reloads in the same process")
+    CloseSettingsStore()
     FileAppend("PASS: " SqliteChecks " SQLite storage, delta, failure and recovery checks`n","*")
     ExitApp()
 } catch as failure {

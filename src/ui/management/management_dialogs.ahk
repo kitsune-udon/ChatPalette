@@ -39,8 +39,10 @@ OpenDanmakuEditor(isNew) {
     DanmakuEditorWindow.AddButton("x+8 w120","キャンセル").OnEvent("Click",CloseDanmakuEditor)
     DanmakuEditorWindow.OnEvent("Close",CloseDanmakuEditor)
     DanmakuEditorWindow.OnEvent("Escape",CloseDanmakuEditor)
-    BeginEditorDialog(DanmakuEditorWindow,"弾幕の編集")
-    try PresentWindow(DanmakuEditorWindow)
+    try {
+        BeginEditorDialog(DanmakuEditorWindow,"弾幕の編集")
+        PresentWindow(DanmakuEditorWindow)
+    }
     catch as failure {
         FinishDanmakuEditor()
         throw failure
@@ -77,7 +79,7 @@ FinishDanmakuEditor() {
     editor := DanmakuEditorWindow
     restoreFocus := !!WinActive("ahk_id " editor.Hwnd)
     ; The owner must be enabled before Windows chooses a successor to the dialog.
-    EndEditorDialog()
+    EndEditorDialog(editor)
     editor.Destroy()
     DanmakuEditorWindow := 0
     RefreshOperationControls()
@@ -101,7 +103,7 @@ TransferItem(*) {
     if editId != ""
         names.Push("共通の弾幕"), destinationIds.Push("")
     for profile in Profiles {
-        if profile.Id = editId
+        if profile.Id == editId
             continue
         names.Push(profile.Name), destinationIds.Push(profile.Id)
     }
@@ -114,14 +116,16 @@ TransferItem(*) {
         status.Text := "移動先がありません。先に配信者を追加してください。"
     view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
     view.OnEvent("Close",Close), view.OnEvent("Escape",Close)
-    BeginEditorDialog(view,"弾幕の移動")
-    try PresentWindow(view)
+    try {
+        BeginEditorDialog(view,"弾幕の移動")
+        PresentWindow(view)
+    }
     catch as failure {
         Close()
         throw failure
     }
     Close(*) {
-        EndEditorDialog()
+        EndEditorDialog(view)
         view.Destroy()
     }
     Move(*) {
@@ -132,16 +136,16 @@ TransferItem(*) {
             status.Text := "保存できませんでした。" failure.Message
             return
         }
+        Close()
         RefreshManagementAfterCommand(editId)
         SetManagementNotice(result.Label "：保存済み")
-        Close()
     }
 }
 
 
 
 
-OpenChannelLinkDialog(*) {
+OpenChannelLinkDialog(preferredProfileId := "",*) {
     if RestoreActiveEditorDialog() || !OperationAllowed("edit")
         return
     ShowManagement(1)
@@ -154,6 +158,10 @@ OpenChannelLinkDialog(*) {
         SetManagementNotice("チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。")
         return
     }
+    if preferredProfileId != "" && !FindProfileById(Profiles,preferredProfileId) {
+        SetManagementNotice("対象の配信者がありません。選び直してください。")
+        return
+    }
     view := Gui("+Owner" ManagementWindow.Hwnd,"このチャンネルと連携")
     view.SetFont("s10","Yu Gothic UI")
     view.AddText("w440 r2","YouTubeのチャンネル：" candidate.Author)
@@ -161,7 +169,7 @@ OpenChannelLinkDialog(*) {
     names := ["新しい配信者として登録"], ids := [""], selected := 1
     for profile in Profiles {
         names.Push(profile.Name), ids.Push(profile.Id)
-        if profile.Channel == candidate.Channel
+        if preferredProfileId != "" ? profile.Id == preferredProfileId : profile.Channel == candidate.Channel
             selected := ids.Length
     }
     target := view.AddDropDownList("w440 Choose" selected,names)
@@ -175,8 +183,10 @@ OpenChannelLinkDialog(*) {
     view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
     view.OnEvent("Close",Close),view.OnEvent("Escape",Close)
     UpdateChoice()
-    BeginEditorDialog(view,"チャンネル連携")
-    try PresentWindow(view)
+    try {
+        BeginEditorDialog(view,"チャンネル連携")
+        PresentWindow(view)
+    }
     catch as failure {
         Close()
         throw failure
@@ -188,11 +198,11 @@ OpenChannelLinkDialog(*) {
         current := isNew ? "" : Profiles[FindProfileIndexById(Profiles,ids[target.Value])].Channel
         summary.Text := (isNew ? "新しい配信者「" selectedName "」を作成します。" : "配信者「" selectedName "」の連携を設定します。")
             . "`n現在：" (current = "" ? "未連携" : current) "`n変更後：" candidate.Channel
-            . "`n" (current != "" && current != candidate.Channel ? "以前のチャンネルでは自動選択されなくなります。" : "このチャンネルで弾幕を自動選択します。")
+            . "`n" (current != "" && !(current == candidate.Channel) ? "以前のチャンネルでは自動選択されなくなります。" : "このチャンネルで弾幕を自動選択します。")
     }
     Close(*) {
         restore := !!WinActive("ahk_id " view.Hwnd)
-        EndEditorDialog()
+        EndEditorDialog(view)
         view.Destroy()
         if restore
             WinActivate("ahk_id " ManagementWindow.Hwnd)
@@ -200,7 +210,7 @@ OpenChannelLinkDialog(*) {
     Save(*) {
         try {
             fresh := ResolveBrowserChannel(TargetBrowserHwnd)
-            if fresh.State != "ok" || fresh.Channel != candidate.Channel
+            if fresh.State != "ok" || !(fresh.Channel == candidate.Channel)
                 throw Error("チャンネルが変わりました。連携画面を閉じて、もう一度開いてください。")
             if target.Value = 1
                 result := ExecuteProfileCommand("add","",name.Value,candidate.Channel)
@@ -210,8 +220,8 @@ OpenChannelLinkDialog(*) {
             status.Text := "連携できませんでした。" failure.Message
             return
         }
+        Close()
         RefreshManagementAfterCommand(result.ProfileId)
         SetManagementNotice("チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。")
-        Close()
     }
 }

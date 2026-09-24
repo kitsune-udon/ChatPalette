@@ -97,7 +97,7 @@ Invoke-AppFixture -Body @'
     PaletteWindow.Opt("+Disabled")
     BeginEditorDialog(modal,"リアクションキーの編集")
     Assert(ActiveEditorDialog.Label="リアクションキーの編集" && ShortcutBlocked(),"blocking reason identifies actual dialog")
-    EndEditorDialog()
+    EndEditorDialog(modal)
     Assert(!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"closing dialog preserves previously disabled window")
     PaletteWindow.Opt("-Disabled"), modal.Destroy()
 

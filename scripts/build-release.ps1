@@ -2,8 +2,8 @@
 $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot -Parent
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $project 'dist' }
-$version = (Get-Content -LiteralPath (Join-Path $project 'VERSION') -Raw).Trim()
-if ($version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid VERSION' }
+. (Join-Path $PSScriptRoot 'release-files.ps1')
+$version = Get-ReleaseVersion $project
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $zipPath = Join-Path $output "ChatPalette-$version.zip"
@@ -11,7 +11,6 @@ if (Test-Path -LiteralPath $zipPath) { throw 'Release archive already exists. Us
 $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $stage | Out-Null
-    . (Join-Path $PSScriptRoot 'release-files.ps1')
     Copy-ReleaseFiles $project $stage
     $hashes = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
         (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring($stage.Length + 1).Replace('\','/')

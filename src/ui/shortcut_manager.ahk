@@ -5,11 +5,13 @@ ShowShortcutManager(selectedAction := "reaction",*) {
     if !ManagementWindow
         BuildManagement()
     panel := CreateShortcutManager(selectedAction)
-    BeginEditorDialog(panel.Window,"ショートカットの管理")
-    try panel.Viewport.Show()
+    try {
+        BeginEditorDialog(panel.Window,"ショートカットの管理")
+        panel.Viewport.Show()
+    }
     catch as failure {
         panel.Viewport.Dispose()
-        EndEditorDialog()
+        EndEditorDialog(panel.Window)
         panel.Window.Destroy()
         throw failure
     }
@@ -124,15 +126,19 @@ CreateShortcutManager(selectedAction := "reaction") {
     SaveKeys(*) {
         if !OperationAllowed("preferences") || !KeysDirty()
             return
+        try SaveShortcutMap(draft)
+        catch as failure {
+            status.Text := "保存できませんでした。" failure.Message
+            return
+        }
+        draft := CurrentShortcutMap()
         try {
-            SaveShortcutMap(draft)
-            draft := CurrentShortcutMap()
+            UpdateKeys(), RefreshItemLabels()
             RefreshReactionDefaultControls()
             RefreshPalette(), RefreshManagement()
-            UpdateKeys(), RefreshItemLabels()
             status.Text := "キー設定を保存し、反映しました。"
         } catch as failure {
-            status.Text := "保存できませんでした。" failure.Message
+            status.Text := "キー設定は保存済みです。画面を更新できませんでした。" failure.Message
         }
     }
     ResetKeys(*) {
@@ -181,19 +187,25 @@ CreateShortcutManager(selectedAction := "reaction") {
     SaveItems(*) {
         if !OperationAllowed("preferences") || !ItemsDirty()
             return
+        try SaveShortcutItemAssignments(scopeIds[scope.Value],itemIds[first.Value],itemIds[second.Value])
+        catch as failure {
+            itemStatus.Text := "保存できませんでした。" failure.Message
+            return
+        }
+        itemBaseline := [first.Value,second.Value]
         try {
-            SaveShortcutItemAssignments(scopeIds[scope.Value],itemIds[first.Value],itemIds[second.Value])
-            RefreshPalette(), RefreshManagement(), RefreshItems()
+            UpdateItems()
+            RefreshPalette(), RefreshManagement()
             itemStatus.Text := "弾幕の割当を保存しました。"
         } catch as failure {
-            itemStatus.Text := "保存できませんでした。" failure.Message
+            itemStatus.Text := "弾幕の割当は保存済みです。画面を更新できませんでした。" failure.Message
         }
     }
     Close(*) {
         if (KeysDirty() || ItemsDirty()) && !ConfirmEditorDiscard(view,"未保存の変更を破棄して閉じますか？")
             return
         viewport.Dispose()
-        EndEditorDialog()
+        EndEditorDialog(view)
         view.Destroy()
     }
 }

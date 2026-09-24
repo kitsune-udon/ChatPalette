@@ -92,7 +92,7 @@ ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId :
                 item := items[index], items[index] := items[selected], items[selected] := item
                 label := "「" item.Name "」の並べ替え"
             case "move":
-                if destinationId = profileId
+                if destinationId == profileId
                     throw Error("別の移動先を選んでください。")
                 destination := EditLibraryItems(library,destinationId)
                 item := items.RemoveAt(index).Clone(), item.Slot := 0
@@ -177,16 +177,18 @@ SaveShortcutItemAssignments(profileId,firstId,secondId) {
     previousCritical := A_IsCritical
     Critical("On")
     try {
-        library := CreateLibraryDraft(), items := EditLibraryItems(library,profileId), found := Map("",true)
+        library := CreateLibraryDraft(), items := EditLibraryItems(library,profileId)
+        unmatched := (firstId != "") + (secondId != "")
         for i,item in items {
-            found[item.Id] := true
             slot := item.Id == firstId ? 1 : (item.Id == secondId ? 2 : 0)
+            if slot
+                unmatched--
             if ItemSlot(item) != slot {
                 replacement := item.Clone(), replacement.Slot := slot
                 items[i] := replacement
             }
         }
-        if !found.Has(firstId) || !found.Has(secondId)
+        if unmatched
             throw Error("対象の弾幕が変更されました。画面を開き直してください。")
         CommitLibraryDraft(library,"ショートカットの弾幕割当")
     } finally Critical(previousCritical)

@@ -54,13 +54,23 @@ Invoke-AppFixture -Body @'
     TargetBrowserHwnd := 123
     historyBeforeLink := LibraryHistory.Length
     profilesBeforeLink := Profiles.Length
-    OpenChannelLinkDialog()
+    PaletteWindow.Show()
+    WinActivate("ahk_id " PaletteWindow.Hwnd)
+    Assert(WinWaitActive("ahk_id " PaletteWindow.Hwnd,,2),"palette is foreground before link click")
+    RefreshOperationControls()
+    SendMessage(0xF5,0,0,PaletteBind.Hwnd)
+    deadline := A_TickCount+2000
+    while !ActiveEditorDialog && A_TickCount<deadline
+        Sleep(10)
+    Assert(ActiveEditorDialog,"palette button opens shared link editor")
     linkDialog := ActiveEditorDialog.Window
     WinActivate("ahk_id " linkDialog.Hwnd)
     Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link chooser active")
     for control in linkDialog
         if control.Type="Button" && control.Text="連携する"
             linkSave := control
+    WinActivate("ahk_id " linkDialog.Hwnd)
+    Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
     ControlClick(linkSave.Hwnd)
     deadline := A_TickCount+2000
     while ActiveEditorDialog && A_TickCount<deadline
@@ -70,6 +80,56 @@ Invoke-AppFixture -Body @'
     Assert(FixtureResolveCount=2,"link rechecks channel before commit")
     UndoLibraryChange()
     Assert(Profiles.Length=profilesBeforeLink && !ChannelIndex.Has("/channel/a"),"one undo removes created linked profile")
+    targetProfile := ExecuteProfileCommand("add","","managed target").ProfileId
+    EditingProfileId := targetProfile
+    countBeforeBind := Profiles.Length
+    ManageProfile("bind")
+    linkDialog := ActiveEditorDialog.Window
+    linkChoice := 0
+    for control in linkDialog {
+        if control.Type="DDL"
+            linkChoice := control
+        if control.Type="Button" && control.Text="連携する"
+            linkSave := control
+    }
+    Assert(linkChoice && linkChoice.Text="managed target","management link opens shared chooser with managed profile selected")
+    WinActivate("ahk_id " linkDialog.Hwnd)
+    Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
+    ControlClick(linkSave.Hwnd)
+    deadline := A_TickCount+2000
+    while ActiveEditorDialog && A_TickCount<deadline
+        Sleep(10)
+    Assert(!ActiveEditorDialog && Profiles.Length=countBeforeBind && FindProfileById(Profiles,targetProfile).Channel="/channel/a","management link updates existing profile through shared editor")
+    OpenChannelLinkDialog()
+    linkDialog := ActiveEditorDialog.Window
+    linkChoice := 0
+    for control in linkDialog
+        if control.Type="DDL"
+            linkChoice := control
+    Assert(linkChoice && linkChoice.Text="managed target","palette chooser still defaults to current channel owner")
+    for control in linkDialog
+        if control.Type="Button" && control.Text="連携する"
+            linkSave := control
+    beforeMismatchHistory := LibraryHistory.Length
+    RuntimePorts.ResolveChannel := (hwnd) => {State:"ok",Author:"other",Channel:"/channel/A",Video:"bbbbbbbbbbb"}
+    WinActivate("ahk_id " linkDialog.Hwnd)
+    Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
+    ControlClick(linkSave.Hwnd)
+    deadline := A_TickCount+2000, rejectedMessage := false
+    while ActiveEditorDialog && !rejectedMessage && A_TickCount<deadline {
+        for control in linkDialog
+            if InStr(control.Text,"連携できませんでした。")
+                rejectedMessage := true
+        Sleep(10)
+    }
+    Assert(ActiveEditorDialog && rejectedMessage,"case-only channel change is rejected while retaining editor")
+    Assert(LibraryHistory.Length=beforeMismatchHistory && FindProfileById(Profiles,targetProfile).Channel=="/channel/a","rejected channel change leaves saved binding and history untouched")
+    RuntimePorts.ResolveChannel := FixtureResolveChannel
+    WinClose("ahk_id " linkDialog.Hwnd)
+    deadline := A_TickCount+2000
+    while ActiveEditorDialog && A_TickCount<deadline
+        Sleep(10)
+    Assert(!ActiveEditorDialog,"shared link editor closes normally")
     FixtureInputMode := false
     TargetBrowserHwnd := 0
     ManagementWindow.Hide()

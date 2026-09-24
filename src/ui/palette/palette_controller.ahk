@@ -104,7 +104,7 @@ GetPaletteLibraryTarget() {
     if selected && selected <= PaletteRows.Length {
         row := PaletteRows[selected]
         index := row.Shared ? 0 : FindProfileIndexById(Profiles,row.ProfileId)
-        if row.Shared || (index && HasPaletteInputProfile() && row.ProfileId = InputProfileId) {
+        if row.Shared || (index && HasPaletteInputProfile() && row.ProfileId == InputProfileId) {
             items := row.Shared ? SharedDanmakuItems : Profiles[index].Items
             if PaletteItemMatches(row,items)
                 return {ProfileId:row.Shared ? "" : row.ProfileId, Index:row.Index}
@@ -118,5 +118,5 @@ GetPaletteLibraryTarget() {
 ; Display and editing use the same validity rule; manual selection survives window loss.
 HasPaletteInputProfile() {
     return !!GetInputProfile() && (!AutoMode || (IsBrowser(TargetBrowserHwnd)
-        && DetectedChannel.State = "ok" && ChannelIndex.Get(DetectedChannel.Channel,"") = InputProfileId))
+        && DetectedChannel.State = "ok" && ChannelIndex.Get(DetectedChannel.Channel,"") == InputProfileId))
 }

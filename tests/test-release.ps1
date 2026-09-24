@@ -22,6 +22,24 @@ foreach($invalid in @('version','encoding','link')) {
         if(!$rejected) { throw "Source validator accepted invalid $invalid" }
     } finally { [IO.File]::WriteAllBytes($target,$original) }
 }
+$versionFile=Join-Path $release 'VERSION'
+$originalVersion=[IO.File]::ReadAllBytes($versionFile)
+try {
+    [IO.File]::WriteAllText($versionFile,'invalid-version')
+    foreach ($script in @('build-release.ps1','verify-release.ps1')) {
+        $invalidOutput=Join-Path $release ('invalid-' + $script)
+        $rejected=$false
+        try { & (Join-Path $release ('scripts\' + $script)) -OutputDirectory $invalidOutput | Out-Null }
+        catch {
+            if ($_.Exception.Message -ne 'Invalid VERSION') { throw }
+            $rejected=$true
+        }
+        if (!$rejected) { throw "$script accepted an invalid release version" }
+        if ((Test-Path -LiteralPath $invalidOutput) -and @(Get-ChildItem -LiteralPath $invalidOutput).Count) {
+            throw "$script produced artifacts for an invalid release version"
+        }
+    }
+} finally { [IO.File]::WriteAllBytes($versionFile,$originalVersion) }
 $out=Join-Path $release 'dist'
 & (Join-Path $release 'scripts\build-release.ps1') -OutputDirectory $out | Out-Null
 $version=([IO.File]::ReadAllText((Join-Path $release 'VERSION'))).Trim()
@@ -65,4 +83,23 @@ $failed=$false
 try { & (Join-Path $release 'scripts\build-release.ps1') -OutputDirectory $out | Out-Null } catch { $failed=$true }
 if (!$failed -or (Get-FileHash -LiteralPath $zipPath).Hash -ne $before) { throw 'Release overwrite protection failed' }
 if (@(Get-ChildItem -LiteralPath $out -Directory -Filter 'stage-*').Count) { throw 'Release staging directory left behind' }
+$protectedOutput=Join-Path $release '[validated]'
+New-Item -ItemType Directory -Path $protectedOutput | Out-Null
+$protectedReport=Join-Path $protectedOutput "ChatPalette-$version.validation.json"
+[IO.File]::WriteAllText($protectedReport,'existing validation record')
+$runnerPath=Join-Path $release 'tests\run.ps1'
+$runnerSource=[IO.File]::ReadAllBytes($runnerPath)
+try {
+    # An unexpected validation must stop here, not recursively run the entire suite.
+    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath)`r`nthrow 'Unexpected validation run'`r`n",[Text.UTF8Encoding]::new($true))
+    $rejected=$false
+    try { & (Join-Path $release 'scripts\verify-release.ps1') -OutputDirectory $protectedOutput | Out-Null }
+    catch {
+        if ($_.Exception.Message -ne 'Release output exists; choose a new directory.') { throw }
+        $rejected=$true
+    }
+    if (!$rejected -or [IO.File]::ReadAllText($protectedReport) -ne 'existing validation record') {
+        throw 'Validation report overwrite protection failed for literal path'
+    }
+} finally { [IO.File]::WriteAllBytes($runnerPath,$runnerSource) }
 Write-Output 'PASS: release contents, privacy exclusions, includes, checksums and overwrite protection.'

@@ -6,6 +6,30 @@ $tests = @'
 global ContractChecks := 0
 try {
     AutoMode := false
+    originalLibrary := CreateLibrarySnapshot()
+    caseLibrary := CreateLibrarySnapshot()
+    caseLibrary.Profiles.Push({Id:"case-profile",Name:"lower",Channel:"",Items:[{Id:"case-item",Name:"lower item",Text:"lower",Slot:1},{Id:"CASE-ITEM",Name:"upper item",Text:"upper",Slot:2}]})
+    caseLibrary.Profiles.Push({Id:"CASE-PROFILE",Name:"upper",Channel:"",Items:[]})
+    CommitLibraryChange(caseLibrary,"case-sensitive identities")
+    CheckContract(FindProfileById(Profiles,"CASE-PROFILE").Name="upper","profile lookup preserves exact stored identity")
+    SaveInputProfileId("case-profile")
+    SaveInputProfileId("CASE-PROFILE")
+    CheckContract(InputProfileId=="CASE-PROFILE" && LoadSettings(SettingsDatabasePath).InputProfileId=="CASE-PROFILE","case-only selection change persists exact identity")
+    ExecuteProfileCommand("rename","CASE-PROFILE","renamed upper")
+    CheckContract(FindProfileById(Profiles,"case-profile").Name="lower" && FindProfileById(Profiles,"CASE-PROFILE").Name="renamed upper","edit cannot target a case-insensitive match")
+    historyBeforeAssignment := LibraryHistory.Length
+    rejected := false
+    try SaveShortcutItemAssignments("case-profile","Case-item","")
+    catch
+        rejected := true
+    assigned := GetLibraryItems(LoadSettings(SettingsDatabasePath),"case-profile")
+    CheckContract(rejected && ItemSlot(assigned[1])=1 && ItemSlot(assigned[2])=2 && LibraryHistory.Length=historyBeforeAssignment,"unknown case variant cannot clear saved assignments or add history")
+    SaveShortcutItemAssignments("case-profile","CASE-ITEM","case-item")
+    assigned := GetLibraryItems(LoadSettings(SettingsDatabasePath),"case-profile")
+    CheckContract(ItemSlot(assigned[1])=2 && ItemSlot(assigned[2])=1,"exact case-distinct item identities swap assignments")
+    ExecuteProfileCommand("delete","CASE-PROFILE")
+    CheckContract(FindProfileById(Profiles,"case-profile") && !FindProfileById(Profiles,"CASE-PROFILE"),"deletion removes only exact profile")
+    CommitLibraryChange(originalLibrary,"restore identity fixture")
     a := ExecuteProfileCommand("add","","A").ProfileId
     b := ExecuteProfileCommand("add","","B").ProfileId
     c := ExecuteProfileCommand("add","","C").ProfileId

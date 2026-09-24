@@ -49,9 +49,13 @@ UndoLibraryChange(*) {
 ManageProfile(action, *) {
     if !OperationAllowed("edit")
         return
-    BeginEditorDialog(ManagementWindow,"配信者の編集")
-    try RunProfileDialog(action)
-    finally EndEditorDialog()
+    if action = "bind"
+        return OpenChannelLinkDialog(GetEditingProfileId())
+    try {
+        BeginEditorDialog(ManagementWindow,"配信者の編集")
+        RunProfileDialog(action)
+    }
+    finally EndEditorDialog(ManagementWindow)
 }
 RunProfileDialog(action) {
     profile := FindProfileById(Profiles,EditingProfileId)
@@ -68,24 +72,7 @@ RunProfileDialog(action) {
     } else if action = "delete" {
         if MsgBox("「" profile.Name "」と弾幕 " profile.Items.Length "件を削除します。履歴から取り消せます。","配信者を削除","YesNo Default2") != "Yes"
             return
-    } else if action = "bind" {
-        if !IsBrowser(TargetBrowserHwnd) {
-            SetManagementNotice("YouTubeからパレットを開き直してください。")
-            return
-        }
-        candidate := ResolveBrowserChannel(TargetBrowserHwnd)
-        if candidate.State != "ok" {
-            SetManagementNotice("チャンネルを取得できませんでした。YouTubeから開き直してください。")
-            return
-        }
-        if MsgBox("YouTubeのチャンネル「" candidate.Author "」で、配信者「" profile.Name "」の弾幕を自動選択します。`n`n現在：" (profile.Channel != "" ? profile.Channel : "未連携") "`n変更後：" candidate.Channel "`n以前の連携はこのチャンネルに置き換わります。`n`n連携しますか？","チャンネル連携の確認","YesNo") != "Yes"
-            return
-        fresh := ResolveBrowserChannel(TargetBrowserHwnd)
-        if fresh.State != "ok" || fresh.Channel != candidate.Channel {
-            SetManagementNotice("チャンネルが変わりました。もう一度連携してください。")
-            return
-        }
-        value := candidate.Channel
+
     }
     try result := ExecuteProfileCommand(action,editId,value)
     catch as failure {

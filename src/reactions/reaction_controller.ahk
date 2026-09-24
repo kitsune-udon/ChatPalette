@@ -41,21 +41,30 @@ QueueQuickReaction(*) {
     global ActiveReactionJob
     if ShortcutBlocked("reaction")
         return
-    ActiveReactionJob := CreateReactionJob({Mode: "queued", Window: WinExist("A")})
-    SetReactionStatus("ショートカットを受け付けました。キーを離してください。", false, "queued")
-    ShowReactionProgress()
-    SetTimer(QuickReaction, -1)
+    job := CreateReactionJob({Mode: "queued", Window: WinExist("A")})
+    ActiveReactionJob := job
+    try {
+        SetReactionStatus("ショートカットを受け付けました。キーを離してください。", false, "queued")
+        ShowReactionProgress()
+        SetTimer(QuickReaction, -1)
+    } catch as failure {
+        FinishReactionJob(job)
+        ReactionNotice("unavailable",failure.Message,"",job)
+    }
 }
 
 ScheduleReaction(mode, delay, options := 0) {
     global ActiveReactionJob
     if !OperationAllowed("reaction")
         return false
-    if !IsBrowser(TargetBrowserHwnd) {
+    hwnd := TargetBrowserHwnd
+    if !IsBrowser(hwnd) {
         ReactionNotice("wrong_window")
         return false
     }
-    context := RequestBrowserOperation(TargetBrowserHwnd, "browser_context")
+    context := RequestBrowserOperation(hwnd, "browser_context")
+    if !OperationAllowed("reaction")
+        return false
     if context.State != "ok" {
         ReactionNotice(context.State)
         return false
@@ -63,16 +72,23 @@ ScheduleReaction(mode, delay, options := 0) {
     choice := options ? options.Reaction : DefaultReactionKind
     if !choice
         return false
-    ActiveReactionJob := CreateReactionJob({Mode: mode, Window: TargetBrowserHwnd, Video: context.Video,
+    job := CreateReactionJob({Mode: mode, Window: hwnd, Video: context.Video,
         Applied:"適用：" (options ? "今回の設定" : "共通設定") " / " ReactionNames[choice],
         Choice: choice, Remaining: delay, Total: options ? options.Count : DefaultReactionCount,
         Completed: 0, Cancelled: false, Interval: options ? options.Interval : DefaultReactionIntervalMs})
-    PaletteWindow.Hide()
-    WinActivate("ahk_id " TargetBrowserHwnd)
-    SetReactionStatus(mode = "reaction_capture" ? "登録待機中：YouTubeの♡にマウスを重ねてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。" : delay "秒後に開始します。♡のメニューを開いてください。")
-    ShowReactionProgress()
-    SetTimer(ReactionCountdown, 1000)
-    return true
+    ActiveReactionJob := job
+    try {
+        PaletteWindow.Hide()
+        WinActivate("ahk_id " hwnd)
+        SetReactionStatus(mode = "reaction_capture" ? "登録待機中：YouTubeの♡にマウスを重ねてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。" : delay "秒後に開始します。♡のメニューを開いてください。")
+        ShowReactionProgress()
+        SetTimer(ReactionCountdown, 1000)
+        return true
+    } catch as failure {
+        FinishReactionJob(job)
+        ReactionNotice("unavailable",failure.Message,"",job)
+        return false
+    }
 }
 
 ReactionCountdown() {
@@ -100,6 +116,7 @@ ReactionCountdown() {
         ReactionSendNext()
         return
     }
+    retryScheduled := false
     try {
         point := Buffer(8, 0)
         DllCall("GetPhysicalCursorPos", "Ptr", point)
@@ -114,13 +131,14 @@ ReactionCountdown() {
             job.Detail := reply.HasOwnProp("Detail") ? reply.Detail : ""
             SetReactionStatus("登録待機中：♡のメニューを開き、マウスをその上に置いてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。")
             SetTimer(ReactionCountdown, -1000)
+            retryScheduled := true
             return
         } else
             ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "")
     } catch as captureError {
         ReactionNotice("unavailable", captureError.Message)
     } finally {
-        if ActiveReactionJob = job && (!IsSet(reply) || !ShouldWaitForRegistration(job, reply))
+        if !retryScheduled
             FinishReactionJob(job)
     }
 }

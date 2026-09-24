@@ -20,7 +20,8 @@ NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extr
         return {State: mode = "reaction_send" ? "unknown" : "unavailable", Author: "", Channel: "", Video: ""}
     IsBrowserOperationBusy := true
     try {
-        waitView := BeginWorkerWait(mode)
+        waitView := CreateWorkerWait(mode)
+        BeginWorkerWait(waitView)
         started := A_TickCount
         ready := true
         if InStr(mode,"reaction_") = 1 {

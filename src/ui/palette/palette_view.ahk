@@ -17,7 +17,7 @@
     PaletteProfile := PaletteWindow.AddDropDownList("x134 y100 w260", [])
     PaletteProfile.OnEvent("Change", SelectPaletteProfile)
     PaletteBind := PaletteWindow.AddButton("x402 y98 w138 h28", "チャンネル連携…")
-    PaletteBind.OnEvent("Click", OpenChannelLinkDialog)
+    PaletteBind.OnEvent("Click", OpenChannelLinkDialog.Bind(""))
     PaletteSearch := PaletteWindow.AddEdit("x16 y140 w524 h28")
     DllCall("SendMessage", "Ptr", PaletteSearch.Hwnd, "UInt", 0x1501, "Ptr", 1, "Str", "弾幕名・本文を検索")
     PaletteSearch.OnEvent("Change", QueuePaletteSearch)
@@ -178,7 +178,7 @@ InsertPaletteItem(*) {
         return
     row := PaletteRows[index]
     profile := row.Shared ? 0 : GetInputProfile()
-    items := row.Shared ? SharedDanmakuItems : (profile && profile.Id = row.ProfileId ? profile.Items : [])
+    items := row.Shared ? SharedDanmakuItems : (profile && profile.Id == row.ProfileId ? profile.Items : [])
     if !PaletteItemMatches(row,items) {
         RefreshPalette()
         return

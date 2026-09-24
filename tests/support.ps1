@@ -23,7 +23,7 @@ function Invoke-AppTest {
 function Invoke-AhkTest {
     param([string]$Runtime, [string]$Source, [int]$TimeoutMs = 30000)
     $entry = Join-Path $Runtime 'test.ahk'
-    [IO.File]::WriteAllText($entry, $source, [Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText($entry, "#Warn VarUnset, StdOut`r`n" + $Source, [Text.UTF8Encoding]::new($true))
     $out = Join-Path $Runtime 'stdout.txt'
     $err = Join-Path $Runtime 'stderr.txt'
     $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + $entry + '"'), '--smoke' -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err

@@ -1,6 +1,8 @@
 ﻿DeliverText(text, hwnd, expectedVideo, activate := false) {
     if activate {
-        WinActivate("ahk_id " hwnd)
+        try WinActivate("ahk_id " hwnd)
+        catch TargetError
+            return false
         if !WinWaitActive("ahk_id " hwnd, , 2)
             return false
         KeyWait("Enter")

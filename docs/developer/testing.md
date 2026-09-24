@@ -32,7 +32,7 @@
 | 小さい画面 | [test-viewports.ps1](../../tests/test-viewports.ps1) | 配置、スクロール、フォーカス追従 |
 | UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の公開、更新中操作の拒否、対象ID、配置の直列化・終了後の保留解除 |
 | 通知の寿命 | [test-status-tip.ps1](../../tests/test-status-tip.ps1) | 通知置換時の期限更新、継続表示、明示消去。隔離プロセスの実ツールチップで確認 |
-| 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 結果保持、通知、診断など過去の不具合 |
+| 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 結果保持、通知、診断、リアクション予約・再待機失敗時のジョブ解放 |
 | 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 履歴共有、差分編集、同値保存、非表示更新抑制、パレットの同値書き込み抑制 |
 | 検索・選択肢 | [test-search-scheduling.ps1](../../tests/test-search-scheduling.ps1) | 検索集約、旧結果操作防止、選択肢の再利用 |
 | 時間制御 | [test-timing.ps1](../../tests/test-timing.ps1) | タイマー精度の取得・解除、間隔、平均開始時刻 |
@@ -63,7 +63,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\test-registratio
 
 ## テストの起動と差し替え
 
-`support.ps1`の`Invoke-AppTest`が、モジュール読み込み・任意の外部アダプター設定・`InitializeApplication`・検査本体から独立したAHK入口を作ります。`Invoke-AhkTest`がプロセス起動、時間制限、終了コード、標準出力を管理します。`--smoke`を付けるため、起動失敗で復旧ダイアログを待ち続けません。実際の`main.ahk`は起動テストで別途検証します。
+`support.ps1`の`Invoke-AppTest`が、モジュール読み込み・任意の外部アダプター設定・`InitializeApplication`・検査本体から独立したAHK入口を作ります。`Invoke-AhkTest`がプロセス起動、時間制限、終了コード、標準出力を管理します。生成するテスト入口では未定義変数の警告を標準出力へ送り、検証関数名の誤記などで警告ダイアログを待ち続けないようにします。`--smoke`を付けるため、起動失敗で復旧ダイアログを待ち続けません。実際の`main.ahk`は起動テストで別途検証します。
 
 画面連携のテストは目的別の独立したシナリオです。共通の`app-fixture.ps1`は各呼び出しで新しい隔離フォルダー、旧INIの合成データ、偽ワーカー、明示的なテスト状態を作り、新しいAHKプロセスで初期化します。前のテストが追加・変更したデータには依存しません。配置などの補助関数は必要なシナリオだけが定義します。
 
@@ -73,7 +73,7 @@ IPCテストは`Write-TestWorker`で専用の入口を作り、`Start-BrowserWor
 
 描画回数とコントロール書き込みは、`fixtures/ui-message-probe.ahk`が隔離GUIのWindowsメッセージを観測します。アプリの関数呼び出し回数ではなく、実際の一覧再構築・有効状態変更・文言更新を検証します。終了時に観測を解除します。
 
-ソース注入を残すのは、`test-ui-transactions.ps1`の描画途中の失敗・再入と編集画面の表示失敗と、`test-startup.ps1`の移行途中のプロセス停止です。通常操作では起こせない瞬間へ故障を入れる目的に限定し、汎用フックを本番の各行へ増やしません。編集画面の復旧テストは、注入した表示失敗に到達したことと、編集状態の解放・親画面の復旧を確認します。
+ソース注入は、`test-ui-transactions.ps1`の描画途中の失敗・再入、編集開始・画面表示の失敗、保存成功後の一覧更新失敗、ブラウザー待機準備の失敗、`test-review-regressions.ps1`のショートカット受付・登録再待機のタイマー設定直前の失敗、`test-startup.ps1`の移行途中のプロセス停止に使います。通常操作では起こせない瞬間へ故障を入れる目的に限定し、汎用フックを本番の各行へ増やしません。編集画面の復旧テストは、注入した表示失敗に到達したことと、編集状態の解放・親画面の復旧を確認します。
 
 ## 回帰テストの設計
 
