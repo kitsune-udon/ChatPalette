@@ -17,10 +17,11 @@ CreatePreferences() {
     return {InputProfileId:InputProfileId, AutoMode:AutoMode, DefaultReactionKind:DefaultReactionKind,
         DefaultReactionCount:DefaultReactionCount, DefaultReactionIntervalMs:DefaultReactionIntervalMs, ShortcutKeys:ShortcutKeys.Clone()}
 }
-CreateSettingsSnapshot(copyLibrary := true) {
+; A snapshot is always an independent editable copy.
+CreateSettingsSnapshot() {
     state := CreatePreferences()
-    state.Profiles := copyLibrary ? CopyProfiles(Profiles) : Profiles
-    state.SharedDanmakuItems := copyLibrary ? CopyItems(SharedDanmakuItems) : SharedDanmakuItems
+    state.Profiles := CopyProfiles(Profiles)
+    state.SharedDanmakuItems := CopyItems(SharedDanmakuItems)
     return state
 }
 ; The UI/session option names are translated at this one boundary.
@@ -36,15 +37,11 @@ ReloadAppSettings() {
     settingsCritical := A_IsCritical
     Critical("On")
     try {
-        global AutoMode, DefaultReactionKind, DefaultReactionCount, DefaultReactionIntervalMs, ShortcutKeys
+        global AutoMode
         state := LoadSettings(SettingsDatabasePath)
-        if IsSet(ReactionsInitialized) && ReactionsInitialized
-            ApplyPreferences(state, false)
+        ApplyPreferences(state, false)
         PublishLibraryState(state)
         AutoMode := state.AutoMode
-        DefaultReactionKind := state.DefaultReactionKind, DefaultReactionCount := state.DefaultReactionCount
-        DefaultReactionIntervalMs := state.DefaultReactionIntervalMs
-        ShortcutKeys := state.ShortcutKeys.Clone()
         if IsSet(LibraryHistory)
             LibraryHistory.Length := 0
     } finally {

@@ -21,6 +21,15 @@ Invoke-AppFixture -Body @'
     SettingsDatabasePath := savedPath
     Assert(failed && ShortcutKeys["reaction"]=oldPreferences.ShortcutKeys["reaction"] && DefaultReactionCount=oldPreferences.DefaultReactionCount,"failed preference save preserves live defaults")
     Assert(KeyCalls.Length=4 && KeyCalls[4].Key=oldPreferences.ShortcutKeys["reaction"] && KeyCalls[4].Enabled && KeyCalls[3].Key="^+r" && !KeyCalls[3].Enabled,"failed preference save restores old hotkey and removes new key")
+    reloaded := CreatePreferences()
+    reloaded.DefaultReactionCount := 10, reloaded.ShortcutKeys["reaction"] := "^+r"
+    SaveSettingsPreferences(reloaded,SettingsDatabasePath)
+    KeyCalls := []
+    ReloadAppSettings()
+    Assert(DefaultReactionCount=10 && ShortcutKeys["reaction"]="^+r","reload publishes saved defaults and shortcut together")
+    Assert(KeyCalls.Length=2 && !KeyCalls[1].Enabled && KeyCalls[2].Enabled,"reload changes each affected binding once")
+    SaveSettingsPreferences(oldPreferences,SettingsDatabasePath)
+    ReloadAppSettings()
     priorKey := ShortcutKeys["reaction"]
     failed := false
     try SaveReactionDefaults(CreateReactionOptions(1,1,100,"^!q"))

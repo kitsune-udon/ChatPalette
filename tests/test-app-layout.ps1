@@ -160,7 +160,7 @@ Invoke-AppFixture -Body @'
     PaletteStatusControl.Text := "unrelated input notice"
     ShowReactionProgress()
     Assert(InStr(ReactionOverlayText.Text,"reaction result fixture") && !InStr(ReactionOverlayText.Text,"unrelated input notice"),"overlay reads reaction state instead of generic palette notice")
-    Assert(InStr(ReactionProgressHint(),"4秒"),"progress derives final state from controller")
+    Assert(InStr(ReactionProgressHint(ReactionExecutionStatus),"4秒"),"progress uses the supplied final state")
     ReactionOverlay.Hide()
     PaletteWindow.Show("Hide w360 h620")
     LayoutPalette(PaletteWindow,0,360,620)

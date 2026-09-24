@@ -1,6 +1,7 @@
 ﻿ReadDiagnosticSnapshot() {
+    operation := LastBrowserOperation
     browser := "未選択（YouTubeからパネルを開くと表示）"
-    hwnd := LastBrowserOperation.Window ? LastBrowserOperation.Window : TargetBrowserHwnd
+    hwnd := operation.Window ? operation.Window : TargetBrowserHwnd
     if hwnd {
         try {
             process := StrLower(WinGetProcessName("ahk_id " hwnd))
@@ -12,21 +13,20 @@
         }
     }
     phases := Map("idle","待機中", "queued","キーを離すのを待っています", "running","実行中", "finished","終了")
-    mode := LastBrowserOperation.Mode
-    state := LastBrowserOperation.State
+    mode := operation.Mode
+    state := operation.State
     phase := phases.Has(ReactionExecutionStatus.Phase) ? ReactionExecutionStatus.Phase : "不明"
     return {CapturedAt:FormatTime(, "yyyy/MM/dd HH:mm:ss"), Version:AppVersion, Ahk:A_AhkVersion, OS:A_OSVersion,
         Source:AppSourceStatus(), StartedAt:AppStartedAt, Keys:EffectiveShortcutSummary(),
-        Stage:LastBrowserOperation.Stage,
+        Stage:operation.Stage,
         Browser:browser, Worker:WorkerState.ProcessId && ProcessExist(WorkerState.ProcessId) ? "起動中" : "待機中（必要なときに起動）",
         Auto:AutoMode ? "ON" : "OFF", Settings:FileExist(SettingsDatabasePath) ? "あり" : "なし",
         Operation:BrowserOperationLabel(mode), Result:BrowserResultInfo(state).Summary,
-        Duration:mode = "なし" ? "—（未実行）" : LastBrowserOperation.Duration " ms",
+        Duration:mode = "なし" ? "—（未実行）" : operation.Duration " ms",
         Phase:phases.Get(phase, "不明"), ModeCode:mode, StateCode:state, PhaseCode:phase}
 }
 
-BuildDiagnosticReport(snapshot := 0) {
-    info := snapshot ? snapshot : ReadDiagnosticSnapshot()
+BuildDiagnosticReport(info) {
     return "ChatPalette " info.Version
         . "`r`n取得日時: " info.CapturedAt
         . "`r`n起動日時: " info.StartedAt " / " info.Source

@@ -32,8 +32,7 @@ ResolveShortcutInput(scope, slot, hwnd) {
     items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},context.ProfileId)
     for item in items {
         if ItemSlot(item) = slot
-            return PlanDanmakuInput({ProfileId:context.ProfileId, ItemId:item.Id, Window:hwnd,
-                Origin:"shortcut", ExpectedText:item.Text},context)
+            return PlanDanmakuInput({ProfileId:context.ProfileId, ItemId:item.Id, ExpectedText:item.Text},context)
     }
     throw Error("このキーに弾幕が割り当てられていません。")
 }
@@ -62,8 +61,7 @@ RunDanmakuInput(resolve, origin) {
     try plan := resolve.Call()
     catch as failure {
         PaletteHint.Text := failure.Message
-        ToolTip(failure.Message)
-        SetTimer(() => ToolTip(),-3000)
+        ShowStatusTip(failure.Message,3000)
         return
     }
     if !plan || !OperationAllowed("input")

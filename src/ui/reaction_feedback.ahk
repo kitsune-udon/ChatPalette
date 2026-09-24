@@ -1,5 +1,5 @@
 ﻿InitializeReactionFeedback() {
-    global ReactionOverlayReady := false, ReactionOverlayBuilding := false
+    global ReactionOverlayBuilding := false
     global ReactionOverlay := 0, ReactionOverlayText := 0, ReactionOverlayStop := 0, ReactionOverlayHint := 0
 }
 
@@ -36,12 +36,8 @@ RenderLatestReactionStatus() {
         if width > 0
             ResizePalette(PaletteWindow,0,width,height)
     }
-    if ReactionOverlayReady {
-        ReactionOverlayText.Text := message
-        ReactionOverlayHint.Text := ReactionProgressHint(snapshot)
-        ReactionOverlayStop.Visible := !final
-        ReactionOverlayStop.Enabled := !final
-    }
+    if ReactionOverlay
+        RenderReactionOverlay(snapshot)
     if final
         SetTimer(HideFinishedReactionProgress, -4000)
     if snapshot != ReactionExecutionStatus
@@ -49,8 +45,15 @@ RenderLatestReactionStatus() {
 }
 
 
-ReactionProgressHint(snapshot := 0) {
-    return (snapshot ? snapshot.Final : ReactionExecutionStatus.Final) ? "4秒後に表示を消します。結果は" ShortcutKeyLabel(GetShortcutKey("palette")) " → 管理・ヘルプ → リアクションの実行結果。"
+RenderReactionOverlay(snapshot) {
+    ReactionOverlayText.Text := snapshot.Message
+    ReactionOverlayHint.Text := ReactionProgressHint(snapshot)
+    ReactionOverlayStop.Visible := !snapshot.Final
+    ReactionOverlayStop.Enabled := !snapshot.Final
+}
+
+ReactionProgressHint(snapshot) {
+    return snapshot.Final ? "4秒後に表示を消します。結果は" ShortcutKeyLabel(GetShortcutKey("palette")) " → 管理・ヘルプ → リアクションの実行結果。"
         : "" ShortcutKeyLabel(GetShortcutKey("stop")) "：処理を停止　" ShortcutKeyLabel(GetShortcutKey("palette")) "：進捗を表示"
 }
 
@@ -63,10 +66,10 @@ HideFinishedReactionProgress() {
 
 ShowReactionProgress(*) {
     global ReactionOverlay, ReactionOverlayText, ReactionOverlayStop, ReactionOverlayHint
-    global ReactionOverlayReady, ReactionOverlayBuilding
+    global ReactionOverlayBuilding
     if ReactionOverlayBuilding
         return
-    if !ReactionOverlayReady {
+    if !ReactionOverlay {
         ReactionOverlayBuilding := true
         try {
             view := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x08000000", "リアクション進捗")
@@ -80,9 +83,8 @@ ShowReactionProgress(*) {
             previousCritical := A_IsCritical
             Critical("On")
             try {
-                ReactionOverlay := view, ReactionOverlayText := text
-                ReactionOverlayHint := hint, ReactionOverlayStop := stop
-                ReactionOverlayReady := true
+                ReactionOverlayText := text, ReactionOverlayHint := hint, ReactionOverlayStop := stop
+                ReactionOverlay := view
             } finally Critical(previousCritical)
         } catch as failure {
             if IsSet(view)
@@ -91,10 +93,7 @@ ShowReactionProgress(*) {
         } finally ReactionOverlayBuilding := false
     }
     snapshot := ReactionExecutionStatus
-    ReactionOverlayText.Text := snapshot.Message
-    ReactionOverlayHint.Text := ReactionProgressHint(snapshot)
-    ReactionOverlayStop.Visible := !snapshot.Final
-    ReactionOverlayStop.Enabled := !snapshot.Final
+    RenderReactionOverlay(snapshot)
     PresentWindow(ReactionOverlay,"x20 y20",0,false)
     if snapshot.Final
         SetTimer(HideFinishedReactionProgress, -4000)
@@ -144,6 +143,5 @@ ReactionNotice(state, detail := "", suffix := "", job := 0) {
         suffix := " 操作済み " job.Completed " / " job.Total " 回で停止。"
     message := messages.Get(state, messages["unavailable"]) suffix
     SetReactionStatus(message, true,"",detail,job,state)
-    ToolTip(message)
-    SetTimer(() => ToolTip(), -4000)
+    ShowStatusTip(message,4000)
 }

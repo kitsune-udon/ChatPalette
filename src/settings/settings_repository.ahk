@@ -127,10 +127,15 @@ class SettingsRepository {
                 values.Push(keys[definition.Id])
         return values
     }
-    Apply(plan,values,writePreferences) {
+    ; Call inside the write transaction, after its lock has been acquired.
+    VerifyDataVersion() {
         version := this.Db.Scalar("PRAGMA data_version")
         if this.HasOwnProp("DataVersion") && this.DataVersion != version
             throw Error("設定が別の接続で変更されました。再起動して最新の設定を読み込んでください。")
+        return version
+    }
+    Apply(plan,values,writePreferences) {
+        version := this.VerifyDataVersion()
         if plan
             this.ApplyLibrary(plan)
         if writePreferences {

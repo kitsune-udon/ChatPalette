@@ -9,3 +9,13 @@
     $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'scripts') -Filter '*.ps1' -File)
     return $files
 }
+
+function Copy-ReleaseFiles([string]$Project, [string]$Destination) {
+    $root = (Resolve-Path -LiteralPath $Project).Path
+    foreach ($file in @(Get-ReleaseFiles $root)) {
+        $relative = $file.FullName.Substring($root.Length + 1)
+        $target = Join-Path $Destination $relative
+        New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
+        Copy-Item -LiteralPath $file.FullName -Destination $target
+    }
+}

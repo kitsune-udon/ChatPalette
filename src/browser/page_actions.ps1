@@ -111,7 +111,7 @@ function Wait-ChatFocus($Target, [long]$WindowHandle, [string]$Video) {
     if ((Read-BrowserVideoId $WindowHandle) -cne $Video) { return 'changed' }
     return 'focus_failed'
 }
-function Get-ReactionHoverPoint($Target, [long]$WindowHandle) {
+function Get-ReactionHoverPoint($Target) {
     Add-Type -AssemblyName WindowsBase
     $point = [System.Windows.Point]::new(0,0)
     if (!$Target.TryGetClickablePoint([ref]$point)) { return $null }
@@ -162,7 +162,7 @@ function Invoke-PageAction($Request) {
         if ($Request.Mode -ne 'reactions_show') { return $reply }
         $target = Find-ReactionLauncher $window
         if ($null -eq $target) { $reply.State='unsupported'; return $reply }
-        $point = Get-ReactionHoverPoint $target $window
+        $point = Get-ReactionHoverPoint $target
         if ($null -eq $point) { $reply.State='unsupported'; return $reply }
         if (!(Test-ElementWindow $target $window) -or !(Test-ReactionLauncher @(Get-ReactionLauncherRecords $target $window))) {
             $reply.State='unsupported'; return $reply

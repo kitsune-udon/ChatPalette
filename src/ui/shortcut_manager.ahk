@@ -6,7 +6,13 @@ ShowShortcutManager(selectedAction := "reaction",*) {
         BuildManagement()
     panel := CreateShortcutManager(selectedAction)
     BeginEditorDialog(panel.Window,"ショートカットの管理")
-    panel.Viewport.Show()
+    try panel.Viewport.Show()
+    catch as failure {
+        panel.Viewport.Dispose()
+        EndEditorDialog()
+        panel.Window.Destroy()
+        throw failure
+    }
     return panel
 }
 CreateShortcutManager(selectedAction := "reaction") {
@@ -87,19 +93,21 @@ CreateShortcutManager(selectedAction := "reaction") {
         return false
     }
     UpdateKeys() {
-        saved := CurrentShortcutMap()
+        saved := CurrentShortcutMap(), dirty := false
         for i,definition in definitions {
             value := draft[definition.Id], canonical := CanonicalShortcutKey(value)
-            state := canonical != CanonicalShortcutKey(saved[definition.Id]) ? "変更あり" : ""
+            changed := canonical != CanonicalShortcutKey(saved[definition.Id])
+            dirty := dirty || changed
+            state := changed ? "変更あり" : ""
             for other in definitions
                 if canonical != "" && other.Id != definition.Id && canonical = CanonicalShortcutKey(draft[other.Id])
                     state := "重複"
             list.Modify(i,"",definition.Label,ShortcutKeyLabel(value),definition.Scope,state)
         }
-        saveButton.Enabled := KeysDirty()
+        saveButton.Enabled := dirty
         try {
             ValidateShortcutMap(draft)
-            status.Text := KeysDirty() ? "未保存のキー変更があります。" : "キー設定に未保存の変更はありません。"
+            status.Text := dirty ? "未保存のキー変更があります。" : "キー設定に未保存の変更はありません。"
         } catch as failure {
             status.Text := failure.Message
             saveButton.Enabled := false
@@ -155,8 +163,9 @@ CreateShortcutManager(selectedAction := "reaction") {
         return first.Value != itemBaseline[1] || second.Value != itemBaseline[2]
     }
     UpdateItems(*) {
-        itemsSaveButton.Enabled := ItemsDirty()
-        itemStatus.Text := ItemsDirty() ? "未保存の弾幕割当があります。" : "弾幕の割当に未保存の変更はありません。"
+        dirty := ItemsDirty()
+        itemsSaveButton.Enabled := dirty
+        itemStatus.Text := dirty ? "未保存の弾幕割当があります。" : "弾幕の割当に未保存の変更はありません。"
         if first.Value > 1 && first.Value = second.Value {
             itemsSaveButton.Enabled := false
             itemStatus.Text := "同じ弾幕を両方のキーには割り当てられません。"

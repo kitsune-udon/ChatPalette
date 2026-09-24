@@ -44,11 +44,10 @@ HandleConfiguredShortcut(action,*) {
     if action = "reaction"
         return QueueQuickReaction()
     if SubStr(action,1,7) = "profile" || SubStr(action,1,6) = "shared"
-        return HandleDanmakuShortcut(SubStr(action,1,6) = "shared",Integer(SubStr(action,-1)))
+        return HandleDanmakuShortcut(SubStr(action,1,-1),Integer(SubStr(action,-1)))
     return HandlePageShortcut(action,RegExReplace(GetShortcutKey(action),"[!^+]",""))
 }
 SaveShortcutMap(keys) {
-    ValidateShortcutMap(keys)
     state := CreatePreferences(), state.ShortcutKeys := keys.Clone()
     ApplyPreferences(state)
 }

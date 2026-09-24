@@ -15,7 +15,7 @@ RequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "
 }
 
 NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
-    global IsBrowserOperationBusy, LastBrowserOperation
+    global IsBrowserOperationBusy
     if IsBrowserOperationBusy || !IsBrowser(hwnd)
         return {State: mode = "reaction_send" ? "unknown" : "unavailable", Author: "", Channel: "", Video: ""}
     IsBrowserOperationBusy := true
@@ -44,12 +44,9 @@ NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extr
 }
 
 ResolveBrowserChannel(hwnd) {
-    return RuntimePorts.ResolveChannel ? RuntimePorts.ResolveChannel.Call(hwnd) : NativeResolveBrowserChannel(hwnd)
+    return RuntimePorts.ResolveChannel ? RuntimePorts.ResolveChannel.Call(hwnd) : RequestBrowserOperation(hwnd)
 }
 
-NativeResolveBrowserChannel(hwnd) {
-    return RequestBrowserOperation(hwnd)
-}
 
 VerifyInputTarget(hwnd, expectedVideo) {
     return RuntimePorts.VerifyInput ? RuntimePorts.VerifyInput.Call(hwnd,expectedVideo) : NativeVerifyInputTarget(hwnd,expectedVideo)

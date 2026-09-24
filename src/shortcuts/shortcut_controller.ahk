@@ -5,8 +5,7 @@ ShortcutBlocked(action := "input") {
     policy := OperationPolicy(action)
     if policy.Allowed
         return false
-    ToolTip(policy.Message)
-    SetTimer(() => ToolTip(), -2500)
+    ShowStatusTip(policy.Message,2500)
     return true
 }
 
@@ -17,8 +16,7 @@ WaitShortcutRelease(keys) {
 NativeWaitShortcutRelease(keys) {
     for key in keys {
         if !KeyWait(key, "T2") {
-            ToolTip("キーを離してから、もう一度押してください。")
-            SetTimer(() => ToolTip(), -2500)
+            ShowStatusTip("キーを離してから、もう一度押してください。",2500)
             return false
         }
     }
@@ -28,16 +26,16 @@ NativeWaitShortcutRelease(keys) {
 
 
 
-HandleDanmakuShortcut(shared,slot) {
-    if QueueFocusedDanmaku(shared ? "shared" : "profile",slot,WinExist("A"))
+HandleDanmakuShortcut(scope,slot) {
+    if QueueFocusedDanmaku(scope,slot,WinExist("A"))
         return
     if ShortcutBlocked()
         return
     hwnd := WinExist("A")
-    key := RegExReplace(GetShortcutKey((shared ? "shared" : "profile") slot),"[!^+]","")
+    key := RegExReplace(GetShortcutKey(scope slot),"[!^+]","")
     if !IsBrowser(hwnd) || !WaitShortcutRelease([key,"Control","Alt","Shift"])
         return
-    RequestShortcutInput(shared ? "shared" : "profile",slot,hwnd)
+    RequestShortcutInput(scope,slot,hwnd)
 }
 
 HandlePageShortcut(action, key) {
@@ -111,8 +109,7 @@ RunPageAction(action, hwnd, releaseKey := "") {
         info := BrowserResultInfo(result.State)
         message := info.Summary (info.Advice != "" ? "。" info.Advice : "。")
         PaletteHint.Text := message
-        ToolTip(message)
-        SetTimer(() => ToolTip(),-3000)
+        ShowStatusTip(message,3000)
     }
     return result.State = "inserted" || result.State = "focused" || result.State = "cleared" || result.State = "hovered"
 }

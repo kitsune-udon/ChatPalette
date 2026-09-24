@@ -54,18 +54,19 @@ ManageProfile(action, *) {
     finally EndEditorDialog()
 }
 RunProfileDialog(action) {
-    editId := GetEditingProfileId()
-    if action != "add" && editId = ""
+    profile := FindProfileById(Profiles,EditingProfileId)
+    editId := profile ? profile.Id : ""
+    if action != "add" && !profile
         return
     value := ""
     ManagementWindow.Opt("+OwnDialogs")
     if action = "add" || action = "rename" {
-        answer := InputBox("このツール内で表示する配信者名",action = "add" ? "配信者を追加" : "配信者名を変更","w360 h140",action = "add" ? "" : FindProfileById(Profiles,editId).Name)
+        answer := InputBox("このツール内で表示する配信者名",action = "add" ? "配信者を追加" : "配信者名を変更","w360 h140",action = "add" ? "" : profile.Name)
         if answer.Result != "OK"
             return
         value := answer.Value
     } else if action = "delete" {
-        if MsgBox("「" FindProfileById(Profiles,editId).Name "」と弾幕 " FindProfileById(Profiles,editId).Items.Length "件を削除します。履歴から取り消せます。","配信者を削除","YesNo Default2") != "Yes"
+        if MsgBox("「" profile.Name "」と弾幕 " profile.Items.Length "件を削除します。履歴から取り消せます。","配信者を削除","YesNo Default2") != "Yes"
             return
     } else if action = "bind" {
         if !IsBrowser(TargetBrowserHwnd) {
@@ -77,7 +78,7 @@ RunProfileDialog(action) {
             SetManagementNotice("チャンネルを取得できませんでした。YouTubeから開き直してください。")
             return
         }
-        if MsgBox("YouTubeのチャンネル「" candidate.Author "」で、配信者「" FindProfileById(Profiles,editId).Name "」の弾幕を自動選択します。`n`n現在：" (FindProfileById(Profiles,editId).Channel != "" ? FindProfileById(Profiles,editId).Channel : "未連携") "`n変更後：" candidate.Channel "`n以前の連携はこのチャンネルに置き換わります。`n`n連携しますか？","チャンネル連携の確認","YesNo") != "Yes"
+        if MsgBox("YouTubeのチャンネル「" candidate.Author "」で、配信者「" profile.Name "」の弾幕を自動選択します。`n`n現在：" (profile.Channel != "" ? profile.Channel : "未連携") "`n変更後：" candidate.Channel "`n以前の連携はこのチャンネルに置き換わります。`n`n連携しますか？","チャンネル連携の確認","YesNo") != "Yes"
             return
         fresh := ResolveBrowserChannel(TargetBrowserHwnd)
         if fresh.State != "ok" || fresh.Channel != candidate.Channel {

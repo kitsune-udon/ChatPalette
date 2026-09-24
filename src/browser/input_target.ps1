@@ -25,16 +25,14 @@ function Get-InputRecord($Element, [bool]$Focused) {
         return @{Id=$info.AutomationId; Class=$info.ClassName; Type=$info.ControlType.Id}
     }
     $editable = $false
-    if ($Focused) {
-        $pattern = $null
-        if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
-            $editable = !$pattern.Current.IsReadOnly
-        } elseif ($Element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {
-            # Chromium contenteditable fields can be Custom + TextPattern, not Edit.
-            # Read only the attribute, never the document text. Unknown is not editable.
-            $readOnly = $pattern.DocumentRange.GetAttributeValue([System.Windows.Automation.TextPattern]::IsReadOnlyAttribute)
-            $editable = $readOnly -is [bool] -and !$readOnly
-        }
+    $pattern = $null
+    if ($Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        $editable = !$pattern.Current.IsReadOnly
+    } elseif ($Element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$pattern)) {
+        # Chromium contenteditable fields can be Custom + TextPattern, not Edit.
+        # Read only the attribute, never the document text. Unknown is not editable.
+        $readOnly = $pattern.DocumentRange.GetAttributeValue([System.Windows.Automation.TextPattern]::IsReadOnlyAttribute)
+        $editable = $readOnly -is [bool] -and !$readOnly
     }
     return @{Id=$info.AutomationId; Name=$info.Name; Class=$info.ClassName; Type=$info.ControlType.Id;
         Focused=$info.HasKeyboardFocus; Enabled=$info.IsEnabled; Hidden=$info.IsOffscreen; Editable=$editable}

@@ -1,4 +1,17 @@
-﻿ChooseSetting(control, values, selected) {
+﻿; The single tooltip owns one expiry timer; replacement cancels the old expiry.
+ShowStatusTip(message := "", duration := 0) {
+    static clear := () => ShowStatusTip()
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        SetTimer(clear,0)
+        ToolTip(message)
+        if message != "" && duration > 0
+            SetTimer(clear,-duration)
+    } finally Critical(previousCritical)
+}
+
+ChooseSetting(control, values, selected) {
     for i, value in values
         if value = selected
             control.Choose(i)
@@ -12,7 +25,7 @@ BeginWorkerWait(mode) {
     if ManagementWindow
         ManagementWindow.Opt("+Disabled")
     RefreshOperationControls()
-    notification := () => ToolTip(mode = "verify_input" ? "入力欄を確認しています…" : "YouTubeの操作対象を確認しています…")
+    notification := () => ShowStatusTip(mode = "verify_input" ? "入力欄を確認しています…" : "YouTubeの操作対象を確認しています…")
     SetTimer(notification,-400)
     return {Enabled:enabled, ManagerEnabled:managerEnabled, Notification:notification}
 }
@@ -23,14 +36,13 @@ EndWorkerWait(view) {
         PaletteWindow.Opt("-Disabled")
     if view.ManagerEnabled
         ManagementWindow.Opt("-Disabled")
-    ToolTip()
+    ShowStatusTip()
     RefreshOperationControls()
 }
 
 ShowInputFailure() {
     PaletteHint.Text := "入力できませんでした。YouTubeのチャット欄かコメント欄をクリックし、" ShortcutKeyLabel(GetShortcutKey("palette")) "を押してください。"
-    ToolTip(PaletteHint.Text)
-    SetTimer(() => ToolTip(),-3500)
+    ShowStatusTip(PaletteHint.Text,3500)
 }
 
 BeginEditorDialog(view,label) {

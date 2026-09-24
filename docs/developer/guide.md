@@ -94,7 +94,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release
 
 ### 配布物の範囲
 
-収録対象は[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。ソース、文書、ライセンス、開発設定、テストと合成データを含み、`data/`・`.git/`・一時ファイルは含みません。ZIP内の`SHA256SUMS`は内容照合用であり、発行者を証明する署名ではありません。
+収録対象は[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。同ファイルの`Copy-ReleaseFiles`を検証用コピー・ZIP梱包・配布テストの準備で共有するため、呼び出し側に別の収録一覧を作りません。ソース、文書、ライセンス、開発設定、テストと合成データを含み、`data/`・`.git/`・一時ファイルは含みません。ZIP内の`SHA256SUMS`は内容照合用であり、発行者を証明する署名ではありません。
 
 [build-release.ps1](../../scripts/build-release.ps1)は検証コマンドから呼ぶ梱包処理です。単独実行では検証済み配布物にならないため、通常のリリース入口には使いません。現在の配布はソース形式で、実行にはAutoHotkey v2とWindows PowerShell 5.1が必要です。
 

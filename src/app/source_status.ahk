@@ -33,8 +33,7 @@ RestartApplication(*) {
     try {
         policy := OperationPolicy("edit")
         if !policy.Allowed {
-            ToolTip(policy.Message)
-            SetTimer(() => ToolTip(),-3000)
+            ShowStatusTip(policy.Message,3000)
             return false
         }
         if RuntimePorts.Restart

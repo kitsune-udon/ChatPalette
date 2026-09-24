@@ -15,6 +15,8 @@ Rewrite 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(
 Rewrite 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
 Rewrite 'src/ui/management/management_view.ahk' '        for row in model.Rows' '        for row in model.Rows {'
 Rewrite 'src/ui/management/management_view.ahk' '        ManagedList.ModifyCol(1,160)' ("            ProbeManagementUpdate()`r`n        }`r`n        ManagedList.ModifyCol(1,160)")
+Rewrite 'src/ui/shortcut_manager.ahk' '    try panel.Viewport.Show()' ("    try {`r`n        if IsSet(ProbeShortcutFailure) && ProbeShortcutFailure`r`n            throw Error(""fixture shortcut presentation failure"")`r`n        panel.Viewport.Show()`r`n    }")
+Rewrite 'src/ui/window_presenter.ahk' 'PresentWindow(view, options := "", layout := 0, activate := true) {' ('PresentWindow(view, options := "", layout := 0, activate := true) {' + "`r`n    if IsSet(ProbeEditorFailure) && ProbeEditorFailure && ActiveEditorDialog && ActiveEditorDialog.Window = view`r`n        throw Error(""fixture editor presentation failure"")")
 $tests=@'
 OnExit(StopBrowserWorker)
 global UiChecks := 0, ProbeListArmed := false, ProbeViewportArmed := false, InputCalls := 0
@@ -26,9 +28,9 @@ try {
     try ShowReactionProgress()
     catch
         failed := true
-    CheckUi(failed && !ReactionOverlayReady && !ReactionOverlayBuilding && !ReactionOverlay,"failed construction publishes nothing and unlocks retry")
+    CheckUi(failed && !ReactionOverlay && !ReactionOverlayBuilding,"failed construction publishes nothing and unlocks retry")
     ShowReactionProgress()
-    CheckUi(ReactionOverlayReady && IsObject(ReactionOverlayHint) && IsObject(ReactionOverlayStop),"overlay publishes completed controls")
+    CheckUi(ReactionOverlay && IsObject(ReactionOverlayHint) && IsObject(ReactionOverlayStop),"overlay publishes completed controls")
     ReactionOverlay.Hide()
     ExecuteDanmakuCommand("add","",0,{Name:"first",Text:"same",Slot:0})
     RefreshPaletteItems()
@@ -57,6 +59,34 @@ try {
     CheckUi(InputCalls=0,"stale index is rejected")
     RefreshPaletteItems()
     BuildManagement()
+    global ProbeShortcutFailure := true
+    failed := false
+    try ShowShortcutManager()
+    catch as failure
+        failed := failure.Message == "fixture shortcut presentation failure"
+    CheckUi(failed && !ActiveEditorDialog,"failed shortcut presentation releases editor ownership")
+    CheckUi(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"failed shortcut presentation restores parent windows")
+    ProbeShortcutFailure := false
+    shortcutPanel := ShowShortcutManager()
+    CheckUi(IsObject(shortcutPanel) && ActiveEditorDialog,"shortcut presentation can be retried")
+    shortcutPanel.Close.Call()
+    global ProbeEditorFailure := true
+    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=ManagementWindow.Hwnd
+    RuntimePorts.ResolveChannel := (hwnd) => {State:"ok",Author:"fixture",Channel:"/channel/fixture",Video:"abcdefghijk"}
+    RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"not_registered"}
+    TargetBrowserHwnd := ManagementWindow.Hwnd
+    for openEditor in [() => OpenDanmakuEditor(true),TransferItem,OpenChannelLinkDialog] {
+        ManagedList.Modify(1,"Select Focus")
+        failed := false
+        try openEditor.Call()
+        catch as failure
+            failed := failure.Message == "fixture editor presentation failure"
+        CheckUi(failed && !ActiveEditorDialog && !DanmakuEditorWindow,"editor presentation failure releases ownership")
+        CheckUi(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"editor presentation failure restores parents")
+    }
+    ProbeEditorFailure := false
+    RuntimePorts.BrowserIdentity := 0, RuntimePorts.ResolveChannel := 0, RuntimePorts.BrowserRequest := 0
+    TargetBrowserHwnd := 0
     global ProbeManagementArmed := true
     RefreshManagement()
     CheckUi(!ProbeManagementArmed && !ManagementRefresh.Active && !DanmakuEditorWindow,"management defers nested refresh and blocks editing")
@@ -93,10 +123,10 @@ ProbeOverlayConstruction() {
         ProbeOverlayFailure := false
         throw Error("fixture construction failure")
     }
-    CheckUi(!ReactionOverlayReady && !ReactionOverlayText,"incomplete overlay not published")
+    CheckUi(!ReactionOverlay && !ReactionOverlayText,"incomplete overlay not published")
     RenderReactionStatus()
     ShowReactionProgress()
-    CheckUi(!ReactionOverlayReady,"nested show cannot publish incomplete overlay")
+    CheckUi(!ReactionOverlay,"nested show cannot publish incomplete overlay")
 }
 ProbeListUpdate() {
     global ProbeListFailure

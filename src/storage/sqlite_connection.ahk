@@ -41,8 +41,8 @@ class SqliteConnection {
             this.Check(DllCall(SqliteConnection.Library "\sqlite3_prepare16_v2", "Ptr", this.Handle, "WStr", sql, "Int", -1, "Ptr*", &stmt:=0, "Ptr", 0, "CDecl Int"))
             this.Statements[sql] := stmt
         }
+        ; Run/Rows and binding failures return cached statements reset and unbound.
         stmt := this.Statements[sql]
-        this.Reset(stmt)
         try {
             for index, value in values {
                 if Type(value) = "Integer"

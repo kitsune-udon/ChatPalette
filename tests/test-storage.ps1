@@ -20,8 +20,6 @@ foreach ($bad in @('{', (@{version=99;profiles=@($entry)} | ConvertTo-Json -Dept
 Set-ReactionRegistrationSnapshot '{"version":1,"profiles":[]}'
 if ($script:BrowserReactionSelectors.Count -or $script:ReactionElementCache.Count) { throw 'Empty snapshot failed to clear registrations and references' }
 # Memory cache reuses successful lookups, expires entries and bounds retries.
-$script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
-$script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)
 . (Join-Path $release 'src\browser\video_metadata.ps1')
 $script:fetches = 0
 function Fetch-Metadata($Video) {

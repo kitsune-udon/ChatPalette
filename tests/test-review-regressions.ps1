@@ -29,6 +29,14 @@ try {
     ReactionSendNext()
     AssertReview(!ActiveReactionJob && LastReactionResult.Completed=5 && LastReactionResult.Total=10,"focus stop preserves structured counts")
     AssertReview(InStr(LastReactionResult.Message,"5 / 10") && LastReactionResult.Reason="wrong_window","focus stop preserves visible count and reason")
+    firstJob := CreateReactionJob({Applied:"first settings",StartedAt:0,Total:1})
+    secondJob := CreateReactionJob({Applied:"second settings",StartedAt:0,Total:1})
+    ActiveReactionJob := firstJob
+    ApplyReactionResult(firstJob,{State:"operated"})
+    AssertReview(InStr(LastReactionResult.Message,"first settings") && !InStr(LastReactionResult.Message,"second settings"),"completion describes its own settings after another job was created")
+    ActiveReactionJob := secondJob
+    ApplyReactionResult(secondJob,{State:"operated"})
+    AssertReview(InStr(LastReactionResult.Message,"second settings"),"next completion describes its own settings")
     previous := LastReactionResult
     ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Completed:0,Total:10,Interval:0,Cancelled:false})
     CancelReaction()

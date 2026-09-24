@@ -15,12 +15,7 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 $completed=$false
 try {
     # Freeze the allowlisted inputs once. Validate and package exactly this copy.
-    foreach($file in @(Get-ReleaseFiles $project)) {
-        $relative=$file.FullName.Substring($project.Length+1)
-        $destination=Join-Path $stage $relative
-        New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-        Copy-Item -LiteralPath $file.FullName -Destination $destination
-    }
+    Copy-ReleaseFiles $project $stage
     $inputHashes=@{}
     foreach($file in @(Get-ReleaseFiles $stage)) { $inputHashes[$file.FullName]=(Get-FileHash $file.FullName).Hash }
     & (Join-Path $stage 'scripts\check-source.ps1') -ProjectRoot $stage

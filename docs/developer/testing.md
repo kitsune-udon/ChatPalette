@@ -4,7 +4,7 @@
 
 ## 自動テストで分かること
 
-現行の一括実行は33テスト群です。アプリ・SQLite・GUIの一部は実際に動かし、ブラウザー入力・リアクション送信・ネットワークは代替処理に置き換えます。成功は、ブラウザー全種類との互換性や実際のYouTube受理数の証明にはなりません。
+現在の対象一覧は`tests/run.ps1 -List`で確認できます。アプリ・SQLite・GUIの一部は実際に動かし、ブラウザー入力・リアクション送信・ネットワークは代替処理に置き換えます。成功は、ブラウザー全種類との互換性や実際のYouTube受理数の証明にはなりません。
 
 `tests/run.ps1`が直下の`test-*.ps1`を名前順に自動検出し、各テストを別のWindows PowerShellプロセスで実行して終了コードを確認します。実行中のファイル名と、成功時のテスト群数も表示します。支援スクリプトと計測用スクリプトには`test-`を付けません。一時実行先は`tests/.tmp/run-*`です。全体成功時に削除し、失敗時は調査用に残します。単体実行の一時フォルダーは自動削除しません。利用者の`data/`は読み書きしません。
 
@@ -20,7 +20,7 @@
 | 設定往復 | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定専用API、キーのロールバック、旧INI、Unicode・長文・競合 |
 | 通信・実行 | [test-app-worker.ps1](../../tests/test-app-worker.ps1) | 名前付きパイプ、再起動、タイムアウト、中止、実行間隔、合成UIA |
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態の組み合わせ、停止、編集内の保存、純粋な表示計算、再入更新の集約、ボタン状態 |
-| SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分更新、競合、容量、バックアップ、異常終了 |
+| SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分更新、競合、容量、バックアップ、異常終了、実行・引数設定失敗後のステートメント再利用 |
 | 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 移行、保存失敗、同期失敗、保存前後の中止、ワーカー保持 |
 | 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | 独立したID選択、重複本文の選択復元、混合編集・不正ID・順序の不変性、古いジョブの終了と中止 |
 | 設定整合性 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・不正な設定を拒否し原本を保持 |
@@ -31,6 +31,7 @@
 | 一覧表示 | [test-list-visibility.ps1](../../tests/test-list-visibility.ps1) | タブ往復・再表示・明示的非表示 |
 | 小さい画面 | [test-viewports.ps1](../../tests/test-viewports.ps1) | 配置、スクロール、フォーカス追従 |
 | UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の公開、更新中操作の拒否、対象ID、配置の直列化・終了後の保留解除 |
+| 通知の寿命 | [test-status-tip.ps1](../../tests/test-status-tip.ps1) | 通知置換時の期限更新、継続表示、明示消去。隔離プロセスの実ツールチップで確認 |
 | 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 結果保持、通知、診断など過去の不具合 |
 | 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 履歴共有、差分編集、同値保存、非表示更新抑制、パレットの同値書き込み抑制 |
 | 検索・選択肢 | [test-search-scheduling.ps1](../../tests/test-search-scheduling.ps1) | 検索集約、旧結果操作防止、選択肢の再利用 |
@@ -72,7 +73,7 @@ IPCテストは`Write-TestWorker`で専用の入口を作り、`Start-BrowserWor
 
 描画回数とコントロール書き込みは、`fixtures/ui-message-probe.ahk`が隔離GUIのWindowsメッセージを観測します。アプリの関数呼び出し回数ではなく、実際の一覧再構築・有効状態変更・文言更新を検証します。終了時に観測を解除します。
 
-ソース注入を残すのは、`test-ui-transactions.ps1`の描画途中の失敗・再入と、`test-startup.ps1`の移行途中のプロセス停止です。通常操作では起こせない瞬間へ故障を入れる目的に限定し、汎用フックを本番の各行へ増やしません。
+ソース注入を残すのは、`test-ui-transactions.ps1`の描画途中の失敗・再入と編集画面の表示失敗と、`test-startup.ps1`の移行途中のプロセス停止です。通常操作では起こせない瞬間へ故障を入れる目的に限定し、汎用フックを本番の各行へ増やしません。編集画面の復旧テストは、注入した表示失敗に到達したことと、編集状態の解放・親画面の復旧を確認します。
 
 ## 回帰テストの設計
 
@@ -126,7 +127,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-storag
 
 ## 実行区分と実ブラウザーの検証
 
-`tests/run.ps1 -Group Headless` は画面操作不要の5群、`-Group Desktop` は操作可能なWindowsセッションが必要な27群を実行します。省略時は全32群です。`-List`で実行対象だけを確認できます。各テスト先頭の`Test-Session`が区分の正本で、未分類のテストはエラーになります。HeadlessもWindowsの.NET/UIAライブラリを使うため、Linux対応を意味しません。GUIテストのフォーカス競合を避け、Desktopは専用セッションで実行してください。
+`tests/run.ps1 -Group Headless` は画面操作不要のテスト、`-Group Desktop` は操作可能なWindowsセッションが必要なテストを実行します。省略時は全テストです。現在の実行対象は`-List`で確認でき、この一覧表示では一時フォルダーの作成や実行用環境変数の変更を行いません。各テスト先頭の`Test-Session`が区分の正本で、未分類のテストはエラーになります。HeadlessもWindowsの.NET/UIAライブラリを使うため、Linux対応を意味しません。GUIテストのフォーカス競合を避け、Desktopは専用セッションで実行してください。
 
 実ブラウザーの検証は自動テスト群とは別に行います。
 

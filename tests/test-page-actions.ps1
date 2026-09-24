@@ -31,7 +31,7 @@ $heart.Class='style-scope yt-reaction-button-view-model'
 Assert (!(Test-ReactionLauncher @($heart,$collapsed,$chat,$document))) 'individual sending button never accepted as launcher'
 $noPoint=[pscustomobject]@{}
 $noPoint | Add-Member ScriptMethod TryGetClickablePoint { param($point) return $false }
-Assert ($null -eq (Get-ReactionHoverPoint $noPoint 123)) 'unsupported hover point rejected without moving pointer'
+Assert ($null -eq (Get-ReactionHoverPoint $noPoint)) 'unsupported hover point rejected without moving pointer'
 $script:target=[System.Windows.Automation.AutomationElement]::RootElement
 $script:video='abcdefghijk'; $script:foreground=$true; $script:belongs=$true
 $script:pendingFocus=0; $script:changeAfterFocus=$false; $script:blurAfterFocus=$false; $script:identity=$true
@@ -57,7 +57,7 @@ function Get-FocusedYouTubeInput($WindowHandle,[ref]$VerifiedElement) {
     $VerifiedElement.Value=$script:target; return $script:kind
 }
 function Test-FocusedInputIdentity($Element,$WindowHandle) { return $script:belongs -and $script:identity }
-function Get-ReactionHoverPoint($Target,$WindowHandle) {
+function Get-ReactionHoverPoint($Target) {
     if ($script:loseDuringPoint) { $script:foreground=$false }
     return @{X=20;Y=30}
 }

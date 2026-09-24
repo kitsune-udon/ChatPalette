@@ -14,11 +14,11 @@ try {
     legacyPath := A_ScriptDir "\settings.ini"
     FileAppend("[General]`nCount=99`n", legacyPath)
     beforeMigration := FileRead(SettingsDatabasePath,"RAW")
-    InitializeDataDirectory(AppDataDirectory)
-    AssertEmpty(SameFileBytes(FileRead(SettingsDatabasePath,"RAW"),beforeMigration) && FileExist(legacyPath), "migration never overwrites existing data")
+    ReloadAppSettings()
+    AssertEmpty(SameFileBytes(FileRead(SettingsDatabasePath,"RAW"),beforeMigration) && FileExist(legacyPath), "reload ignores legacy root settings and preserves existing database")
     FileDelete(legacyPath)
     FileAppend("{}", A_ScriptDir "\reaction_selectors.json")
-    InitializeDataDirectory(AppDataDirectory)
+    ReloadAppSettings()
     AssertEmpty(!FileExist(AppDataDirectory "\reaction_selectors.json") && FileExist(A_ScriptDir "\reaction_selectors.json"), "legacy root placement is ignored")
     AssertEmpty(Profiles.Length=0 && SharedDanmakuItems.Length=0, "fresh install has no sample data")
     AssertEmpty(!PaletteInsert.Enabled, "empty palette cannot input")
@@ -72,7 +72,7 @@ try {
     ActiveReactionJob := 0
     AssertEmpty(RestartApplication() && RestartChecks=1,"idle restart uses the production gate")
     RuntimePorts.Restart := 0
-    diagnostics := BuildDiagnosticReport()
+    diagnostics := BuildDiagnosticReport(ReadDiagnosticSnapshot())
     AssertEmpty(InStr(diagnostics, AppVersion) && !InStr(diagnostics, A_ScriptDir), "diagnostics include version without private path")
     snapshot := ReadDiagnosticSnapshot()
     snapshotReport := BuildDiagnosticReport(snapshot)

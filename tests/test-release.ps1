@@ -2,13 +2,8 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release=New-TestRuntime
-foreach ($name in @('scripts','docs')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $name) -Destination $release -Recurse }
-New-Item -ItemType Directory -Path (Join-Path $release 'tests\fixtures') -Force | Out-Null
-foreach ($name in @('settings.ini','ui-message-probe.ahk')) {
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot ('fixtures\'+$name)) -Destination (Join-Path $release 'tests\fixtures')
-}
-Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File | Copy-Item -Destination (Join-Path $release 'tests')
-foreach ($name in @('README.md','LICENSE','CHANGELOG.md')) { Copy-Item -LiteralPath (Join-Path $ProjectRoot $name) -Destination $release }
+. (Join-Path $ProjectRoot 'scripts\release-files.ps1')
+Copy-ReleaseFiles $ProjectRoot $release
 foreach ($relative in @('data\settings.db','data\reaction_selectors.json','tests\.tmp\private.txt','private.txt')) {
     $path=Join-Path $release $relative
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($path)) -Force | Out-Null

@@ -12,13 +12,7 @@ $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
 try {
     New-Item -ItemType Directory -Path $stage | Out-Null
     . (Join-Path $PSScriptRoot 'release-files.ps1')
-    $files = @(Get-ReleaseFiles $project)
-    foreach ($file in $files) {
-        $relative = $file.FullName.Substring($project.Length + 1)
-        $target = Join-Path $stage $relative
-        New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
-        Copy-Item -LiteralPath $file.FullName -Destination $target
-    }
+    Copy-ReleaseFiles $project $stage
     $hashes = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
         (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring($stage.Length + 1).Replace('\','/')
     })

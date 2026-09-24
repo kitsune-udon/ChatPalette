@@ -1,6 +1,6 @@
 ﻿; Startup recovery is explicit: a failed load never silently discards settings.
 InitializeAppSettings() {
-    try InitializeDataDirectory(AppDataDirectory)
+    try DirCreate(AppDataDirectory)
     catch as failure {
         if A_Args.Length && A_Args[1] = "--smoke"
             FileAppend("データフォルダーの準備失敗: " failure.Message "`n", "**")
@@ -36,11 +36,6 @@ InitializeAppSettings() {
             }
         }
     }
-}
-
-InitializeDataDirectory(directory) {
-    DirCreate(directory)
-
 }
 
 BackupSettingsForReset(path) {

@@ -1,20 +1,15 @@
 ﻿; Feature module. The worker adapter is in reaction_automation.ps1.
 InitReactions() {
     InstallKeybdHook()
-    global DefaultReactionKind, ActiveReactionJob
-    global DefaultReactionCount
-    global DefaultReactionIntervalMs
-    ActiveReactionJob := 0
+    global ActiveReactionJob := 0
     global ReactionExecutionStatus := {Phase: "idle", Message: "", Final: false}
     global LastReactionResult := {Message:"まだ実行していません。",Detail:"",Completed:0,Total:0,Mode:"",Reason:"idle"}
-    global ReactionApplied := ""
-    global ReactionsInitialized := true
 }
 
 CreateReactionJob(values) {
     job := {Mode:"reaction_send", Phase:"waiting", Window:0, Video:"", Choice:1,
         Remaining:0, Total:0, Completed:0, Cancelled:false, Interval:0,
-        StartedAt:-1, FirstStartedAt:-1, Measurement:"", Detail:"",
+        StartedAt:-1, FirstStartedAt:-1, Measurement:"", Detail:"", Applied:"",
         RegistrationCommitted:false, RegistrationSynced:false}
     for name, value in values.OwnProps()
         job.%name% := value
@@ -66,10 +61,10 @@ ScheduleReaction(mode, delay, options := 0) {
         return false
     }
     choice := options ? options.Reaction : DefaultReactionKind
-    global ReactionApplied := "適用：" (options ? "今回の設定" : "共通設定") " / " ReactionNames[choice]
     if !choice
         return false
     ActiveReactionJob := CreateReactionJob({Mode: mode, Window: TargetBrowserHwnd, Video: context.Video,
+        Applied:"適用：" (options ? "今回の設定" : "共通設定") " / " ReactionNames[choice],
         Choice: choice, Remaining: delay, Total: options ? options.Count : DefaultReactionCount,
         Completed: 0, Cancelled: false, Interval: options ? options.Interval : DefaultReactionIntervalMs})
     PaletteWindow.Hide()
@@ -94,7 +89,7 @@ ReactionCountdown() {
     }
     ActiveReactionJob.Remaining--
     if ActiveReactionJob.Remaining > 0 {
-        ToolTip(ActiveReactionJob.Remaining "秒後に実行。♡のメニューを表示してください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。")
+        ShowStatusTip(ActiveReactionJob.Remaining "秒後に実行。♡のメニューを表示してください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。")
         return
     }
     SetTimer(ReactionCountdown, 0)
@@ -176,7 +171,7 @@ CancelReaction(*) {
     message := job.Mode = "queued" ? "中止しました。" : "中止しました。操作済み " job.Completed " / " job.Total " 回。"
     FinishReactionJob(job)
     SetReactionStatus(message,true,"","",job,"cancelled")
-    ToolTip()
+    ShowStatusTip()
 }
 
 ReactionSendNext() {
@@ -286,7 +281,7 @@ ApplyReactionResult(job, reply) {
     job.Completed++
     if job.Completed > 1
         job.Measurement := "（平均開始間隔 " Round((job.StartedAt - job.FirstStartedAt) / (job.Completed - 1)) " ms）"
-    progress := ReactionApplied "`n操作済み " job.Completed " / " job.Total " 回" job.Measurement
+    progress := job.Applied "`n操作済み " job.Completed " / " job.Total " 回" job.Measurement
     if job.Cancelled || job.Completed >= job.Total {
         FinishReactionJob(job)
         SetReactionStatus(progress "。" (job.Cancelled ? "中止しました。" : "完了しました。") " YouTube側の受理回数は未確認です。", true,"","",job,job.Cancelled ? "cancelled" : "completed")
@@ -317,10 +312,10 @@ QuickReaction(*) {
             return
         }
         choice := DefaultReactionKind
-        global ReactionApplied := "適用：共通設定 / " ReactionNames[choice]
         if !choice || ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         ActiveReactionJob := CreateReactionJob({Mode: "reaction_send", Window: hwnd, Video: context.Video,
+            Applied:"適用：共通設定 / " ReactionNames[choice],
             Choice: choice, Total: DefaultReactionCount, Completed: 0, Cancelled: false, Interval: DefaultReactionIntervalMs})
         batchStarted := true
         ReactionSendNext()

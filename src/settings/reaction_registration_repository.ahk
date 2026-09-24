@@ -45,8 +45,7 @@ SaveReactionRegistration(payload) {
     repository.Db.Transaction(() => ApplyReactionRegistration(repository,payload))
 }
 ApplyReactionRegistration(repository,payload) {
-    if repository.HasOwnProp("DataVersion") && repository.DataVersion != repository.Db.Scalar("PRAGMA data_version")
-        throw Error("設定が別の接続で変更されました。再起動して最新の設定を読み込んでください。")
+    repository.VerifyDataVersion()
     WriteReactionRegistration(repository.Db,payload)
 }
 LoadReactionRegistrationSnapshot() {

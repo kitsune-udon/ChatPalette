@@ -1,7 +1,4 @@
-﻿GetDanmakuItems(common, profile) {
-    return common ? SharedDanmakuItems : (profile ? profile.Items : [])
-}
-ItemSlot(item) {
+﻿ItemSlot(item) {
     return item.HasOwnProp("Slot") ? item.Slot : 0
 }
 NormalizeLibrarySlots(items) {

@@ -40,7 +40,11 @@ OpenDanmakuEditor(isNew) {
     DanmakuEditorWindow.OnEvent("Close",CloseDanmakuEditor)
     DanmakuEditorWindow.OnEvent("Escape",CloseDanmakuEditor)
     BeginEditorDialog(DanmakuEditorWindow,"弾幕の編集")
-    PresentWindow(DanmakuEditorWindow)
+    try PresentWindow(DanmakuEditorWindow)
+    catch as failure {
+        FinishDanmakuEditor()
+        throw failure
+    }
     Save(*) {
         if !Trim(name.Value) || !Trim(text.Value) {
             status.Text := "弾幕名と本文を入力してください。"
@@ -111,7 +115,11 @@ TransferItem(*) {
     view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
     view.OnEvent("Close",Close), view.OnEvent("Escape",Close)
     BeginEditorDialog(view,"弾幕の移動")
-    PresentWindow(view)
+    try PresentWindow(view)
+    catch as failure {
+        Close()
+        throw failure
+    }
     Close(*) {
         EndEditorDialog()
         view.Destroy()
@@ -168,7 +176,11 @@ OpenChannelLinkDialog(*) {
     view.OnEvent("Close",Close),view.OnEvent("Escape",Close)
     UpdateChoice()
     BeginEditorDialog(view,"チャンネル連携")
-    PresentWindow(view)
+    try PresentWindow(view)
+    catch as failure {
+        Close()
+        throw failure
+    }
     UpdateChoice(*) {
         isNew := target.Value = 1
         name.Enabled := isNew, nameLabel.Enabled := isNew

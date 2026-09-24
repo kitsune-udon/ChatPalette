@@ -1,4 +1,7 @@
-﻿function Get-ChannelKey([string]$AuthorUrl) {
+﻿$script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+$script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)
+
+function Get-ChannelKey([string]$AuthorUrl) {
     $uri = $null
     if (-not [Uri]::TryCreate($AuthorUrl, [UriKind]::Absolute, [ref]$uri)) { return '' }
     if ($uri.Scheme -ne 'https' -or $uri.Host -notin @('youtube.com', 'www.youtube.com')) { return '' }

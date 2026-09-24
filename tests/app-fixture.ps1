@@ -56,7 +56,7 @@ FixtureResolveChannel(hwnd) {
         FixtureResolveCount++
         return {State:"ok",Author:"A",Channel:"/channel/a",Video:"aaaaaaaaaaa"}
     }
-    return NativeResolveBrowserChannel(hwnd)
+    return RequestBrowserOperation(hwnd)
 }
 FixtureVerifyInput(hwnd, expectedVideo) {
     if IsSet(FixtureInputMode) && FixtureInputMode

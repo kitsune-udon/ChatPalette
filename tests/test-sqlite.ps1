@@ -6,6 +6,25 @@ $tests = @'
 OnExit(StopBrowserWorker)
 global SqliteChecks := 0
 try {
+    reuse := SqliteConnection(A_ScriptDir "\statement-reuse.db",true)
+    try {
+        reuse.Exec("CREATE TABLE sample(id INTEGER PRIMARY KEY, value TEXT)")
+        insert := "INSERT INTO sample VALUES(?,?)"
+        reuse.Run(insert,1,"first")
+        failed := false
+        try reuse.Run(insert,1,"duplicate")
+        catch
+            failed := true
+        reuse.Run(insert,2)
+        SqlCheck(failed && reuse.Scalar("SELECT COUNT(*) FROM sample WHERE id=? AND value IS NULL",2)="1","step failure clears bindings before reuse")
+        failed := false
+        try reuse.Run(insert,3,"partial",99)
+        catch
+            failed := true
+        reuse.Run(insert,3)
+        SqlCheck(failed && reuse.Scalar("SELECT COUNT(*) FROM sample WHERE id=? AND value IS NULL",3)="1","binding failure clears partial arguments before reuse")
+        SqlCheck(reuse.Scalar("SELECT value FROM sample WHERE id=?",1)="first" && reuse.Scalar("SELECT value FROM sample WHERE id=?")="","query reuse clears previous arguments")
+    } finally reuse.Close()
     store := OpenSettingsRepository(SettingsDatabasePath), db := store.Db
     SqlCheck(db.Scalar("PRAGMA journal_mode")="delete" && db.Scalar("PRAGMA synchronous")="3" && db.Scalar("PRAGMA foreign_keys")="1","durable DELETE settings")
     a := ExecuteProfileCommand("add","","author A","/channel/A").ProfileId

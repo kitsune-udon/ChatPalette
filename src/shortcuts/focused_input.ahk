@@ -11,7 +11,7 @@ QueueFocusedDanmaku(scope,slot,hwnd) {
         key := RegExReplace(GetShortcutKey(scope slot),"[!^+]","")
         focus.Pending := {Scope:scope,Slot:slot,Key:key,Deadline:A_TickCount+5000,
             Library:{Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems}}
-        ToolTip("フォーカス完了後に弾幕を1件入力します。")
+        ShowStatusTip("フォーカス完了後に弾幕を1件入力します。")
         return true
     } finally Critical(previousCritical)
 }

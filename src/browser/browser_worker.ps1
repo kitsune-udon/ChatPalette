@@ -1,7 +1,5 @@
 ﻿param([string]$PipeName, [int]$ParentProcessId, [switch]$Library)
 $ErrorActionPreference = 'Stop'
-$script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
-$script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)
 $script:AddressBarCache = @{}
 $script:FocusedChat = $null
 . (Join-Path $PSScriptRoot 'reaction_automation.ps1')

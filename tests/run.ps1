@@ -1,5 +1,13 @@
 ﻿param([string]$AutoHotkeyPath, [ValidateSet("All","Headless","Desktop")][string]$Group="All", [switch]$List)
 $ErrorActionPreference = 'Stop'
+$tests = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'test-*.ps1' -File | Sort-Object Name)
+$tests = @($tests | Where-Object {
+    $header = Get-Content -LiteralPath $_.FullName -TotalCount 1
+    if ($header -notmatch '^# Test-Session: (Headless|Desktop)$') { throw "Missing test session classification: $($_.Name)" }
+    $Group -eq 'All' -or $Matches[1] -eq $Group
+})
+if (!$tests.Count) { throw 'No test scripts found' }
+if ($List) { $tests.Name; return }
 $base = Join-Path $PSScriptRoot '.tmp'
 $runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
@@ -9,14 +17,6 @@ $oldAhk = $env:AHK_EXE
 try {
     $env:HELPER_TEST_ROOT = $runRoot
     if ($AutoHotkeyPath) { $env:AHK_EXE = $AutoHotkeyPath }
-    $tests = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'test-*.ps1' -File | Sort-Object Name)
-    $tests = @($tests | Where-Object {
-        $header = Get-Content -LiteralPath $_.FullName -TotalCount 1
-        if ($header -notmatch '^# Test-Session: (Headless|Desktop)$') { throw "Missing test session classification: $($_.Name)" }
-        $Group -eq 'All' -or $Matches[1] -eq $Group
-    })
-    if ($List) { $tests.Name; $completed=$true; return }
-    if (!$tests.Count) { throw 'No test scripts found' }
     foreach ($test in $tests) {
         $name = $test.Name
         Write-Output "RUN: $name"
