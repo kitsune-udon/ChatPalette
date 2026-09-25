@@ -1,4 +1,5 @@
-﻿param([string]$OutputDirectory)
+﻿[CmdletBinding()]
+param([string]$OutputDirectory)
 $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot -Parent
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $project 'dist' }

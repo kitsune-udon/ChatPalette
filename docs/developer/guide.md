@@ -10,7 +10,7 @@ Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。ブ�
 
 リポジトリを取得したら、通常利用するアプリとは**別フォルダー**を開発用に使います。同じスクリプトの起動は `#SingleInstance Force` により既存インスタンスを置き換えます。構文確認だけでも、正式版のパスを使って実行しないでください。
 
-以下の例はリポジトリ直下で実行します。AutoHotkeyのインストール場所が違う場合は読み替えます。
+以下の例はリポジトリ直下で実行します。AutoHotkeyのインストール場所が違う場合は読み替えます。 配布・検査・テスト・計測コマンドは、未知の引数名を処理開始前に拒否します。引数名の誤記を既定値での実行として扱いません。
 
 ```powershell
 # 構文を読み込み、アプリ初期化前に終了
@@ -33,7 +33,7 @@ Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。ブ�
 | 配置・ボタン・表示文言 | [src/ui/](../../src/ui)の該当画面 |
 | 弾幕・配信者の編集規則 | [src/library/library_service.ahk](../../src/library/library_service.ahk) |
 | 初期値・選択肢 | [src/settings/settings_schema.ahk](../../src/settings/settings_schema.ahk) |
-| 保存と移行 | [src/settings/](../../src/settings)、SQLite呼び出しは[src/storage/](../../src/storage) |
+| 設定の保存 | [src/settings/](../../src/settings)、SQLite呼び出しは[src/storage/](../../src/storage) |
 | キーの許可・登録 | [src/shortcuts/](../../src/shortcuts) |
 | 文字入力の対象確認 | [src/input/](../../src/input)、[src/browser/input_target.ps1](../../src/browser/input_target.ps1) |
 | リアクションの実行・停止 | [src/reactions/reaction_controller.ahk](../../src/reactions/reaction_controller.ahk) |
@@ -44,17 +44,9 @@ Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。ブ�
 
 ## テストを実行する
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
-# 一つのテストだけ実行
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Name test-sqlite.ps1
-```
+[検証ガイドの対応表](testing.md#変更とテストの対応)から影響するテストを選び、[共通の実行コマンド](testing.md#自動テストを実行する)を使います。単体・グループ・全体の指定、AutoHotkeyの場所、実行環境、一時ファイルの扱いは同ページにまとめています。
 
-AutoHotkeyが標準外の場所にある場合は、末尾へ `-AutoHotkeyPath '実行ファイルの絶対パス'` を追加します。単体実行でも同じ指定を使え、環境変数`AHK_EXE`でも指定できます。明示したファイルが存在しない場合はエラーにし、別のインストール先へ切り替えません。未指定の場合だけ標準のインストール先を検索します。成功時は終了コード0と全体のPASSを確認します。
-
-テストは一時フォルダーへソースをコピーして実行します。実ブラウザーへの入力・リアクション送信・ネットワーク取得は代替処理を使いますが、画面生成やフォーカスを扱うテストはあります。操作できるWindowsセッションで実行し、途中で別のウィンドウへフォーカスを奪う操作を避けてください。
-
-対象別のテスト、失敗時の調べ方、手動確認は[検証ガイド](testing.md)を参照してください。
+画面やブラウザーの変更は、同ガイドの実画面・実ブラウザー確認も行います。配布時は下のリリース手順が全テストを含むため、その直前に全体を重ねて実行する必要はありません。
 
 ## 文字コードとGit
 
@@ -62,11 +54,10 @@ AutoHotkeyが標準外の場所にある場合は、末尾へ `-AutoHotkeyPath '
 |---|---|
 | `.ahk`・`.ps1` | UTF-8 BOM付き、CRLF |
 | Markdown・Git設定・LICENSE・VERSION | UTF-8 BOMなし、LF |
-| 移行テスト用INI | `.gitattributes`でテキスト変換を無効化した固定データ |
 
 `.gitattributes`がGitの改行変換、`.editorconfig`が対応エディターの保存形式を定めます。GitはBOMを自動付加しません。特にWindows PowerShell 5.1で日本語を含むスクリプトを編集するときは、BOMを保持してください。
 
-個人の `data/`、配布出力 `dist/`、テストの一時ファイルはGit対象外です。`tests/fixtures/settings.ini`は合成データなので、旧ユーザー設定と区別して保持します。
+個人の `data/`、配布出力 `dist/`、テストの一時ファイルはGit対象外です。画面テストの合成設定は`tests/app-fixture.ps1`で作り、利用者のDBは使用しません。
 
 ```powershell
 git status --short
@@ -102,16 +93,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release
 
 [build-release.ps1](../../scripts/build-release.ps1)は検証コマンドから呼ぶ梱包処理です。単独実行では検証済み配布物にならないため、通常のリリース入口には使いません。
 
-ZIPは一時ディレクトリ内で完成させてから、既存ファイルを上書きしない移動で正式名へ確定します。圧縮中の読み取り失敗では不完全なZIPを正式名へ残さず、一時出力を片付けるため、原因を解消後に同じ出力先で再実行できます。現在の配布はソース形式で、実行にはAutoHotkey v2とWindows PowerShell 5.1が必要です。
-
-形式だけ確認する場合は、次を実行します。
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-source.ps1
-```
+ZIPと検証レポートは、それぞれ出力先と同じファイルシステム上の一時ファイルを完成させてから、既存ファイルを上書きしない移動で正式名へ確定します。検証中に作られた同名レポートも上書きしません。レポートの公開に失敗した場合は一時レポートを片付けますが、完成済みZIPは残るため、その実行を検証成功として扱わないでください。圧縮中の読み取り失敗では不完全なZIPを正式名へ残さず、一時出力を片付けるため、原因を解消後に同じ出力先で再実行できます。現在の配布はソース形式で、実行にはAutoHotkey v2とWindows PowerShell 5.1が必要です。
 
 ## 文書を更新する規則
 
 実装・テストを一次情報とし、利用者向け手順は画面のラベルと照合します。仕様値は[リファレンス](../user/reference.md)、障害時の手順は[保守](../user/maintenance.md)、内部の理由・制約は[設計](architecture.md)を正本にします。
 
+未リリースの変更履歴は、作業ごとの追記ではなく、最終的な変更結果ごとにまとめます。同じ機能の追加修正は既存の項目へ統合し、内部の契約や詳細な手順は正本へリンクします。公開済みバージョンの履歴は保持してください。
+
 変更時はリンク先の存在、見出しへのリンク、バージョン、初期値、保存範囲を確認してください。新しい`.md`は配布スクリプトで収録されます。画像など別形式の資料を追加する場合は、配布スクリプトの収録対象も更新する必要があります。
+
+文書だけの変更では、実装との照合、相対リンクと見出し、配布対象への収録を確認します。手順の意味が変わった場合は、その操作も確認します。実施していない操作を検証済みと記載しないでください。形式とリンクの確認は次のコマンドを使い、アプリ全テストは文書変更だけを理由に繰り返しません。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-source.ps1
+```

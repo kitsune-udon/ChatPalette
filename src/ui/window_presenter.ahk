@@ -23,6 +23,21 @@ PresentWindow(view, options := "", layout := 0, activate := true) {
     DllCall("RedrawWindow", "Ptr", view.Hwnd, "Ptr", 0, "Ptr", 0, "UInt", 0x185)
 }
 
+; Informational dialogs share ownership and cleanup; builders only add their content.
+ShowInfoDialog(title, build) {
+    view := Gui("+Owner" PaletteWindow.Hwnd,title)
+    try {
+        view.SetFont("s10","Yu Gothic UI")
+        build.Call(view)
+        view.OnEvent("Close",(*) => view.Destroy())
+        view.OnEvent("Escape",(*) => view.Destroy())
+        PresentWindow(view)
+    } catch as failure {
+        view.Destroy()
+        throw failure
+    }
+}
+
 ShowFittedWindow(view, width, height, layout := 0, activate := true) {
     monitor := DllCall("MonitorFromWindow", "Ptr", view.Hwnd, "UInt", 2, "Ptr")
     info := Buffer(40, 0), NumPut("UInt", 40, info)

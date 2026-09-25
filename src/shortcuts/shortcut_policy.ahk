@@ -3,6 +3,15 @@ CanonicalShortcutKey(key) {
     return (InStr(key,"^") ? "^" : "") (InStr(key,"!") ? "!" : "") (InStr(key,"+") ? "+" : "") StrLower(RegExReplace(key,"[!^+]",""))
 }
 
+; Runtime registration and editor dirty state share semantic key equality.
+ChangedShortcutBindings(previous, next) {
+    changed := Map()
+    for action, key in next
+        if CanonicalShortcutKey(previous.Get(action,"")) != CanonicalShortcutKey(key)
+            changed[action] := key
+    return changed
+}
+
 ShortcutDefinitions() {
     static definitions := [
         {Id:"palette",Label:"パレットを開く",Default:"^!q",Scope:"どの画面でも"},

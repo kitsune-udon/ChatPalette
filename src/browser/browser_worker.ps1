@@ -1,4 +1,4 @@
-﻿param([string]$PipeName, [int]$ParentProcessId, [switch]$Library)
+﻿param([string]$PipeName, [switch]$Library)
 $ErrorActionPreference = 'Stop'
 $script:AddressBarCache = @{}
 $script:FocusedChat = $null
@@ -26,7 +26,8 @@ function Get-VideoId([string]$Address) {
 
 function Read-AddressBarVideoId($Element) {
     $info = $Element.Current
-    if ($info.IsOffscreen -or $info.HasKeyboardFocus) { return '' }
+    if ($info.IsOffscreen) { throw 'Address control was replaced or hidden' }
+    if ($info.HasKeyboardFocus) { return '' }
     $pattern = $null
     if (-not $Element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
         throw 'Address element became unavailable'
@@ -42,7 +43,6 @@ function Read-BrowserVideoId([long]$WindowHandle) {
         $entry = $script:AddressBarCache[$WindowHandle]
         if ($entry.ProcessId -eq $processId) {
             try {
-                if ($entry.Element.Current.IsOffscreen) { throw 'Address control was replaced or hidden' }
                 return Read-AddressBarVideoId $entry.Element
             } catch { }
         }
@@ -59,14 +59,15 @@ function Read-BrowserVideoId([long]$WindowHandle) {
             if ($info.AutomationId -notin @('addressEditBox', 'urlbar-input', 'urlbar') -and
                 $info.Name -notmatch '(?i)address|アドレス|検索または.*URL|search or enter') { continue }
             $ancestor = $edit
-            $insideDocument = $false
+            $insideChrome = $false
             for ($depth = 0; $depth -lt 30 -and $null -ne $ancestor; $depth++) {
-                if ($ancestor.Current.ControlType -eq [System.Windows.Automation.ControlType]::Document) {
-                    $insideDocument = $true; break
-                }
+                $ancestorInfo = $ancestor.Current
+                if ($ancestorInfo.ControlType -eq [System.Windows.Automation.ControlType]::Document) { break }
+                if ($ancestorInfo.NativeWindowHandle -eq $WindowHandle) { $insideChrome = $true; break }
                 $ancestor = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)
             }
-            if ($insideDocument -or $info.IsOffscreen) { continue }
+            # A missing ancestor or depth limit is not evidence of browser chrome.
+            if (!$insideChrome) { continue }
             $video = Read-AddressBarVideoId $edit
             if ($script:AddressBarCache.Count -ge 16) { $script:AddressBarCache.Clear() }
             $script:AddressBarCache[$WindowHandle] = @{ ProcessId = $processId; Element = $edit }
@@ -91,7 +92,7 @@ function Invoke-WorkerRequest($Request) {
         return Invoke-ReactionRequest $Request
     }
     $reply = @{ Seq = $Request.Seq; State = 'unavailable'; Author = ''; Channel = ''; Video = ''; Window = $Request.Window }
-    if ($Request.Mode -notin @('browser_context', 'resolve', 'verify', 'verify_input', 'verify_chat')) { return $reply }
+    if ($Request.Mode -notin @('browser_context', 'resolve', 'verify_input', 'verify_chat')) { return $reply }
     $focus = $null
     if ($Request.FocusToken) {
         $focus = $script:FocusedChat
@@ -119,10 +120,6 @@ function Invoke-WorkerRequest($Request) {
         $reply.State = 'ok'
         $reply.Detail = $kind
         return $reply
-    }
-    if ($Request.Mode -eq 'verify') {
-        $reply.State = if ($video -ceq $Request.Video) { 'ok' } else { 'changed' }
-        return $reply # No metadata lookup or network in the verify path.
     }
     $metadata = Resolve-Video $video
     if ($null -eq $metadata) { return $reply }
@@ -158,13 +155,11 @@ function Write-PipeReply($Writer, $Reply) {
     $Writer.Flush()
 }
 
-function Start-BrowserWorker([string]$PipeName, [int]$ParentProcessId,
+function Start-BrowserWorker([string]$PipeName,
     [scriptblock]$Handler = { param($request) Invoke-WorkerRequest $request }) {
     $pipe = $null
     $signal = $null
     try {
-        $parent = Get-Process -Id $ParentProcessId
-        if ($parent.HasExited) { exit 1 }
         $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [IO.Pipes.PipeDirection]::InOut)
         $pipe.Connect(5000)
         $signal = [Threading.EventWaitHandle]::OpenExisting($PipeName + '-ready')
@@ -188,4 +183,4 @@ function Start-BrowserWorker([string]$PipeName, [int]$ParentProcessId,
         if ($null -ne $signal) { $signal.Dispose() }
     }
 }
-if (!$Library) { Start-BrowserWorker $PipeName $ParentProcessId }
+if (!$Library) { Start-BrowserWorker $PipeName }

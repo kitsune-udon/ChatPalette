@@ -1,5 +1,7 @@
-﻿param([string]$ProjectRoot=(Split-Path $PSScriptRoot -Parent))
+﻿[CmdletBinding()]
+param([string]$ProjectRoot)
 $ErrorActionPreference='Stop'
+if (!$ProjectRoot) { $ProjectRoot=Split-Path $PSScriptRoot -Parent }
 . (Join-Path $PSScriptRoot 'release-files.ps1')
 $version=Get-ReleaseVersion $ProjectRoot
 if ([IO.File]::ReadAllText((Join-Path $ProjectRoot 'README.md')) -notmatch ('現在のバージョン：\*\*'+[regex]::Escape($version)+'\*\*')) { throw 'README/VERSION mismatch' }

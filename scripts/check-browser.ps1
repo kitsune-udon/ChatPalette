@@ -28,7 +28,7 @@ if ($List) {
     return
 }
 $report=[ordered]@{Time=[DateTime]::UtcNow.ToString('o'); Browser=''; BrowserVersion=''; PageKind='unknown';
-    Foreground=$false; VideoDetected=$false; ChatDetected=$false; LauncherDetected=$false;
+    Foreground=$false; AddressDetected=$false; VideoDetected=$false; ChatDetected=$false; LauncherDetected=$false;
     Focus='not-run'; Hover='not-run'; Display='not-verified'; Error=''}
 try {
     $root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
@@ -38,6 +38,7 @@ try {
     $report.BrowserVersion=$process.MainModule.FileVersionInfo.FileVersion
     $report.Foreground=Test-ReactionForeground $WindowHandle
     $report.VideoDetected=[bool](Read-BrowserVideoId $WindowHandle)
+    $report.AddressDetected=$script:AddressBarCache.ContainsKey($WindowHandle)
     if ($report.VideoDetected) {
         $address=$script:AddressBarCache[$WindowHandle].Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
         if ($address -notmatch '^https?://') { $address='https://'+$address }

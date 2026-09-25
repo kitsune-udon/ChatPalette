@@ -21,7 +21,6 @@
 #Include %A_ScriptDir%\src\library\danmaku_library.ahk
 #Include %A_ScriptDir%\src\storage\sqlite_connection.ahk
 #Include %A_ScriptDir%\src\settings\settings_validation.ahk
-#Include %A_ScriptDir%\src\settings\legacy_settings_import.ahk
 #Include %A_ScriptDir%\src\settings\library_storage_plan.ahk
 #Include %A_ScriptDir%\src\settings\reaction_registration_repository.ahk
 #Include %A_ScriptDir%\src\settings\shortcut_repository.ahk

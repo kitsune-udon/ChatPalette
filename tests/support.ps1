@@ -6,6 +6,7 @@ function New-TestRuntime {
     New-Item -ItemType Directory -Path $path -Force | Out-Null
     Get-ChildItem -LiteralPath $ProjectRoot -File | Where-Object { $_.Extension -in '.ahk','.ps1' -or $_.Name -eq 'VERSION' } | Copy-Item -Destination $path
     Copy-Item -LiteralPath (Join-Path $ProjectRoot 'src') -Destination $path -Recurse
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\library-model.ahk') -Destination (Join-Path $path 'library-model.ahk')
     return $path
 }
 function Get-AutoHotkeyPath {
@@ -16,33 +17,58 @@ function Get-AutoHotkeyPath {
     throw "AutoHotkey v2 executable not found. Checked: $($candidates -join ', '). Set AHK_EXE to the full executable path."
 }
 
+# Takes ownership of the started process until exit, including timeout and wait failures.
+function Wait-TestProcess {
+    param([Diagnostics.Process]$Process, [int]$TimeoutMs)
+    try {
+        $null = $Process.Handle
+        if ($TimeoutMs -lt 1) { throw 'Test process timeout must be positive.' }
+        if (!$Process.WaitForExit($TimeoutMs)) { throw "Test process timed out after ${TimeoutMs}ms (PID $($Process.Id))." }
+        $Process.WaitForExit()
+        return $Process.ExitCode
+    } finally {
+        try {
+            if (!$Process.HasExited) {
+                $Process.Kill()
+                $Process.WaitForExit()
+            }
+        } finally { $Process.Dispose() }
+    }
+}
+
 function Invoke-AppTest {
     param([string]$Runtime, [string]$Body, [int]$TimeoutMs = 30000, [string]$Setup = '')
-    $source = "#Requires AutoHotkey v2.0`r`n#SingleInstance Force`r`n#Include %A_ScriptDir%\src\app\app_modules.ahk`r`n" + $Setup + "`r`nInitializeApplication()`r`n" + $Body
+    $source = "#Requires AutoHotkey v2.0`r`n#SingleInstance Force`r`n#Include %A_ScriptDir%\src\app\app_modules.ahk`r`n#Include %A_ScriptDir%\library-model.ahk`r`n" + $Setup + "`r`nInitializeApplication()`r`n" + $Body
     Invoke-AhkTest -Runtime $Runtime -Source $source -TimeoutMs $TimeoutMs
 }
 function Invoke-AhkTest {
     param([string]$Runtime, [string]$Source, [int]$TimeoutMs = 30000)
     $entry = Join-Path $Runtime 'test.ahk'
-    [IO.File]::WriteAllText($entry, "#Warn VarUnset, StdOut`r`n" + $Source, [Text.UTF8Encoding]::new($true))
+    $preamble = @'
+#Warn VarUnset, StdOut
+OnError(ReportUnhandledTestError)
+ReportUnhandledTestError(failure, *) {
+    try {
+        detail := failure is Error ? failure.Message " at " failure.File ":" failure.Line " " failure.Extra "`n" failure.Stack
+            : (IsObject(failure) ? Type(failure) : failure)
+        FileAppend("FAIL: unhandled test error: " detail "`n", "**")
+    } finally ExitApp(1)
+}
+'@
+    [IO.File]::WriteAllText($entry, $preamble + "`r`n" + $Source, [Text.UTF8Encoding]::new($true))
     $out = Join-Path $Runtime 'stdout.txt'
     $err = Join-Path $Runtime 'stderr.txt'
     $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + $entry + '"'), '--smoke' -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-    $null = $run.Handle
-    if (!$run.WaitForExit($TimeoutMs)) {
-        $run.Kill()
-        $run.WaitForExit()
-        throw "Test timed out after ${TimeoutMs}ms: $Runtime"
-    }
+    $exitCode = Wait-TestProcess -Process $run -TimeoutMs $TimeoutMs
     Get-Content -LiteralPath $out,$err
-    if ($run.ExitCode -ne 0) { throw "Test failed ($($run.ExitCode)): $Runtime" }
+    if ($exitCode -ne 0) { throw "Test failed ($exitCode): $Runtime" }
 }
 
 function Write-TestWorker {
     param([string]$Runtime, [string]$Definitions)
     $source = @'
-param([string]$PipeName, [int]$ParentProcessId)
-. (Join-Path $PSScriptRoot 'browser_worker.ps1') -Library -PipeName $PipeName -ParentProcessId $ParentProcessId
-'@ + "`r`n" + $Definitions + "`r`nStart-BrowserWorker `$PipeName `$ParentProcessId -Handler { param(`$request) Invoke-FixtureRequest `$request }"
+param([string]$PipeName)
+. (Join-Path $PSScriptRoot 'browser_worker.ps1') -Library -PipeName $PipeName
+'@ + "`r`n" + $Definitions + "`r`nStart-BrowserWorker `$PipeName -Handler { param(`$request) Invoke-FixtureRequest `$request }"
     [IO.File]::WriteAllText((Join-Path $Runtime 'src\browser\fixture_worker.ps1'),$source,[Text.UTF8Encoding]::new($true))
 }

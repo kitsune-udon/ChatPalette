@@ -1,8 +1,4 @@
 ﻿; Domain commands and persistence. No editing selection or window dependencies.
-CreateLibrarySnapshot() {
-    return {Profiles:CopyProfiles(Profiles), SharedDanmakuItems:CopyItems(SharedDanmakuItems)}
-}
-
 GetLibraryItems(library, profileId := "") {
     if profileId = ""
         return library.SharedDanmakuItems
@@ -12,16 +8,10 @@ GetLibraryItems(library, profileId := "") {
     return library.Profiles[index].Items
 }
 
-; External callers retain ownership of their mutable draft.
-CommitLibraryChange(library, label) {
-    return CommitLibraryDraft({Profiles:CopyProfiles(library.Profiles), SharedDanmakuItems:CopyItems(library.SharedDanmakuItems)},label)
-}
-
 ; Persist first, then publish from one place for commands, undo, and reload.
 PublishLibraryState(state) {
     global Profiles := state.Profiles, SharedDanmakuItems := state.SharedDanmakuItems
     global InputProfileId := state.InputProfileId
-    RebuildChannelIndex()
 }
 SaveLibraryDraft(library) {
     state := {Profiles:library.Profiles, SharedDanmakuItems:library.SharedDanmakuItems, InputProfileId:InputProfileId}
@@ -59,27 +49,37 @@ UndoLibraryCommand() {
     }
 }
 
-ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId := "") {
+ExecuteDanmakuCommand(action, profileId, itemId := "", value := 0, destinationId := "") {
     previousCritical := A_IsCritical
     Critical("On")
     try {
         library := CreateLibraryDraft(), items := EditLibraryItems(library,profileId)
-        if action != "add" && (!IsInteger(index) || index < 1 || index > items.Length)
-            throw Error("対象の弾幕が見つかりません。選び直してください。")
+        index := 0
+        if action != "add" {
+            for i, item in items {
+                if item.Id == itemId {
+                    index := i
+                    break
+                }
+            }
+            if !index
+                throw Error("対象の弾幕が見つかりません。選び直してください。")
+        }
         selected := index
         switch action {
             case "add", "edit":
                 if !IsObject(value) || !Trim(value.Name) || !Trim(value.Text)
                     throw Error("弾幕名と本文を入力してください。")
+                requestedSlot := value.HasOwnProp("Slot") ? value.Slot : 0
                 original := action = "edit" ? items[index] : 0
                 item := {Id:action = "add" ? NewRecordId() : items[index].Id, Name:Trim(value.Name), Text:value.Text, Slot:0}
                 if action = "add"
                     items.Push(item), selected := items.Length
                 else
                     items[index] := item
-                AssignItemSlot(items,selected,ItemSlot(value))
+                AssignItemSlot(items,selected,requestedSlot)
                 label := "「" item.Name "」の" (action = "add" ? "追加" : "編集")
-                if original && item.Name == original.Name && item.Text == original.Text && ItemSlot(value) = ItemSlot(original)
+                if original && item.Name == original.Name && item.Text == original.Text && requestedSlot = original.Slot
                     return {Label:label, Index:selected, ProfileId:profileId}
             case "delete":
                 label := "「" items[index].Name "」の削除"
@@ -189,7 +189,7 @@ SaveShortcutItemAssignments(profileId,firstId,secondId) {
             slot := item.Id == firstId ? 1 : (item.Id == secondId ? 2 : 0)
             if slot
                 unmatched--
-            if ItemSlot(item) != slot {
+            if item.Slot != slot {
                 replacement := item.Clone(), replacement.Slot := slot
                 items[i] := replacement, changed := true
             }

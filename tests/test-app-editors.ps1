@@ -22,13 +22,28 @@ Invoke-AppFixture -Body @'
     Sleep(50)
     Assert(!ActiveEditorDialog,"key editor closes normally after recall")
     otherWindow.Destroy()
+    OpenDanmakuEditor(true)
+    editor := ActiveEditorDialog.Window
+    popup := Gui("+Owner" editor.Hwnd,"confirmation fixture")
+    popup.AddButton("w180","fixture confirmation")
+    editor.Opt("+Disabled")
+    popup.Show("w220 h80")
+    otherWindow := Gui(,"outside editor fixture")
+    otherWindow.Show("w200 h100")
+    WinActivate("ahk_id " otherWindow.Hwnd)
+    Assert(WinWaitActive("ahk_id " otherWindow.Hwnd,,2),"another window is active before editor recall")
+    ShowPalette()
+    Assert(WinWaitActive("ahk_id " popup.Hwnd,,2),"palette shortcut recalls the editor's owned confirmation")
+    popup.Destroy(), otherWindow.Destroy()
+    editor.Opt("-Disabled")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
     beforeFocusSave := SharedDanmakuItems.Length
     OpenDanmakuEditor(true)
-    WinActivate("ahk_id " DanmakuEditorWindow.Hwnd)
-    WinWaitActive("ahk_id " DanmakuEditorWindow.Hwnd,,2)
-    Assert(WinActive("ahk_id " DanmakuEditorWindow.Hwnd),"editor activated before save")
+    WinActivate("ahk_id " ActiveEditorDialog.Window.Hwnd)
+    WinWaitActive("ahk_id " ActiveEditorDialog.Window.Hwnd,,2)
+    Assert(WinActive("ahk_id " ActiveEditorDialog.Window.Hwnd),"editor activated before save")
     editNumber := 0
-    for control in DanmakuEditorWindow {
+    for control in ActiveEditorDialog.Window {
         if control.Type = "Edit" {
             editNumber++
             control.Value := editNumber=1 ? "focus regression" : "fixture text"
@@ -36,18 +51,18 @@ Invoke-AppFixture -Body @'
         if control.Type = "Button" && control.Text = "保存"
             saveButton := control
     }
-    ControlClick(saveButton.Hwnd)
+    SendMessage(0xF5,0,0,saveButton.Hwnd) ; BM_CLICK keeps native button dispatch independent of pointer movement.
     deadline := A_TickCount+2000
-    while DanmakuEditorWindow && A_TickCount < deadline
+    while ActiveEditorDialog && A_TickCount < deadline
         Sleep(10)
-    if DanmakuEditorWindow {
+    if ActiveEditorDialog {
         statusDetails := ""
-        for control in DanmakuEditorWindow
+        for control in ActiveEditorDialog.Window
             if control.Type="Text"
                 statusDetails .= " | " control.Text
-        FileAppend("Editor diagnostic: active=" (!!WinActive("ahk_id " DanmakuEditorWindow.Hwnd)) " enabled=" DllCall("IsWindowEnabled","Ptr",DanmakuEditorWindow.Hwnd) " items=" SharedDanmakuItems.Length " expected=" (beforeFocusSave+1) statusDetails "`n","*")
+        FileAppend("Editor diagnostic: active=" (!!WinActive("ahk_id " ActiveEditorDialog.Window.Hwnd)) " enabled=" DllCall("IsWindowEnabled","Ptr",ActiveEditorDialog.Window.Hwnd) " items=" SharedDanmakuItems.Length " expected=" (beforeFocusSave+1) statusDetails "`n","*")
     }
-    Assert(!DanmakuEditorWindow && SharedDanmakuItems.Length=beforeFocusSave+1,"save callback completes")
+    Assert(!ActiveEditorDialog && SharedDanmakuItems.Length=beforeFocusSave+1,"save callback completes")
     Assert(WinActive("ahk_id " ManagementWindow.Hwnd),"save restores active management panel")
     Assert(DllCall("GetFocus","Ptr")=ManagedList.Hwnd && ManagedList.GetNext()=SharedDanmakuItems.Length,"saved row retains keyboard focus")
     TransferItem()
@@ -63,34 +78,46 @@ Invoke-AppFixture -Body @'
     otherWindow.Destroy()
     UndoLibraryChange()
     OpenDanmakuEditor(true)
-    WinActivate("ahk_id " DanmakuEditorWindow.Hwnd)
-    Assert(WinWaitActive("ahk_id " DanmakuEditorWindow.Hwnd,,2),"editor is active before cancellation")
-    CloseDanmakuEditor()
+    WinActivate("ahk_id " ActiveEditorDialog.Window.Hwnd)
+    Assert(WinWaitActive("ahk_id " ActiveEditorDialog.Window.Hwnd,,2),"editor is active before cancellation")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
     Assert(WinWaitActive("ahk_id " ManagementWindow.Hwnd,,2) && SharedDanmakuItems.Length=beforeFocusSave,"cancel restores panel without saving")
+    OpenDanmakuEditor(true)
+    priorEditor := ActiveEditorDialog.Window
+    CloseDanmakuEditor(priorEditor)
+    OpenDanmakuEditor(true)
+    replacementEditor := ActiveEditorDialog.Window
+    CloseDanmakuEditor(priorEditor)
+    FinishDanmakuEditor(priorEditor)
+    Assert(ActiveEditorDialog.Window=replacementEditor && DllCall("IsWindow","Ptr",replacementEditor.Hwnd),"stale close cannot destroy the replacement editor")
+    Assert(!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && !DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"stale close preserves parent locks")
+    OpenDanmakuEditor(true)
+    Assert(ActiveEditorDialog.Window=replacementEditor,"repeated open recalls the existing editor")
+    CloseDanmakuEditor(replacementEditor)
     global DiscardCount := 0, DiscardAllowed := false
     RuntimePorts.ConfirmDiscard := ConfirmEditorTest
     OpenDanmakuEditor(true)
-    CloseDanmakuEditor()
-    Assert(!DanmakuEditorWindow && DiscardCount=0,"unchanged editor closes without asking")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
+    Assert(!ActiveEditorDialog && DiscardCount=0,"unchanged editor closes without asking")
     OpenDanmakuEditor(true)
-    for control in DanmakuEditorWindow
+    for control in ActiveEditorDialog.Window
         if control.Type="Edit" {
             nameControl := control
             break
         }
     nameControl.Value := "draft"
-    CloseDanmakuEditor()
-    Assert(DanmakuEditorWindow && ActiveEditorDialog && DiscardCount=1 && nameControl.Value="draft","cancelled discard preserves input and modal owner")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
+    Assert(ActiveEditorDialog && DiscardCount=1 && nameControl.Value="draft","cancelled discard preserves input and modal owner")
     nameControl.Value := ""
-    CloseDanmakuEditor()
-    Assert(!DanmakuEditorWindow && DiscardCount=1,"reverted edit closes without asking")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
+    Assert(!ActiveEditorDialog && DiscardCount=1,"reverted edit closes without asking")
     OpenDanmakuEditor(true)
-    for control in DanmakuEditorWindow
+    for control in ActiveEditorDialog.Window
         if control.Type="Edit"
             control.Value := "discarded"
     DiscardAllowed := true
-    CloseDanmakuEditor()
-    Assert(!DanmakuEditorWindow && !ActiveEditorDialog && DiscardCount=2 && SharedDanmakuItems.Length=beforeFocusSave,"confirmed discard saves nothing")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
+    Assert(!ActiveEditorDialog && DiscardCount=2 && SharedDanmakuItems.Length=beforeFocusSave,"confirmed discard saves nothing")
     RuntimePorts.ConfirmDiscard := 0
     ManagementWindow.Hide()
     modal := Gui(,"key editing fixture")
@@ -107,5 +134,158 @@ ConfirmEditorTest(message) {
     global DiscardCount
     DiscardCount++
     return DiscardAllowed
+}
+'@
+
+Invoke-AppFixture -Body @'
+    ShowManagement(1)
+    for sourceId in ["","source"] {
+        for action in ["edit","move"] {
+            for change in ["reorder","deleted","owner-deleted"] {
+                if sourceId = "" && change = "owner-deleted"
+                    continue
+                items := [{Id:"item-a",Name:"same",Text:"same",Slot:0},
+                    {Id:"item-A",Name:"same",Text:"same",Slot:1},
+                    {Id:"neighbor",Name:"same",Text:"same",Slot:2}]
+                library := {Profiles:[{Id:"source",Name:"Source",Channel:"",Items:sourceId = "" ? [] : items},
+                    {Id:"destination",Name:"Destination",Channel:"",Items:[]}],SharedDanmakuItems:sourceId = "" ? items : []}
+                CommitTestLibraryChange(library,"dialog identity fixture")
+                EditingProfileId := sourceId
+                RefreshManagement(), ManagedList.Modify(2,"Select Focus")
+                if action = "edit"
+                    OpenDanmakuEditor(false)
+                else
+                    TransferItem()
+                dialog := ActiveEditorDialog.Window
+                for control in dialog {
+                    if control.Type = "Edit"
+                        control.Value := "changed"
+                    if action = "move" && control.Type = "DDL"
+                        control.Choose(sourceId = "" ? 2 : 1)
+                    if control.Type = "Button" && control.Text = (action = "edit" ? "保存" : "移動")
+                        submit := control
+                }
+                ; Model a library publication while the dialog retains its original selection.
+                changed := CreateTestLibrarySnapshot(), changedItems := GetLibraryItems(changed,sourceId)
+                if change = "owner-deleted"
+                    changed.Profiles.RemoveAt(1)
+                else if change = "deleted"
+                    changedItems.RemoveAt(2)
+                else {
+                    moved := changedItems.RemoveAt(2)
+                    changedItems.InsertAt(1,moved)
+                }
+                CommitTestLibraryChange(changed,"intervening publication")
+                LibraryHistory := []
+                before := EditorLibrarySignature(changed)
+                window := dialog.Hwnd
+                SendMessage(0xF5,0,0,submit.Hwnd)
+                Sleep(50)
+                label := sourceId "/" action "/" change
+                if change = "reorder" {
+                    Assert(!ActiveEditorDialog && !DllCall("IsWindow","Ptr",window),label ": successful submission closes")
+                    saved := LoadSettings(SettingsDatabasePath)
+                    actualSource := GetLibraryItems(saved,sourceId)
+                    if action = "edit" {
+                        Assert(actualSource[1].Id == "item-A" && actualSource[1].Name == "changed" && actualSource[1].Text == "changed",label ": edits the captured ID at its new position")
+                        Assert(actualSource[2].Id == "item-a" && actualSource[2].Text == "same" && actualSource[3].Id == "neighbor" && actualSource[3].Text == "same",label ": preserves other same-text items")
+                    } else {
+                        destination := GetLibraryItems(saved,sourceId = "" ? "destination" : "")
+                        Assert(destination.Length=1 && destination[1].Id == "item-A" && destination[1].Slot=0,label ": moves the captured ID and clears assignment")
+                        Assert(actualSource.Length=2 && actualSource[1].Id == "item-a" && actualSource[2].Id == "neighbor",label ": preserves source neighbors")
+                    }
+                    Assert(LibraryHistory.Length=1,label ": records one command")
+                    UndoLibraryCommand()
+                    Assert(EditorLibrarySignature(LoadSettings(SettingsDatabasePath)) == before,label ": undo restores the state immediately before submission")
+                } else {
+                    Assert(ActiveEditorDialog && ActiveEditorDialog.Window=dialog,label ": missing target leaves dialog open")
+                    Assert(LibraryHistory.Length=0 && EditorLibrarySignature(LoadSettings(SettingsDatabasePath)) == before,label ": rejected operation changes neither data nor history")
+                    message := ""
+                    for control in dialog
+                        if control.Type = "Text"
+                            message .= control.Text
+                    Assert(InStr(message,"保存できませんでした。") && InStr(message,"選び直してください。"),label ": explains why saving was refused")
+                    EndEditorDialog(dialog), dialog.Destroy()
+                }
+            }
+        }
+    }
+'@ -Helpers @'
+EditorLibrarySignature(library) {
+    result := ""
+    for item in library.SharedDanmakuItems
+        result .= item.Id "|" item.Name "|" item.Text "|" item.Slot "`n"
+    for profile in library.Profiles {
+        result .= "scope:" profile.Id "`n"
+        for item in profile.Items
+            result .= item.Id "|" item.Name "|" item.Text "|" item.Slot "`n"
+    }
+    return result
+}
+'@
+
+# Change the editing scope after row validation, before the caller can read it again.
+$selectionRuntime = New-TestRuntime
+$controllerPath = Join-Path $selectionRuntime 'src/ui/management/management_controller.ahk'
+$controller = [IO.File]::ReadAllText($controllerPath)
+$anchor = 'GetSelectedManagedTarget() {'
+if (!$controller.Contains($anchor)) { throw 'Missing selected target boundary' }
+[IO.File]::WriteAllText($controllerPath,$controller.Replace($anchor,'OriginalGetSelectedManagedTarget() {'),[Text.UTF8Encoding]::new($true))
+Invoke-AppFixture -Runtime $selectionRuntime -Body @'
+    ShowManagement(1)
+    global SelectionSwitchArmed := false
+    for action in ["duplicate","edit","move"] {
+        CommitTestLibraryChange({Profiles:[
+            {Id:"source-a",Name:"A",Channel:"",Items:[{Id:"item-a",Name:"A item",Text:"A body",Slot:1}]},
+            {Id:"source-b",Name:"B",Channel:"",Items:[{Id:"item-b",Name:"B item",Text:"B body",Slot:2}]}],SharedDanmakuItems:[]},"selected target fixture")
+        EditingProfileId := "source-a"
+        RefreshManagement(), SelectManagedRow(1)
+        LibraryHistory := [], SelectionSwitchArmed := true
+        if action = "duplicate"
+            HandleDanmakuCommand(action)
+        else {
+            if action = "edit"
+                OpenDanmakuEditor(false)
+            else
+                TransferItem()
+            dialog := ActiveEditorDialog.Window
+            if action = "edit" {
+                nameSeen := false, textSeen := false
+                for control in dialog {
+                    if control.Type = "Edit" {
+                        nameSeen := nameSeen || control.Value == "A item"
+                        textSeen := textSeen || control.Value == "A body"
+                        control.Value := "changed A"
+                    }
+                }
+                Assert(nameSeen && textSeen,"editor opens with the validated item")
+            }
+            for control in dialog
+                if control.Type = "Button" && control.Text = (action = "edit" ? "保存" : "移動")
+                    submit := control
+            window := dialog.Hwnd
+            SendMessage(0xF5,0,0,submit.Hwnd)
+            Assert(WinWaitClose("ahk_id " window,,2),action ": save completes")
+        }
+        saved := LoadSettings(SettingsDatabasePath)
+        a := GetLibraryItems(saved,"source-a"), b := GetLibraryItems(saved,"source-b")
+        Assert(!SelectionSwitchArmed && b.Length=1 && b[1].Id == "item-b" && b[1].Name == "B item" && b[1].Text == "B body" && b[1].Slot=2,action ": a later scope selection cannot redirect the command")
+        if action = "duplicate"
+            Assert(a.Length=2 && a[1].Id == "item-a" && a[2].Id != a[1].Id && a[2].Text == "A body",action ": copies the captured source")
+        else if action = "edit"
+            Assert(a.Length=1 && a[1].Id == "item-a" && a[1].Text == "changed A",action ": edits the captured source")
+        else
+            Assert(a.Length=0 && saved.SharedDanmakuItems.Length=1 && saved.SharedDanmakuItems[1].Id == "item-a",action ": moves the captured source")
+        Assert(LibraryHistory.Length=1 && EditingProfileId == "source-a",action ": publishes once and refreshes the saved scope")
+    }
+'@ -Helpers @'
+GetSelectedManagedTarget() {
+    global SelectionSwitchArmed, EditingProfileId
+    selected := OriginalGetSelectedManagedTarget()
+    if SelectionSwitchArmed {
+        SelectionSwitchArmed := false
+        EditingProfileId := "source-b"
+    }
+    return selected
 }
 '@

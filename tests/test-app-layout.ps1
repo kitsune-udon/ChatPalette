@@ -5,6 +5,13 @@ Invoke-AppFixture -Body @'
     ShowManagement(1)
     EditingProfileId := ""
     RefreshManagement()
+    Assert(!ManagementStatus.Visible && ManagementStatus.Text="","empty notification is hidden")
+    ManagementWindow.Hide()
+    SetManagementNotice("保存できませんでした。詳細")
+    ShowManagement(1)
+    Assert(ManagementStatus.Visible && InStr(ManagementStatus.Text,"通知：保存できませんでした"),"failure notification is visible and labelled")
+    SetManagementNotice("")
+    Assert(!ManagementStatus.Visible,"cleared notification is hidden")
     ; Changing captions must not change the identity of layout targets.
     renamedControls := [ManagementAddProfileButton,ManagementScopeHint,PaletteManageButton,PaletteReactionHeading,PaletteIntervalHint]
     for control in ManagementItemButtons
@@ -79,7 +86,7 @@ Invoke-AppFixture -Body @'
     Assert(Profiles[-1].Channel="/channel/a" && LibraryHistory.Length=historyBeforeLink+1,"creation and linking commit once")
     Assert(FixtureResolveCount=2,"link rechecks channel before commit")
     UndoLibraryChange()
-    Assert(Profiles.Length=profilesBeforeLink && !ChannelIndex.Has("/channel/a"),"one undo removes created linked profile")
+    Assert(Profiles.Length=profilesBeforeLink && !FindProfileByChannel(Profiles,"/channel/a"),"one undo removes created linked profile")
     targetProfile := ExecuteProfileCommand("add","","managed target").ProfileId
     EditingProfileId := targetProfile
     countBeforeBind := Profiles.Length
@@ -153,9 +160,9 @@ Invoke-AppFixture -Body @'
     PaletteSettingsStatus.Text := "settings notification fixture"
     SetReactionStatus("reaction notification fixture",true)
     ShowReactionProgress()
-    Assert(!ReactionOverlayStop.Visible && !ReactionOverlayStop.Enabled,"finished reaction has no stop action")
+    Assert(!ReactionOverlay.Stop.Visible && !ReactionOverlay.Stop.Enabled,"finished reaction has no stop action")
     Assert(PaletteHint.Text="input notification fixture" && PaletteSettingsStatus.Text="settings notification fixture","reaction result does not overwrite input or settings notices")
-    ReactionOverlay.Hide()
+    ReactionOverlay.Window.Hide()
     for testWidth in [360,460,760] {
         LayoutManagement(ManagementWindow,0,testWidth,660)
         for key,control in ManagementSupportButtons {
@@ -222,16 +229,12 @@ Invoke-AppFixture -Body @'
     viewportView.Hide()
     anchor.Destroy()
 
-    originalIniPath := A_ScriptDir "\existing-format.ini"
-    FileAppend("[General]`nSchema=3`nCount=0`nReactionDefault=4`nReactionCount=100`nReactionInterval=25`n",originalIniPath,"UTF-16")
-    existing := ReadLegacySettings(originalIniPath)
-    Assert(existing.DefaultReactionKind=4 && existing.DefaultReactionCount=100 && existing.DefaultReactionIntervalMs=25,"existing INI names keep settings")
     SetReactionStatus("reaction result fixture",true)
     PaletteStatusControl.Text := "unrelated input notice"
     ShowReactionProgress()
-    Assert(InStr(ReactionOverlayText.Text,"reaction result fixture") && !InStr(ReactionOverlayText.Text,"unrelated input notice"),"overlay reads reaction state instead of generic palette notice")
+    Assert(InStr(ReactionOverlay.Text.Text,"reaction result fixture") && !InStr(ReactionOverlay.Text.Text,"unrelated input notice"),"overlay reads reaction state instead of generic palette notice")
     Assert(InStr(ReactionProgressHint(ReactionExecutionStatus),"4秒"),"progress uses the supplied final state")
-    ReactionOverlay.Hide()
+    ReactionOverlay.Window.Hide()
     PaletteWindow.Show("Hide w360 h620")
     LayoutPalette(PaletteWindow,0,360,620)
     for control in PaletteWindow {
@@ -247,8 +250,8 @@ Invoke-AppFixture -Body @'
     EditingProfileId := ""
     RefreshManagement()
     OpenDanmakuEditor(true)
-    Assert(!!DanmakuEditorWindow && !DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"editor locks input palette")
-    CloseDanmakuEditor()
+    Assert(!!ActiveEditorDialog && !DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"editor locks input palette")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
     Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"editor unlocks palette")
 
 '@ -Helpers @'
@@ -272,4 +275,65 @@ PrepareViewportFixture(viewport) {
     viewport.Resize()
 }
 
+'@
+
+# Dialog commands keep the displayed identity even if state changes during a wait.
+Invoke-AppFixture -Body @'
+    CommitTestLibraryChange({Profiles:[
+        {Id:"link-a",Name:"same",Channel:"",Items:[]},
+        {Id:"link-A",Name:"same",Channel:"",Items:[]}],
+        SharedDanmakuItems:[{Id:"move-item",Name:"move",Text:"move text",Slot:1}]},"dialog identity fixture")
+    global LinkWaitChange := "", LinkChoice := 0, LinkName := 0, LinkChannel := "/channel/first"
+    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+    RuntimePorts.ResolveChannel := ChangeSelectionDuringVerification
+    TargetBrowserHwnd := 123
+    OpenChannelLinkDialog("link-a")
+    LinkChoice := FindDialogControl("DDL")
+    LinkWaitChange := "profile"
+    SubmitDialog("連携する")
+    Assert(FindProfileById(Profiles,"link-a").Channel==LinkChannel && FindProfileById(Profiles,"link-A").Channel="","channel recheck cannot redirect the submitted binding to another same-name profile")
+    LinkChannel := "/channel/new"
+    OpenChannelLinkDialog()
+    LinkName := FindDialogControl("Edit"), LinkName.Value := "submitted name"
+    LinkWaitChange := "name"
+    SubmitDialog("連携する")
+    Assert(Profiles[-1].Name=="submitted name" && Profiles[-1].Channel==LinkChannel,"new-profile submission freezes its name before browser verification")
+    EditingProfileId := ""
+    RefreshManagement(), ManagedList.Modify(1,"Select Focus")
+    TransferItem()
+    destination := FindDialogControl("DDL")
+    destination.Choose(2)
+    ExecuteProfileCommand("delete","link-a")
+    SubmitDialog("移動")
+    moved := FindProfileById(Profiles,"link-A").Items
+    Assert(SharedDanmakuItems.Length=0 && moved.Length=1 && moved[1].Id=="move-item" && moved[1].Slot=0,"move uses the displayed destination ID after an earlier same-name profile is deleted")
+    EditingProfileId := "link-A"
+    RefreshManagement(), ManagedList.Modify(1,"Select Focus")
+    TransferItem()
+    Assert(FindDialogControl("DDL").Text="共通の弾幕","profile-to-shared move exposes its explicit shared destination")
+    SubmitDialog("移動")
+    Assert(SharedDanmakuItems.Length=1 && SharedDanmakuItems[1].Id=="move-item" && !FindProfileById(Profiles,"link-A").Items.Length,"shared destination preserves the moved item identity")
+'@ -Helpers @'
+ChangeSelectionDuringVerification(hwnd) {
+    global LinkWaitChange
+    change := LinkWaitChange, LinkWaitChange := ""
+    if change="profile"
+        LinkChoice.Choose(3)
+    else if change="name"
+        LinkName.Value := "changed during verification"
+    return {State:"ok",Author:"fixture",Channel:LinkChannel,Video:"abcdefghijk"}
+}
+FindDialogControl(kind,label := "") {
+    for control in ActiveEditorDialog.Window
+        if control.Type=kind && (label="" || control.Text==label)
+            return control
+    throw Error("Dialog control not found: " kind " " label)
+}
+SubmitDialog(label) {
+    hwnd := ActiveEditorDialog.Window.Hwnd, button := FindDialogControl("Button",label)
+    WinActivate("ahk_id " hwnd)
+    Assert(WinWaitActive("ahk_id " hwnd,,2),"dialog is foreground before " label)
+    SendMessage(0xF5,0,0,button.Hwnd)
+    Assert(WinWaitClose("ahk_id " hwnd,,2) && !ActiveEditorDialog,"submitted dialog finishes " label)
+}
 '@

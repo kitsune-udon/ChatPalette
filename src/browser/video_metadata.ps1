@@ -16,6 +16,10 @@ function Trim-Cache {
         $age = ($now - $script:Videos[$key].Time).TotalHours
         if ($age -ge 12 -or $age -lt 0) { $null = $script:Videos.Remove($key) }
     }
+    foreach ($key in @($script:Failures.Keys)) {
+        $age = ($now - $script:Failures[$key]).TotalSeconds
+        if ($age -ge 5 -or $age -lt 0) { $null = $script:Failures.Remove($key) }
+    }
     if ($script:Videos.Count -gt 128) {
         $oldest = @($script:Videos.GetEnumerator() | Sort-Object { $_.Value.Time } | Select-Object -First ($script:Videos.Count - 128))
         foreach ($item in $oldest) { $null = $script:Videos.Remove($item.Key) }
@@ -33,16 +37,14 @@ function Fetch-Metadata([string]$Video) {
 function Resolve-Video([string]$Video) {
     Trim-Cache
     if ($script:Videos.ContainsKey($Video)) { return $script:Videos[$Video] }
-    if ($script:Failures.ContainsKey($Video) -and ([DateTime]::UtcNow - $script:Failures[$Video]).TotalSeconds -lt 5) { return $null }
-    try {
-        $metadata = Fetch-Metadata $Video
-        $script:Videos[$Video] = $metadata
-        $null = $script:Failures.Remove($Video)
-        Trim-Cache
-        return $metadata
-    } catch {
+    if ($script:Failures.ContainsKey($Video)) { return $null }
+    try { $metadata = Fetch-Metadata $Video }
+    catch {
         if ($script:Failures.Count -ge 128) { $script:Failures.Clear() }
         $script:Failures[$Video] = [DateTime]::UtcNow
         return $null
     }
+    $script:Videos[$Video] = $metadata
+    Trim-Cache
+    return $metadata
 }

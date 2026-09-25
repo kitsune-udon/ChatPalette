@@ -18,27 +18,41 @@ ChooseSetting(control, values, selected) {
 }
 
 
+; Capture the actual parents once; already disabled windows belong to another owner.
+CaptureEnabledAppWindows() {
+    windows := []
+    for window in [PaletteWindow,ManagementWindow]
+        if window && DllCall("IsWindowEnabled","Ptr",window.Hwnd)
+            windows.Push(window)
+    return windows
+}
+SetAppWindowsEnabled(windows,enabled) {
+    errors := ""
+    for window in windows {
+        try window.Opt(enabled ? "-Disabled" : "+Disabled")
+        catch as failure
+            errors .= (errors = "" ? "" : "`n") failure.Message
+    }
+    if errors != ""
+        throw Error(errors)
+}
 CreateWorkerWait(mode) {
-    return {Enabled:!!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),
-        ManagerEnabled:ManagementWindow && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),
+    return {EnabledWindows:CaptureEnabledAppWindows(),
         Notification:() => ShowStatusTip(mode = "verify_input" ? "入力欄を確認しています…" : "YouTubeの操作対象を確認しています…")}
 }
 BeginWorkerWait(view) {
-    PaletteWindow.Opt("+Disabled")
-    if ManagementWindow
-        ManagementWindow.Opt("+Disabled")
+    SetAppWindowsEnabled(view.EnabledWindows,false)
     RefreshOperationControls()
     SetTimer(view.Notification,-400)
 }
 
 EndWorkerWait(view) {
     SetTimer(view.Notification,0)
-    if view.Enabled
-        PaletteWindow.Opt("-Disabled")
-    if view.ManagerEnabled
-        ManagementWindow.Opt("-Disabled")
-    ShowStatusTip()
-    RefreshOperationControls()
+    try SetAppWindowsEnabled(view.EnabledWindows,true)
+    finally {
+        try ShowStatusTip()
+        finally RefreshOperationControls()
+    }
 }
 
 ShowInputFailure(state) {
@@ -54,23 +68,37 @@ BeginEditorDialog(view,label) {
     global ActiveEditorDialog
     if ActiveEditorDialog
         throw Error("先に開いている編集画面を閉じてください。")
-    ActiveEditorDialog := {Window:view, Label:label,
-        PaletteEnabled:!!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),
-        ManagementEnabled:!!DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd)}
-    PaletteWindow.Opt("+Disabled"), ManagementWindow.Opt("+Disabled")
+    ActiveEditorDialog := {Window:view, Label:label, EnabledWindows:CaptureEnabledAppWindows()}
+    SetAppWindowsEnabled(ActiveEditorDialog.EnabledWindows,false)
     RefreshOperationControls()
 }
 EndEditorDialog(view) {
     global ActiveEditorDialog
-    if !ActiveEditorDialog || ActiveEditorDialog.Window != view
-        return
-    state := ActiveEditorDialog
-    ActiveEditorDialog := 0
-    if state.PaletteEnabled
-        PaletteWindow.Opt("-Disabled")
-    if state.ManagementEnabled
-        ManagementWindow.Opt("-Disabled")
-    RefreshOperationControls()
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        if !ActiveEditorDialog || ActiveEditorDialog.Window != view
+            return
+        state := ActiveEditorDialog
+        ActiveEditorDialog := 0
+        try SetAppWindowsEnabled(state.EnabledWindows,true)
+        finally RefreshOperationControls()
+    } finally Critical(previousCritical)
+}
+
+; Owned editor windows share final cleanup, even when a preceding step fails.
+DestroyEditorDialog(view, viewport := 0) {
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        try {
+            if viewport
+                viewport.Dispose()
+        } finally {
+            try EndEditorDialog(view)
+            finally view.Destroy()
+        }
+    } finally Critical(previousCritical)
 }
 
 ; Reactivate the existing editor, including native owned dialogs for profile edits.
@@ -78,7 +106,8 @@ RestoreActiveEditorDialog() {
     if !ActiveEditorDialog
         return false
     view := ActiveEditorDialog.Window
-    hwnd := DllCall("GetLastActivePopup", "Ptr", view.Hwnd, "Ptr")
+    hwnd := DllCall("IsWindowEnabled", "Ptr", view.Hwnd) ? view.Hwnd
+        : DllCall("GetWindow", "Ptr", view.Hwnd, "UInt", 6, "Ptr") ; GW_ENABLEDPOPUP
     if hwnd && DllCall("IsWindowEnabled", "Ptr", hwnd) {
         if hwnd = view.Hwnd
             PresentWindow(view)

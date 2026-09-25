@@ -2,7 +2,7 @@
 BuildLibraryStoragePlan(state, previous, force := false) {
     if state.Profiles.Length > 10000
         throw Error("配信者数は10000件までです。")
-    scopes := Map(), touched := [], channels := Map(), total := 0, textBytes := 0
+    scopes := Map(), changes := [], channels := Map(), total := 0, textBytes := 0
     channels.CaseSense := "On", scopes.CaseSense := "On"
     candidates := [{Id:"@shared",Name:"",Channel:"",Items:state.SharedDanmakuItems}]
     for profile in state.Profiles
@@ -14,19 +14,18 @@ BuildLibraryStoragePlan(state, previous, force := false) {
         ValidateSettingsText(profile.Channel,"チャンネルID")
         if profile.Channel != "" {
             if channels.Has(profile.Channel)
-                throw Error("同じチャンネルが複数の配信者に連携されています。移行前に連携を修正してください。")
+                throw Error("同じチャンネルが複数の配信者に連携されています。連携を修正してください。")
             channels[profile.Channel] := true
         }
         old := previous.Get(profile.Id,0)
         scope := {Id:profile.Id,Name:profile.Name,Channel:profile.Channel,Position:index-1,Items:profile.Items}
-        if !force && old && ObjPtr(old.Items) = ObjPtr(profile.Items) {
+        if !force && old && old.Items = profile.Items {
             scope.Rows := old.Rows
             scope.TextBytes := old.TextBytes
         } else {
             delta := BuildScopeStorageDelta(profile.Items,old,force)
             scope.Rows := delta.Rows, scope.TextBytes := delta.TextBytes
-            scope.Changed := delta.Changed, scope.Deleted := delta.Deleted
-            touched.Push(scope.Id)
+            changes.Push({Scope:scope.Id,Changed:delta.Changed,Deleted:delta.Deleted})
         }
         total += scope.Rows.Count
         textBytes += scope.TextBytes+(StrLen(scope.Name)+StrLen(scope.Channel))*2
@@ -37,7 +36,7 @@ BuildLibraryStoragePlan(state, previous, force := false) {
     if textBytes > 32*1024*1024
         throw Error("設定の文字列合計が上限32MiBを超えます。")
     ; Cross-scope ID uniqueness is checked by the database PRIMARY KEY.
-    return {Scopes:scopes,Touched:touched}
+    return {Scopes:scopes,Changes:changes}
 }
 ; The same reconciliation handles edits, insertions, deletions, moves and undo.
 BuildScopeStorageDelta(items, old, force := false) {
@@ -89,26 +88,33 @@ BuildScopeStorageDelta(items, old, force := false) {
     return result
 }
 
+; Own the persisted values; retain the item only for unchanged-object comparison.
+CreateStorageRow(item, position) {
+    return {Id:item.Id,Name:item.Name,Text:item.Text,Slot:item.Slot,Position:position,Item:item}
+}
+
 BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary := 0) {
     rows := Map(), slots := Map(), positions := [], existing := []
     rows.CaseSense := "On"
     for item in items {
         if !item.HasOwnProp("Id") || !item.Id
-            item.Id := NewRecordId()
+            throw Error("弾幕の識別子がありません。")
         if rows.Has(item.Id)
             throw Error("弾幕の識別子が重複しています。")
         priorRow := previous.Get(item.Id,0)
-        unchanged := !force && priorRow && priorRow.HasOwnProp("Item") && ObjPtr(priorRow.Item) = ObjPtr(item)
+        unchanged := !force && priorRow && priorRow.Item = item
         if !unchanged {
             ValidateSettingsText(item.Name,"弾幕名",true)
             ValidateSettingsText(item.Text,"弾幕本文",true)
         }
-        slot := ItemSlot(item)
+        if !item.HasOwnProp("Slot")
+            throw Error("弾幕キーの割当がありません。未割当は0を指定してください。")
+        slot := item.Slot
         if (slot != 0 && slot != 1 && slot != 2) || (slot && slots.Has(slot))
             throw Error("弾幕キーの割当が重複または不正です。")
         if slot
             slots[slot] := true
-        row := unchanged ? priorRow : {Id:item.Id,Name:item.Name,Text:item.Text,Slot:slot,Position:0,Item:item}
+        row := unchanged ? priorRow : CreateStorageRow(item,0)
         rows[item.Id] := row
         if previous.Has(item.Id) {
             positions.Push(previous[item.Id].Position)

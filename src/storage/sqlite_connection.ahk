@@ -34,7 +34,8 @@ class SqliteConnection {
         }
     }
     Exec(sql) {
-        this.Check(DllCall(SqliteConnection.Library "\sqlite3_exec", "Ptr", this.Handle, "AStr", sql, "Ptr", 0, "Ptr", 0, "Ptr", 0, "CDecl Int"))
+        utf8 := Buffer(StrPut(sql,"UTF-8")), StrPut(sql,utf8,"UTF-8")
+        this.Check(DllCall(SqliteConnection.Library "\sqlite3_exec", "Ptr", this.Handle, "Ptr", utf8, "Ptr", 0, "Ptr", 0, "Ptr", 0, "CDecl Int"))
     }
     Statement(sql, values) {
         if !this.Statements.Has(sql) {
@@ -110,6 +111,10 @@ class SqliteConnection {
             throw failure
         }
     }
+    CheckIntegrity() {
+        if this.Scalar("PRAGMA integrity_check") != "ok" || this.Rows("PRAGMA foreign_key_check").Length
+            throw Error("設定データベースの整合性を確認できません。")
+    }
     Backup(path) {
         if FileExist(path)
             throw Error("バックアップ先は既に存在します。")
@@ -124,8 +129,7 @@ class SqliteConnection {
             if rc != 101
                 target.Check(rc)
             target.Check(finish)
-            if target.Scalar("PRAGMA integrity_check") != "ok"
-                throw Error("バックアップの整合性を確認できません。")
+            target.CheckIntegrity()
         } finally {
             if backup
                 DllCall(SqliteConnection.Library "\sqlite3_backup_finish", "Ptr", backup, "CDecl Int")

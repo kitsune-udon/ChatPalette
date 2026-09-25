@@ -20,7 +20,7 @@ function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
 function Test-ReactionForeground([long]$WindowHandle) { return $script:foreground }
 function Get-ReactionInvoker($Target) { return $script:invoker }
-function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
+function Find-RegisteredReactions([long]$WindowHandle, $Plan) {
     if (-not $script:menu) { return $null }
     return @{Elements = @($script:target, $script:target, $script:target, $script:target, $script:target)}
 }
@@ -71,71 +71,145 @@ Assert ((Request 'reaction_send').State -eq 'changed' -and $script:invocations -
 function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+$script:changeCapturedIdentity = $false
+function CaptureButton($Info) {
+    $element = [pscustomobject]@{Current=$Info; SnapshotReads=0}
+    $element | Add-Member ScriptMethod GetUpdatedCache {
+        param($request)
+        $this.SnapshotReads++
+        $snapshot = $this.Current.PSObject.Copy()
+        if ($script:changeCapturedIdentity -and $this.Current.AutomationId -eq 'reaction0') {
+            $this.Current.Name = 'changed after capture'
+        }
+        return [pscustomobject]@{Cached=$snapshot}
+    }
+    $element | Add-Member ScriptMethod GetRuntimeId { return @($this.Current.AutomationId) }
+    return $element
+}
 $script:fakeButtons = @()
 $names = @('heart','grinning face','party popper','surprised face','100 points')
 for ($i = 0; $i -lt 5; $i++) {
-    $script:fakeButtons += [pscustomobject]@{Current=[pscustomobject]@{
+    $script:fakeButtons += CaptureButton ([pscustomobject]@{
         Name=$names[$i]; AutomationId="reaction$i"; ClassName='button'; IsOffscreen=$false; IsEnabled=$true;
-        ControlType=[pscustomobject]@{Id=50000}; BoundingRectangle=[pscustomobject]@{Top=($i*36); Left=100}
-    }}
+        ControlType=[pscustomobject]@{Id=50000}; BoundingRectangle=[pscustomobject]@{Top=($i*36); Bottom=($i*36+30); Left=100; Width=30; Height=30}
+    })
 }
-$fakeGroup = [pscustomobject]@{Current=[pscustomobject]@{ClassName='reaction-group'; AutomationId='reactions'}}
+$script:containerPropertyReads = 0
+$fakeGroup = [pscustomobject]@{}
+$fakeGroup | Add-Member ScriptProperty Current {
+    $script:containerPropertyReads++
+    throw 'Capture must not read unused container properties'
+}
 $fakeGroup | Add-Member ScriptMethod FindAll { param($scope,$condition) return $script:fakeButtons }
-Assert ($null -ne (Get-ReactionGroup $fakeGroup)) 'registered five-button structure is recognized'
+Assert ($null -ne (Get-ReactionTokens $fakeGroup)) 'registered five-button structure is recognized'
+Assert ($script:containerPropertyReads -eq 0) 'capture reads only the required button identities'
+Assert (@($script:fakeButtons | Where-Object { $_.SnapshotReads -ne 1 }).Count -eq 0) 'capture fetches one property snapshot per candidate'
+$script:changeCapturedIdentity = $true
+$stableCapture = Get-ReactionTokens $fakeGroup
+Assert ($stableCapture.Count -eq 5 -and $stableCapture[0].name -ceq 'heart' -and $script:fakeButtons[0].Current.Name -ceq 'changed after capture') 'classification and registered identity use the same observation'
+Assert ($script:ReactionDiagnostic -match 'heart \{reaction0\}' -and $script:ReactionDiagnostic -notmatch 'changed after capture') 'diagnostic names describe the same observed candidates'
+$script:changeCapturedIdentity = $false
+Assert ($null -eq (Get-ReactionTokens $fakeGroup)) 'next capture re-reads current properties rather than reusing the previous observation'
+$script:fakeButtons[0].Current.Name = $names[0]
+
+$captured = Get-ReactionTokens $fakeGroup
+Assert ((Test-ReactionTokens $captured) -and $captured.Count -eq 5) 'captured identities satisfy the registration contract'
+# Geometry is diagnostic only: failure must not invalidate complete button identities.
+$script:CaptureBoundsReads = 0
+$script:CaptureBoundsFailure = $true
+foreach ($button in $script:fakeButtons) {
+    $info = $button.Current
+    $info | Add-Member NoteProperty FixtureBounds $info.BoundingRectangle
+    $info.PSObject.Properties.Remove('BoundingRectangle')
+    $info | Add-Member ScriptProperty BoundingRectangle {
+        $script:CaptureBoundsReads++
+        if ($script:CaptureBoundsFailure -and $this.AutomationId -eq 'reaction3') { throw 'Diagnostic bounds unavailable' }
+        return $this.FixtureBounds
+    }
+}
+$withoutBounds = Get-ReactionTokens $fakeGroup
+Assert ((Test-ReactionTokens $withoutBounds) -and $withoutBounds.Count -eq 5) 'diagnostic geometry failure does not discard complete registration identities'
+Assert ($script:ReactionDiagnostic -match 'heart \{reaction0\}' -and $script:ReactionDiagnostic -match '100 points \{reaction4\}' -and $script:ReactionDiagnostic -match 'surprised face \{reaction3\}') 'diagnostics retain the candidate whose geometry is unavailable'
+$script:CaptureBoundsFailure = $false
+$script:CaptureBoundsReads = 0
+$withBounds = Get-ReactionTokens $fakeGroup
+Assert ((Test-ReactionTokens $withBounds) -and $script:CaptureBoundsReads -eq 5) 'diagnostic geometry is read once per candidate'
+$payload = @{version=1;profiles=@(@{browser='fixture';tokens=$captured})} | ConvertTo-Json -Depth 8 -Compress
+Set-ReactionRegistrationSnapshot $payload
+$capturedPlan = $script:BrowserReactionSelectors['fixture']
+Assert ($capturedPlan.Tokens.Count -eq 5 -and $capturedPlan.Tokens[0].name -ceq $names[0] -and $capturedPlan.Tokens[4].name -ceq $names[4]) 'captured identities survive serialization and become the lookup plan'
+foreach ($invalidType in @(49999,50041,'50000')) {
+    $script:fakeButtons[0].Current.ControlType.Id = $invalidType
+    Assert ($null -eq (Get-ReactionTokens $fakeGroup)) 'capture rejects types that cannot be registered'
+}
+$script:fakeButtons[0].Current.ControlType.Id = 50000
+$script:fakeButtons[0].Current.ClassName = $null
+Assert ($null -eq (Get-ReactionTokens $fakeGroup)) 'capture rejects incomplete button identities'
+$script:fakeButtons[0].Current.ClassName = 'button'
+$originalButtons = $script:fakeButtons
+$originalButtons[0].Current.Name = 'heart grinning face'
+$script:fakeButtons = @($originalButtons[0],$originalButtons[2],$originalButtons[3],$originalButtons[4])
+Assert ($null -eq (Get-ReactionTokens $fakeGroup)) 'one button cannot supply two captured reaction identities'
+$script:fakeButtons = $originalButtons
+$script:fakeButtons[0].Current.Name = $names[0]
+
 $script:fakeButtons[3].Current.Name = 'flushed face reaction'
-Assert ($null -ne (Get-ReactionGroup $fakeGroup)) 'flushed face alternative'
+Assert ($null -ne (Get-ReactionTokens $fakeGroup)) 'flushed face alternative'
 $script:fakeButtons[3].Current.Name = '😳'
-Assert ($null -ne (Get-ReactionGroup $fakeGroup)) 'flushed emoji alternative'
+Assert ($null -ne (Get-ReactionTokens $fakeGroup)) 'flushed emoji alternative'
 $script:fakeButtons[3].Current.Name = 'unrecognized expression'
-Assert ($null -eq (Get-ReactionGroup $fakeGroup)) 'unknown expression never guessed'
+Assert ($null -eq (Get-ReactionTokens $fakeGroup)) 'unknown expression never guessed'
 Assert ($script:ReactionDiagnostic -match 'unrecognized expression') 'unmatched button label visible in diagnostics'
 $script:fakeButtons[3].Current.Name = 'surprised face'
-$extra = [pscustomobject]@{Current=[pscustomobject]@{Name='Close'; AutomationId='close'; ClassName='button'; IsOffscreen=$false; IsEnabled=$true; ControlType=[pscustomobject]@{Id=50000}}}
+$extra = CaptureButton ([pscustomobject]@{Name='Close'; AutomationId='close'; ClassName='button'; IsOffscreen=$false; IsEnabled=$true; ControlType=[pscustomobject]@{Id=50000}; BoundingRectangle=[pscustomobject]@{Top=0;Bottom=30;Left=500;Width=30;Height=30}})
 $script:fakeButtons += $extra
-Assert ($null -ne (Get-ReactionGroup $fakeGroup)) 'unrelated surrounding button ignored'
+Assert ($null -ne (Get-ReactionTokens $fakeGroup)) 'unrelated surrounding button ignored'
+Assert ($script:ReactionDiagnostic -notmatch 'Close \{close\}') 'diagnostic geometry still excludes distant buttons'
 $script:fakeButtons = @($script:fakeButtons[4],$script:fakeButtons[2],$script:fakeButtons[0],$script:fakeButtons[3],$script:fakeButtons[1])
-$reordered = Get-ReactionGroup $fakeGroup
-Assert ($reordered.Tokens[0].name -eq 'heart' -and $reordered.Tokens[4].name -eq '100 points') 'semantic order independent of UI tree order'
+$reordered = Get-ReactionTokens $fakeGroup
+Assert ($reordered[0].name -eq 'heart' -and $reordered[4].name -eq '100 points') 'semantic order independent of UI tree order'
 $script:fakeButtons = @($script:fakeButtons | Sort-Object {$_.Current.BoundingRectangle.Top})
 $script:fakeButtons[1].Current.Name = 'delete'
-Assert ($null -eq (Get-ReactionGroup $fakeGroup)) 'unrelated five-button menu rejected'
+Assert ($null -eq (Get-ReactionTokens $fakeGroup)) 'unrelated five-button menu rejected'
 $script:fakeButtons[1].Current.Name = 'grinning face'
 $script:fakeButtons[1].Current.IsOffscreen = $true
-Assert ($null -eq (Get-ReactionGroup $fakeGroup)) 'partially hidden group rejected'
+Assert ($null -eq (Get-ReactionTokens $fakeGroup)) 'partially hidden group rejected'
 
 # Regression: lookup must not depend on blank/transient ancestor containers.
-$savedLookup = @{groupClass='old container'; groupId='old'; tokens=@(
+$savedLookup = @{tokens=@(
     1..5 | ForEach-Object { @{name="reaction$_"; id="id$_"; class='real-reaction-button'; type=50000} }
-)} | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+)}
+$lookupPlan = New-ReactionPlan $savedLookup.tokens
 $records = @(1..5 | ForEach-Object {
     @{Name="reaction$_"; Id="id$_"; Class='real-reaction-button'; Type=50000; Hidden=$false; Enabled=$true; RuntimeId="runtime$_"; Element="element$_"}
 })
-Assert ($null -ne (Select-RegisteredReactions $records $savedLookup)) 'lookup independent of ancestor identity'
+Assert ($null -ne (Select-ReactionRecords $records $lookupPlan)) 'lookup independent of ancestor identity'
 $records += $records[0].Clone()
-Assert ($null -ne (Select-RegisteredReactions $records $savedLookup)) 'duplicate reference to same control accepted once'
+Assert ($null -ne (Select-ReactionRecords $records $lookupPlan)) 'duplicate reference to same control accepted once'
 $other = $records[0].Clone()
 $other.RuntimeId = 'different-control'
 $records += $other
-Assert ($null -eq (Select-RegisteredReactions $records $savedLookup)) 'two distinct matching controls blocked'
+Assert ($null -eq (Select-ReactionRecords $records $lookupPlan)) 'two distinct matching controls blocked'
 $records = @($records | Where-Object { $_.RuntimeId -ne 'different-control' })
 $records[1].Hidden = $true
-Assert ($null -eq (Select-RegisteredReactions $records $savedLookup)) 'closed menu blocked'
+Assert ($null -eq (Select-ReactionRecords $records $lookupPlan)) 'closed menu blocked'
 Assert ($script:ReactionLookupDiagnostic -match '表示中=0') 'lookup failure details'
 Write-Output 'PASS: direct lookup regression checks'
 $records[1].Hidden = $false
-$duplicateTokens = @{tokens=@($savedLookup.tokens[0],$savedLookup.tokens[0],$savedLookup.tokens[0],$savedLookup.tokens[0],$savedLookup.tokens[0])}
-Assert ($null -eq (Select-RegisteredReactions $records $duplicateTokens)) 'duplicate saved tokens rejected'
-$extraToken = @{tokens=@($savedLookup.tokens) + @(@{name='absent'; id='absent'; class='button'; type=50000})}
-Assert ($null -eq (Select-RegisteredReactions $records $extraToken)) 'six tokens cannot pass with five matches'
-$records[1].RuntimeId = $records[0].RuntimeId
-Assert ($null -eq (Select-RegisteredReactions $records $savedLookup)) 'one runtime control cannot fulfill multiple reactions'
-$savedLookup.tokens[2].type = 50026
-$condition = New-ReactionLookupCondition $savedLookup
+foreach ($invalidIdentity in @('', $records[0].RuntimeId)) {
+    $records[1].RuntimeId = $invalidIdentity
+    $script:ReactionLookupDiagnostic = 'earlier lookup detail'
+    Assert ($null -eq (Select-ReactionRecords $records $lookupPlan)) 'missing or duplicate runtime identity prevents selecting a reaction group'
+    Assert ($script:ReactionLookupDiagnostic -notmatch 'earlier lookup detail' -and $script:ReactionLookupDiagnostic.Contains('[reaction2] 識別情報が不明または重複')) 'identity rejection publishes the current reason and affected reaction'
+}
+$customRegistration = @{tokens=@($savedLookup.tokens | ForEach-Object { $_.Clone() })}
+$customRegistration.tokens[2].type = 50026
+$condition = New-ReactionLookupCondition (New-ReactionPlan $customRegistration.tokens)
 $terms = $condition.GetConditions()
 Assert ($terms.Count -eq 5) 'lookup has five registered alternatives'
 $customTerms = $terms[2].GetConditions()
 Assert ($customTerms[1].Value -eq 50026) 'lookup retains captured Custom control type'
-Write-Output 'PASS: corrupt registration and Custom control lookup checks'
+Write-Output 'PASS: unique runtime identity and Custom control lookup checks'
 
 # Generic context must not dispatch into reaction automation or metadata lookup.
 $script:video = 'abcdefghijk'

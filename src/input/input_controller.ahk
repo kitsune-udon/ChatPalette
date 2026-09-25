@@ -29,9 +29,12 @@ ResolveShortcutInput(scope, slot, hwnd) {
     context := ResolveInputContext(scope,hwnd)
     if !context
         return 0
-    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},context.ProfileId)
-    for item in items {
-        if ItemSlot(item) = slot
+    return PlanShortcutInput({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},context,slot)
+}
+; Callers choose the library snapshot; assignment resolution is identical for both routes.
+PlanShortcutInput(library, context, slot) {
+    for item in GetLibraryItems(library,context.ProfileId) {
+        if item.Slot = slot
             return PlanDanmakuInput({ProfileId:context.ProfileId, ItemId:item.Id, ExpectedText:item.Text},context)
     }
     throw Error("このキーに弾幕が割り当てられていません。")
@@ -39,15 +42,37 @@ ResolveShortcutInput(scope, slot, hwnd) {
 PlanDanmakuInput(request, context) {
     if !(context.ProfileId == request.ProfileId)
         throw Error("配信者が変わりました。弾幕を選び直してください。")
-    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},request.ProfileId)
+    plan := {ProfileId:request.ProfileId, ItemId:request.ItemId, Text:request.ExpectedText,
+        Window:context.Window, Video:context.Video}
+    ValidateDanmakuInput(plan)
+    return plan
+}
+ValidateDanmakuInput(plan) {
+    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},plan.ProfileId)
     for item in items {
-        if item.Id == request.ItemId {
-            if !(item.Text == request.ExpectedText)
+        if item.Id == plan.ItemId {
+            if !(item.Text == plan.Text)
                 break
-            return {Text:item.Text, Window:context.Window, Video:context.Video}
+            return
         }
     }
     throw Error("弾幕が変更されました。選び直してください。")
+}
+SendPlannedDanmaku(plan, pageAction := 0) {
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        ; Prevent app callbacks between final identity validation and the one send.
+        try ValidateDanmakuInput(plan)
+        catch
+            return {State:"input_cancelled"}
+        canSend := pageAction
+            ? (pageAction.Window = plan.Window && CanContinuePageAction(pageAction))
+            : (OperationAllowed("input") && IsTargetForeground(plan.Window))
+        if !canSend
+            return {State:"input_cancelled"}
+        return SendInputText(plan.Text)
+    } finally Critical(previousCritical)
 }
 RequestDanmakuInput(request) {
     RunDanmakuInput(() => ResolveDanmakuInput(request),request.Origin)
@@ -68,7 +93,24 @@ RunDanmakuInput(resolve, origin) {
         return
     if origin = "palette"
         PaletteWindow.Hide()
-    result := DeliverText(plan.Text,plan.Window,plan.Video,origin = "palette")
+    result := DeliverDanmakuInput(plan,origin = "palette")
     if result.State != "inserted"
         ShowInputFailure(result.State)
+}
+DeliverDanmakuInput(plan, activate := false) {
+    hwnd := plan.Window
+    if activate {
+        try WinActivate("ahk_id " hwnd)
+        catch TargetError
+            return {State:"input_cancelled"}
+        if !WinWaitActive("ahk_id " hwnd, , 2)
+            return {State:"input_cancelled"}
+        KeyWait("Enter")
+        KeyWait("LButton")
+    }
+    if !IsTargetForeground(hwnd)
+        return {State:"input_cancelled"}
+    if !VerifyInputTarget(hwnd, plan.Video)
+        return {State:"input_cancelled"}
+    return SendPlannedDanmaku(plan)
 }

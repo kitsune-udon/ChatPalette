@@ -18,6 +18,7 @@
 | 開発環境を用意し、配布物を作る | [開発・配布手順](developer/guide.md) |
 | 変更箇所と影響範囲を判断する | [設計と状態の所有](developer/architecture.md) |
 | 何をどう検証するか決める | [検証ガイド](developer/testing.md) |
+| 改善の比較条件・実測結果を調べる | [改善時の計測記録](developer/complexity-results.md) |
 | 過去の変更を調べる | [変更履歴](../CHANGELOG.md) |
 
 ## 用語

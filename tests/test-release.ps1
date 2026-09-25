@@ -4,12 +4,19 @@ $ErrorActionPreference='Stop'
 $release=New-TestRuntime
 . (Join-Path $ProjectRoot 'scripts\release-files.ps1')
 Copy-ReleaseFiles $ProjectRoot $release
-foreach ($relative in @('data\settings.db','data\reaction_selectors.json','tests\.tmp\private.txt','private.txt')) {
+foreach ($relative in @('data\settings.db','data\private-registration.txt','tests\.tmp\private.txt','private.txt')) {
     $path=Join-Path $release $relative
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($path)) -Force | Out-Null
     [IO.File]::WriteAllText($path,'synthetic private marker')
 }
 & (Join-Path $release 'scripts\check-source.ps1') -ProjectRoot $release
+# Direct -File startup must resolve its own project, independently of the caller's directory.
+$sourceOut=Join-Path $release 'source-check-stdout.txt'
+$sourceError=Join-Path $release 'source-check-stderr.txt'
+$sourceProcess=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+(Join-Path $release 'scripts\check-source.ps1')+'"') -WorkingDirectory (Join-Path $release 'data') -WindowStyle Hidden -PassThru -RedirectStandardOutput $sourceOut -RedirectStandardError $sourceError
+if ((Wait-TestProcess -Process $sourceProcess -TimeoutMs 30000) -ne 0 -or [IO.File]::ReadAllText($sourceOut) -notmatch '^PASS:') {
+    throw ('Direct source validation failed: '+[IO.File]::ReadAllText($sourceError))
+}
 foreach($invalid in @('version','encoding','link')) {
     $target=Join-Path $release $(if($invalid -eq 'version') {'VERSION'} elseif($invalid -eq 'encoding') {'main.ahk'} else {'README.md'})
     $original=[IO.File]::ReadAllBytes($target)
@@ -26,6 +33,16 @@ $versionFile=Join-Path $release 'VERSION'
 $originalVersion=[IO.File]::ReadAllBytes($versionFile)
 try {
     [IO.File]::WriteAllText($versionFile,'invalid-version')
+    # A misspelled option must fail before source inspection or output preparation.
+    foreach ($script in @('build-release.ps1','verify-release.ps1','check-source.ps1')) {
+        $argumentOutput=Join-Path $release ('argument-' + $script)
+        $arguments=if ($script -eq 'check-source.ps1') { @{ProjectRoot=$release;ProjectRoto=$release} }
+            else { @{OutputDirectory=$argumentOutput;OutptDirectory=$argumentOutput} }
+        $rejected=$false
+        try { & (Join-Path $release ('scripts\' + $script)) @arguments | Out-Null }
+        catch [Management.Automation.ParameterBindingException] { $rejected=$true }
+        if (!$rejected -or (Test-Path -LiteralPath $argumentOutput)) { throw "$script did not reject a misspelled option before executing" }
+    }
     foreach ($script in @('build-release.ps1','verify-release.ps1')) {
         $invalidOutput=Join-Path $release ('invalid-' + $script)
         $rejected=$false
@@ -76,7 +93,7 @@ $archive=[IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
     $names=@($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
     if ($names -match '(^data/|/\.tmp/|^private.txt$|^dist/)') { throw 'Private or temporary files included in release' }
-    foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/settings.ini','tests/fixtures/ui-message-probe.ahk','tests/app-fixture.ps1','tests/test-app-input-plan.ps1','tests/run.ps1','scripts/build-release.ps1')) {
+    foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/ui-message-probe.ahk','tests/fixtures/library-model.ahk','tests/app-fixture.ps1','tests/test-app-input-plan.ps1','tests/run.ps1','scripts/build-release.ps1')) {
         if ($names -cnotcontains $required) { throw "Missing release file: $required" }
     }
     foreach ($file in Get-ChildItem -LiteralPath $release -Filter '*.ahk' -File -Recurse) {
@@ -129,4 +146,48 @@ try {
         throw 'Validation report overwrite protection failed for literal path'
     }
 } finally { [IO.File]::WriteAllBytes($runnerPath,$runnerSource) }
-Write-Output 'PASS: release contents, privacy exclusions, checksums, compression failure recovery and overwrite protection.'
+# Exercise report publication with a stub runner; never recursively execute the suite.
+$verifierPath=Join-Path $release 'scripts\verify-release.ps1'
+$verifierBytes=[IO.File]::ReadAllBytes($verifierPath)
+$verifierSource=[IO.File]::ReadAllText($verifierPath)
+$reportWrites=@($verifierSource -split '\r?\n' | Where-Object { $_ -match '^    \[IO.File\]::WriteAllText\(' })
+if ($reportWrites.Count -ne 1) { throw 'Report publication injection point missing' }
+try {
+    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath)`r`n# Isolated publication fixture: no nested tests.`r`n",[Text.UTF8Encoding]::new($true))
+    foreach ($scenario in @('concurrent','interrupted','success')) {
+        # Keep nested release copies below Windows PowerShell 5.1 path limits.
+        $publicationOutput=Join-Path $release ('['+$scenario.Substring(0,1)+']')
+        $publicationReport=Join-Path $publicationOutput "ChatPalette-$version.validation.json"
+        $replacement=$reportWrites[0]
+        if ($scenario -eq 'concurrent') {
+            $replacement='    [IO.File]::WriteAllText($report,"competing validation record")'+"`r`n"+$replacement
+        } elseif ($scenario -eq 'interrupted') {
+            $replacement+="`r`n    throw 'fixture report publication failure'"
+        }
+        [IO.File]::WriteAllText($verifierPath,$verifierSource.Replace($reportWrites[0],$replacement),[Text.UTF8Encoding]::new($true))
+        $failure=$null
+        try { & $verifierPath -OutputDirectory $publicationOutput | Out-Null }
+        catch { $failure=$_ }
+        if ($scenario -eq 'concurrent') {
+            if (!$failure) { throw 'Concurrent report did not reject publication' }
+            if ($failure.Exception.InnerException -isnot [IO.IOException]) { throw $failure }
+            if ([IO.File]::ReadAllText($publicationReport) -cne 'competing validation record') { throw 'Concurrent validation report was overwritten' }
+        } elseif ($scenario -eq 'interrupted') {
+            if (!$failure -or $failure.Exception.Message -ne 'fixture report publication failure') { throw 'Report publication failure did not escape' }
+            if (Test-Path -LiteralPath $publicationReport) { throw 'Interrupted publication left a final validation report' }
+        } else {
+            if ($failure) { throw $failure }
+            $record=[IO.File]::ReadAllText($publicationReport) | ConvertFrom-Json
+            $built=Join-Path $publicationOutput $record.Archive
+            if ($record.Version -cne $version -or $record.Tests -ne 'All' -or $record.ArchiveSHA256 -cne (Get-FileHash -LiteralPath $built).Hash.ToLowerInvariant()) {
+                throw 'Completed report does not describe its archive'
+            }
+        }
+        $expectedFiles=if ($scenario -eq 'interrupted') { 1 } else { 2 }
+        if (@(Get-ChildItem -LiteralPath $publicationOutput -Force).Count -ne $expectedFiles) { throw 'Report publication left temporary output files' }
+    }
+} finally {
+    [IO.File]::WriteAllBytes($verifierPath,$verifierBytes)
+    [IO.File]::WriteAllBytes($runnerPath,$runnerSource)
+}
+Write-Output 'PASS: release contents, privacy exclusions, checksums, compression recovery, report publication and concurrent overwrite protection.'

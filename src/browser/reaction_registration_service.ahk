@@ -4,10 +4,8 @@ PrepareReactionRegistrations(hwnd) {
     if IsWorkerRegistrationCurrent()
         return true
     reply := SendWorkerRequest(hwnd,"reaction_configure","","Payload=" LoadReactionRegistrationSnapshot() "`n")
-    if reply.State != "configured" {
-        StopBrowserWorker()
+    if reply.State != "configured"
         return false
-    }
     MarkWorkerRegistrationCurrent()
     return true
 }
@@ -30,8 +28,7 @@ SynchronizeCapturedReactionRegistration(hwnd,reply) {
         if !PrepareReactionRegistrations(hwnd)
             throw Error("登録情報の同期に失敗しました。")
     } catch as failure {
-        ; The DB is committed, but the old worker must never remain usable.
-        StopBrowserWorker()
+        ; The committed registration remains unsynchronized; every reaction entry retries it.
         reply.State := "sync_failed", reply.Detail := failure.Message
         return reply
     }

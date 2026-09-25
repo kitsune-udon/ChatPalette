@@ -8,7 +8,6 @@ function Invoke-AppFixture {
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 New-Item -ItemType Directory -Path "$fixture\data" -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\settings.ini') -Destination "$fixture\data\settings.ini" -Force
 $mock = @'
 function Invoke-FixtureRequest($Request) {
     if ($Request.Mode -eq 'fixture_native') {
@@ -28,22 +27,17 @@ $script:fakeTarget = [pscustomobject]@{ Current=[pscustomobject]@{IsOffscreen=$f
 $script:fakeInvoke = [pscustomobject]@{}
 $script:fakeInvoke | Add-Member ScriptMethod Invoke { }
 function Get-ReactionInvoker($Target) { return $script:fakeInvoke }
-function Find-RegisteredReactions([long]$WindowHandle, $Saved) { return @{ Elements=@($script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget) } }
+function Find-RegisteredReactions([long]$WindowHandle, $Plan) { return @{ Elements=@($script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget) } }
 '@
 Write-TestWorker -Runtime $release -Definitions $mock
     $frame = @'
 OnExit(StopBrowserWorker)
 InstallApplicationShortcuts()
 global Checks := 0
-try {
-'@ + "`r`n" + $Body + @'
-    StopBrowserWorker()
-    FileAppend("PASS: " Checks " scenario checks; no real messages or reactions sent`n", "*")
-    ExitApp(0)
-} catch as testError {
-    FileAppend("FAIL: " testError.Message " at line " testError.Line " " testError.File " " testError.Extra "`n" testError.Stack "`n", "*")
-    ExitApp(1)
-}
+'@ + "`r`n" + $Body + "`r`n" + @'
+StopBrowserWorker()
+FileAppend("PASS: " Checks " scenario checks; no real messages or reactions sent`n", "*")
+ExitApp(0)
 Assert(condition, label) {
     global Checks
     if !condition
@@ -93,6 +87,15 @@ FixtureShortcutRelease(keys) {
 
 '@
     Invoke-AppTest -Runtime $release -Body ($frame + "`r`n" + $Helpers) -TimeoutMs $TimeoutMs -Setup @'
+fixtureSettings := CreateDefaultSettings()
+fixtureSettings.InputProfileId := "fixture-profile"
+fixtureSettings.DefaultReactionIntervalMs := 25
+fixtureSettings.Profiles := [{Id:"fixture-profile",Name:"テスト投稿者",Channel:"/channel/fixture",Items:[
+    {Id:"fixture-one",Name:"定番",Text:"test-one",Slot:1},
+    {Id:"fixture-two",Name:"サビ",Text:"test-two",Slot:2}]}]
+fixtureSettings.SharedDanmakuItems := [{Id:"fixture-shared",Name:"拍手",Text:"👏👏👏👏👏👏",Slot:1}]
+OpenSettingsRepository(A_ScriptDir "\data\settings.db").SaveAll(fixtureSettings)
+CloseSettingsStore()
 global FixtureInputMode := false, FixtureResolveCount := 0, FixtureCurrentVideo := "", FixtureSent := []
 global FixtureStarts := [], KeyCalls := [], ShortcutReleaseReplacement := 0, ShortcutReleaseResult := true
 RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"

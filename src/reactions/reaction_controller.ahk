@@ -2,7 +2,7 @@
 InitReactions() {
     InstallKeybdHook()
     global ActiveReactionJob := 0
-    global ReactionExecutionStatus := {Phase: "idle", Message: "", Final: false}
+    global ReactionExecutionStatus := {Phase: "idle", Message: ""}
     global LastReactionResult := {Message:"まだ実行していません。",Detail:"",Completed:0,Total:0,Mode:"",Reason:"idle"}
 }
 
@@ -22,38 +22,40 @@ SetReactionJobPhase(job, phase) {
     job.Phase := phase
     return true
 }
+; All job timers verify ownership and arm within one uninterrupted decision.
+ArmReactionTimer(job, callback, period) {
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        if ActiveReactionJob != job || job.Cancelled || job.Phase = "finished"
+            return false
+        SetTimer(callback, period)
+        return true
+    } finally Critical(previousCritical)
+}
+
 StopReactionTimers() {
     SetTimer(ReactionCountdown, 0)
-    SetTimer(ReactionSendNext, 0)
     SetTimer(QuickReaction, 0)
 }
 FinishReactionJob(job) {
     global ActiveReactionJob
     job.Phase := "finished"
     if ActiveReactionJob != job
-        return
+        return false
     StopReactionTimers()
     ActiveReactionJob := 0
+    RefreshOperationControls()
+    return true
 }
 
 QueueQuickReaction(*) {
-    global ActiveReactionJob
     if ShortcutBlocked("reaction")
         return
-    job := CreateReactionJob({Mode: "queued", Window: WinExist("A")})
-    ActiveReactionJob := job
-    try {
-        SetReactionStatus("ショートカットを受け付けました。キーを離してください。", false, "queued")
-        ShowReactionProgress()
-        SetTimer(QuickReaction, -1)
-    } catch as failure {
-        FinishReactionJob(job)
-        ReactionNotice("unavailable",failure.Message,"",job)
-    }
+    StartReactionJob(CreateReactionJob({Mode: "queued", Window: WinExist("A")}))
 }
 
 ScheduleReaction(mode, delay, options := 0) {
-    global ActiveReactionJob
     if !OperationAllowed("reaction")
         return false
     hwnd := TargetBrowserHwnd
@@ -75,80 +77,107 @@ ScheduleReaction(mode, delay, options := 0) {
         Applied:"適用：" (options ? "今回の設定" : "共通設定") " / " ReactionNames[choice],
         Choice: choice, Remaining: delay, Total: options ? options.Count : DefaultReactionCount,
         Interval: options ? options.Interval : DefaultReactionIntervalMs})
+    return StartReactionJob(job)
+}
+
+; Both entry paths publish, present and schedule through the same owner lifetime.
+StartReactionJob(job) {
+    global ActiveReactionJob
     ActiveReactionJob := job
+    started := false, startFailure := 0
     try {
-        PaletteWindow.Hide()
-        WinActivate("ahk_id " hwnd)
-        SetReactionStatus(mode = "reaction_capture" ? "登録待機中：YouTubeの♡にマウスを重ねてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。" : delay "秒後に開始します。♡のメニューを開いてください。")
+        if job.Mode = "queued"
+            message := "ショートカットを受け付けました。キーを離してください。"
+        else {
+            PaletteWindow.Hide()
+            WinActivate("ahk_id " job.Window)
+            message := job.Mode = "reaction_capture" ? "登録待機中：YouTubeの♡にマウスを重ねてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。"
+                : job.Remaining "秒後に開始します。♡のメニューを開いてください。"
+        }
+        if ActiveReactionJob != job || job.Cancelled
+            return false
+        SetReactionStatus(message,false,"",job)
+        if ActiveReactionJob != job || job.Cancelled
+            return false
         ShowReactionProgress()
-        SetTimer(ReactionCountdown, 1000)
-        return true
+        started := job.Mode = "queued" ? ArmReactionTimer(job,QuickReaction,-1)
+            : ArmReactionTimer(job,ReactionCountdown,1000)
+        return started
     } catch as failure {
-        FinishReactionJob(job)
-        ReactionNotice("unavailable",failure.Message,"",job)
+        startFailure := failure
         return false
+    } finally {
+        if !started && FinishReactionJob(job) && startFailure
+            ReactionNotice("unavailable",startFailure.Message,job)
     }
 }
 
 ReactionCountdown() {
-    global ActiveReactionJob
-    if !ActiveReactionJob {
+    job := ActiveReactionJob
+    if !job {
         SetTimer(ReactionCountdown, 0)
         return
     }
-    if !IsTargetForeground(ActiveReactionJob.Window) {
-        stoppedJob := ActiveReactionJob
-        CancelReaction()
-        ReactionNotice("wrong_window","","",stoppedJob)
-        return
-    }
-    ActiveReactionJob.Remaining--
-    if ActiveReactionJob.Remaining > 0 {
-        ShowStatusTip(ActiveReactionJob.Remaining "秒後に実行。♡のメニューを表示してください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。")
-        return
-    }
-    SetTimer(ReactionCountdown, 0)
-    job := ActiveReactionJob
-    if !SetReactionJobPhase(job,"running")
-        return
-    if job.Mode = "reaction_send" {
-        ReactionSendNext()
-        return
-    }
-    retryScheduled := false
+    waiting := false, reply := 0
     try {
+        if !IsTargetForeground(job.Window) {
+            reply := {State:"wrong_window"}
+            return
+        }
+        if ActiveReactionJob != job || job.Cancelled
+            return
+        job.Remaining--
+        if job.Remaining > 0 {
+            ShowStatusTip(job.Remaining "秒後に実行。♡のメニューを表示してください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。")
+            waiting := true
+            return
+        }
+        SetTimer(ReactionCountdown, 0)
+        if job.Mode = "reaction_send" {
+            RunReactionSendLoop(job)
+            return
+        }
+        if !SetReactionJobPhase(job,"running")
+            return
         point := Buffer(8, 0)
         DllCall("GetPhysicalCursorPos", "Ptr", point)
         extra := "Reaction=" job.Choice "`nX=" NumGet(point, 0, "Int") "`nY=" NumGet(point, 4, "Int") "`n"
+        started := AppClockMs()
         reply := RequestBrowserOperation(job.Window, job.Mode, job.Video, extra)
+        if ActiveReactionJob != job
+            return
         if job.Mode = "reaction_capture"
             reply := FinalizeReactionCapture(job,reply)
-        if job.Cancelled && !job.RegistrationCommitted {
-            SetReactionStatus("登録・確認を中止しました。", true,"","",job,"cancelled")
-        } else if ShouldWaitForRegistration(job, reply) {
-            SetReactionJobPhase(job,"waiting")
-            SetReactionStatus("登録待機中：♡のメニューを開き、マウスをその上に置いてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。")
-            SetTimer(ReactionCountdown, -1000)
-            retryScheduled := true
+        if ActiveReactionJob != job
             return
-        } else
-            ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "")
+        if job.Mode = "reaction_capture"
+            RecordBrowserOperation({Mode:job.Mode,State:reply.State,Window:job.Window,Duration:Round(AppClockMs()-started)})
+        if ShouldWaitForRegistration(job, reply) {
+            if !SetReactionJobPhase(job,"waiting")
+                return
+            SetReactionStatus("登録待機中：♡のメニューを開き、マウスをその上に置いてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。",false,"",job)
+            waiting := ArmReactionTimer(job,ReactionCountdown,-1000)
+        }
     } catch as captureError {
-        ReactionNotice("unavailable", captureError.Message)
+        reply := {State:"unavailable",Detail:captureError.Message}
     } finally {
-        if !retryScheduled
-            FinishReactionJob(job)
+        ; Publish a result only after releasing this tick's owner; a replacement keeps its state.
+        if !waiting && FinishReactionJob(job) {
+            if job.Cancelled && !job.RegistrationCommitted
+                SetReactionStatus("登録・確認を中止しました。", true,"",job,"cancelled")
+            else if reply
+                ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "", job)
+        }
     }
 }
 
 ; The job owns cancellation; persistence and worker synchronization stay in their service.
 FinalizeReactionCapture(job, reply) {
-    global IsBrowserOperationBusy, LastBrowserOperation
+    global IsBrowserOperationBusy
     previousCritical := A_IsCritical
     Critical("On")
     previousBusy := IsBrowserOperationBusy
     IsBrowserOperationBusy := true
-    started := A_TickCount
     try {
         ; Cancellation and persistence form one decision. Do not hold Critical across IPC.
         if ActiveReactionJob != job || job.Cancelled {
@@ -164,8 +193,6 @@ FinalizeReactionCapture(job, reply) {
     } finally {
         Critical(previousCritical)
         IsBrowserOperationBusy := previousBusy
-        LastBrowserOperation.State := reply.State
-        LastBrowserOperation.Duration += A_TickCount-started
     }
 }
 
@@ -180,30 +207,27 @@ CancelReaction(*) {
     job := ActiveReactionJob
     job.Cancelled := true, job.Phase := "stopping"
     if IsBrowserOperationBusy {
-        SetReactionStatus("停止を受け付けました。現在の操作の結果を確認して終了します。")
+        SetReactionStatus("停止を受け付けました。現在の操作の結果を確認して終了します。",false,"",job)
         return
     }
     message := job.Mode = "queued" ? "中止しました。" : "中止しました。操作済み " job.Completed " / " job.Total " 回。"
     FinishReactionJob(job)
-    SetReactionStatus(message,true,"","",job,"cancelled")
-    ShowStatusTip()
+    if SetReactionStatus(message,true,"",job,"cancelled")
+        ShowStatusTip()
 }
 
-ReactionSendNext() {
-    global ActiveReactionJob
-    if !ActiveReactionJob
-        return
-    job := ActiveReactionJob
-    if job.Cancelled || !IsTargetForeground(job.Window) {
-        CancelReaction()
-        SetReactionStatus("操作先が変わったため停止しました。操作済み " job.Completed " / " job.Total " 回。", true,"","",job,"wrong_window")
-        return
-    }
-    if !SetReactionJobPhase(job,"running")
+; One serial loop owns this explicit job; stale calls cannot run a replacement.
+RunReactionSendLoop(job) {
+    if !job || !SetReactionJobPhase(job,"running")
         return
     precisionEnabled := false
     releasePrecision := (*) => SetReactionTimingPrecision(false)
     try {
+        if !IsTargetForeground(job.Window) {
+            if FinishReactionJob(job)
+                ReactionNotice("wrong_window","",job)
+            return
+        }
         if job.Interval > 0 {
             precisionEnabled := SetReactionTimingPrecision(true)
             if precisionEnabled
@@ -213,19 +237,19 @@ ReactionSendNext() {
             if !WaitReactionInterval(job)
                 return
             if !IsTargetForeground(job.Window) {
-                CancelReaction()
-                ReactionNotice("wrong_window","","",job)
+                if FinishReactionJob(job)
+                    ReactionNotice("wrong_window","",job)
                 return
             }
-            job.StartedAt := ReactionClockMs()
+            job.StartedAt := AppClockMs()
             reply := RequestBrowserOperation(job.Window, "reaction_send", job.Video, "Reaction=" ResolveReactionKind(job.Choice) "`n")
             if ActiveReactionJob != job
                 return
             ApplyReactionResult(job, reply)
         }
     } catch as operationError {
-        FinishReactionJob(job)
-        ReactionNotice("unknown", operationError.Message,"",job)
+        if FinishReactionJob(job)
+            ReactionNotice("unknown", operationError.Message,job)
     } finally {
         if precisionEnabled {
             OnExit(releasePrecision, 0)
@@ -251,27 +275,15 @@ ResolveReactionKind(choice) {
     return choice = RandomReactionKind ? Random(1, 5) : choice
 }
 
-ReactionClockMs() {
-    return RuntimePorts.Clock ? RuntimePorts.Clock.Call() : NativeReactionClockMs()
-}
-
-NativeReactionClockMs() {
-    static frequency := 0
-    if !frequency
-        DllCall("QueryPerformanceFrequency", "Int64*", &frequency)
-    DllCall("QueryPerformanceCounter", "Int64*", &counter := 0)
-    return counter * 1000 / frequency
-}
-
 ReactionWaitRemaining(job, now) {
-    return job.Interval = 0 || !job.HasOwnProp("StartedAt") || job.StartedAt < 0 ? 0 : Max(0, job.StartedAt + job.Interval - now)
+    return job.Interval = 0 || job.StartedAt < 0 ? 0 : Max(0, job.StartedAt + job.Interval - now)
 }
 
 WaitReactionInterval(job) {
     ; Always pump cancellation, including 待機なし. Never queue concurrent requests.
     Sleep(-1)
     while ActiveReactionJob = job && !job.Cancelled {
-        remaining := ReactionWaitRemaining(job, ReactionClockMs())
+        remaining := ReactionWaitRemaining(job, AppClockMs())
         if remaining <= 0
             return true
         ; Wake for Windows messages as well as the deadline; keep cancellation responsive.
@@ -286,7 +298,7 @@ ApplyReactionResult(job, reply) {
     global ActiveReactionJob
     if reply.State != "operated" {
         FinishReactionJob(job)
-        ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "", " 操作済み " job.Completed " / " job.Total " 回で停止。",job)
+        ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "",job)
         return
     }
     if job.FirstStartedAt < 0
@@ -296,10 +308,10 @@ ApplyReactionResult(job, reply) {
     progress := job.Applied "`n操作済み " job.Completed " / " job.Total " 回" measurement
     if job.Cancelled || job.Completed >= job.Total {
         FinishReactionJob(job)
-        SetReactionStatus(progress "。" (job.Cancelled ? "中止しました。" : "完了しました。") " YouTube側の受理回数は未確認です。", true,"","",job,job.Cancelled ? "cancelled" : "completed")
+        SetReactionStatus(progress "。" (job.Cancelled ? "中止しました。" : "完了しました。") " YouTube側の受理回数は未確認です。", true,"",job,job.Cancelled ? "cancelled" : "completed")
         return
     }
-    SetReactionStatus(progress "。実行中：" ShortcutKeyLabel(GetShortcutKey("stop")) "で停止。")
+    SetReactionStatus(progress "。実行中：" ShortcutKeyLabel(GetShortcutKey("stop")) "で停止。",false,"",job)
     ; The serial loop schedules against this operation's start, not its completion.
 }
 
@@ -308,54 +320,68 @@ QuickReaction(*) {
     if !ActiveReactionJob || ActiveReactionJob.Mode != "queued"
         return
     queuedJob := ActiveReactionJob
-    hwnd := queuedJob.Window
-    batchStarted := false
+    hwnd := queuedJob.Window, startFailure := 0
     try {
-        key := RegExReplace(ShortcutKeys["reaction"], "[!^+#<>]", "")
-        if !WaitShortcutRelease([key, "Control", "Alt", "Shift"])
+        if !WaitShortcutRelease(GetShortcutKey("reaction"))
             return
-        if ActiveReactionJob != queuedJob || queuedJob.Cancelled || !IsTargetForeground(hwnd)
+        if ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
+        if !IsTargetForeground(hwnd) {
+            startFailure := {State:"wrong_window"}
+            return
+        }
         context := RequestBrowserOperation(hwnd, "browser_context")
         if ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         if context.State != "ok" || !IsTargetForeground(hwnd) {
-            ReactionNotice("unavailable")
+            startFailure := context.State != "ok" ? context : {State:"wrong_window"}
             return
         }
         choice := DefaultReactionKind
         if !choice || ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
-        ActiveReactionJob := CreateReactionJob({Mode: "reaction_send", Window: hwnd, Video: context.Video,
+        sendJob := CreateReactionJob({Mode: "reaction_send", Window: hwnd, Video: context.Video,
             Applied:"適用：共通設定 / " ReactionNames[choice],
             Choice: choice, Total: DefaultReactionCount, Interval: DefaultReactionIntervalMs})
-        batchStarted := true
-        ReactionSendNext()
+        ActiveReactionJob := sendJob
+        RunReactionSendLoop(sendJob)
     } catch as operationError {
-        if ActiveReactionJob = queuedJob
-            ReactionNotice("unknown", operationError.Message)
+        startFailure := {State:"unknown",Detail:operationError.Message}
     } finally {
-        if !batchStarted && ActiveReactionJob = queuedJob {
+        ; Finalize the queued attempt once; never overwrite a handed-off or replacement job.
+        if ActiveReactionJob = queuedJob {
             FinishReactionJob(queuedJob)
             if queuedJob.Cancelled
-                SetReactionStatus("中止しました。",true,"","",queuedJob,"cancelled")
+                SetReactionStatus("中止しました。",true,"",queuedJob,"cancelled")
+            else if startFailure
+                ReactionNotice(startFailure.State, startFailure.HasOwnProp("Detail") ? startFailure.Detail : "", queuedJob)
             else
-                SetReactionStatus("開始できませんでした。キーを離し、YouTubeを最前面にして再実行してください。",true,"","",queuedJob,"unavailable")
+                SetReactionStatus("開始できませんでした。キーを離し、YouTubeを最前面にして再実行してください。",true,"",queuedJob,"unavailable")
         }
     }
 }
 
-SetReactionStatus(message, final := false, phase := "", detail := "", job := 0, reason := "") {
+SetReactionStatus(message, final := false, detail := "", job := 0, reason := "") {
     global ReactionExecutionStatus, LastReactionResult
-    if !job && ActiveReactionJob
-        job := ActiveReactionJob
-    ReactionExecutionStatus := {Phase: phase != "" ? phase : (final ? "finished" : (job ? job.Phase : "running")), Message: message, Final: final}
-    if final {
-        LastReactionResult := {Message:message, Detail:detail,
-            Completed:job ? job.Completed : 0,
-            Total:job ? job.Total : 0,
-            Mode:job ? job.Mode : "", Reason:reason != "" ? reason : "finished", FinishedAt:FormatTime(,"yyyy/MM/dd HH:mm:ss")}
-    }
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        if !job && ActiveReactionJob
+            job := ActiveReactionJob
+        ; A final result may follow release, but must never replace another owner's progress.
+        if job && ActiveReactionJob != job && (!final || ActiveReactionJob)
+            return false
+        status := {Phase:final ? "finished" : (job ? job.Phase : "running"), Message: message}
+        ReactionExecutionStatus := status
+        if final {
+            LastReactionResult := {Message:message, Detail:detail,
+                Completed:job ? job.Completed : 0,
+                Total:job ? job.Total : 0,
+                Mode:job ? job.Mode : "", Reason:reason != "" ? reason : "finished"}
+        }
+    } finally Critical(previousCritical)
     RefreshOperationControls()
     RenderReactionStatus()
+    ; Rendering can yield to a new status; callers must not publish an older tooltip afterward.
+    return ReactionExecutionStatus = status
 }

@@ -1,9 +1,9 @@
 ﻿. (Join-Path $PSScriptRoot 'browser_uia.ps1')
-# Pure classification of a focused editable element and its bounded ancestry.
+# Pure classification of an editable element and its bounded ancestry; focus is verified separately.
 function Get-YouTubeInputKind($Records) {
     if (!$Records -or $Records.Count -eq 0) { return '' }
     $field = $Records[0]
-    if (!$field.Focused -or !$field.Enabled -or $field.Hidden -or !$field.Editable) { return '' }
+    if (!$field.Enabled -or $field.Hidden -or !$field.Editable) { return '' }
     if ($field.Id -match '(?i)search|urlbar|address' -or $field.Name -match '^(検索|Search)(\s|$)') { return '' }
     if (!@($Records | Where-Object { $_.Type -eq 50030 }).Count) { return '' } # Document
     $context = ($Records | ForEach-Object { $_.Id + ' ' + $_.Class }) -join ' '
@@ -18,9 +18,9 @@ function Get-YouTubeInputKind($Records) {
     return ''
 }
 
-function Get-InputRecord($Element, [bool]$Focused) {
+function Get-InputRecord($Element, [bool]$IncludeEditState) {
     $info = $Element.Current
-    if (!$Focused) {
+    if (!$IncludeEditState) {
         # Ancestry needs structure only, not names, focus state or edit patterns.
         return @{Id=$info.AutomationId; Class=$info.ClassName; Type=$info.ControlType.Id}
     }
@@ -43,6 +43,7 @@ function Get-FocusedYouTubeInput([long]$WindowHandle, [ref]$VerifiedElement) {
     $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
     if ($null -eq $focused -or !(Test-ElementWindow $focused $WindowHandle)) { return '' }
     $records = @(Get-YouTubeInputRecords $focused $WindowHandle)
+    if (!$records -or !$records[0].Focused) { return '' }
     $kind = Get-YouTubeInputKind $records
     if (!$kind) { return '' }
     $latest = [System.Windows.Automation.AutomationElement]::FocusedElement
@@ -67,8 +68,12 @@ function Get-YouTubeInputRecords($Target, [long]$WindowHandle) {
     $records = @()
     $element = $Target
     for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
-        $records += Get-InputRecord $element ($depth -eq 0)
-        if ($element.Current.ControlType.Id -eq 50030 -or $element.Current.NativeWindowHandle -eq $WindowHandle) { break }
+        $record = Get-InputRecord $element ($depth -eq 0)
+        $records += $record
+        # Links can expose TextPattern. Reject non-editable targets before walking
+        # a long live-chat ancestry, using the same record returned to classification.
+        if ($depth -eq 0 -and (!$record.Enabled -or $record.Hidden -or !$record.Editable)) { break }
+        if ($record.Type -eq 50030 -or $element.Current.NativeWindowHandle -eq $WindowHandle) { break }
         $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
     }
     return $records

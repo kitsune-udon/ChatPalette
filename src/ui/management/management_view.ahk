@@ -1,10 +1,6 @@
 ﻿ShowManagement(page := 1, *) {
     if RestoreActiveEditorDialog()
         return
-    if DanmakuEditorWindow {
-        PresentWindow(DanmakuEditorWindow)
-        return
-    }
     if !ManagementWindow
         BuildManagement()
     ManagementTabs.Choose(page)
@@ -97,10 +93,10 @@ BuildManagement() {
 }
 
 
-RefreshManagement() {
+RefreshManagement(render := 0) {
     if !ManagementWindow || !ManagementRefresh.Begin()
         return
-    try RenderManagement()
+    try (render ? render : RenderManagement).Call()
     finally {
         ManagementRefresh.End()
         RefreshOperationControls()
@@ -126,8 +122,6 @@ RenderManagement() {
     } finally {
         EndListRefresh(ManagedList,position,4)
     }
-    UpdateManagementActions()
-    RefreshManagementUndo()
     ManagementWindow.GetClientPos(,,&width,&height)
     if width > 0
         ResizeManagement(ManagementWindow,0,width,height)
@@ -207,6 +201,12 @@ LayoutManagement(gui, state, width, height) {
 }
 
 
+; Selection belongs to the successful list rebuild, independently of palette updates.
+RenderManagedSelection(index) {
+    RenderManagement()
+    SelectManagedRow(index)
+}
+
 SelectManagedRow(index) {
     if ManagedList.GetCount() {
         ManagedList.Modify(Min(Max(1,index),ManagedList.GetCount()),"Select Focus Vis")
@@ -228,7 +228,8 @@ OpenManagedProfileMenu(*) {
 }
 
 UpdateManagementActions(*) {
-    if !IsSet(ManagementItemButtons) || ManagementItemButtons.Length != 7
+    ; The shared update owner rejects actions; publish button state once after it releases.
+    if ManagementRefresh.Active || !IsSet(ManagementItemButtons) || ManagementItemButtons.Length != 7
         return
     selected := ManagedList.GetNext(), count := ManagedList.GetCount(), allowed := OperationAllowed("edit")
     ManagementItemButtons[1].Enabled := allowed
@@ -254,19 +255,19 @@ SetManagementNotice(message) {
 }
 
 ; Reordering updates the two affected rows without rebuilding the list or resetting its viewport.
-RefreshManagedOrder(previous, current) {
-    items := GetEditingDanmakuItems(), shared := GetEditingProfileId() = ""
-    ManagedList.Opt("-Redraw")
+RenderManagedOrder(previous, current) {
+    profile := FindProfileById(Profiles,EditingProfileId)
+    id := profile ? profile.Id : "", items := profile ? profile.Items : SharedDanmakuItems
+    rows := [BuildPresentationRow(items[previous],previous,id,ShortcutKeys), BuildPresentationRow(items[current],current,id,ShortcutKeys)]
+    position := BeginListRefresh(ManagedList,4)
+    position.Selected := current ; The moved identity is now at this index; avoid a full-list search.
     try {
-        for index in [previous,current] {
-            item := items[index]
-            ManagedList.Modify(index,"",item.Name,item.Text,ItemSlot(item) ? StrReplace(ShortcutKeyLabel(GetShortcutKey((shared ? "shared" : "profile") ItemSlot(item))),"＋","+") : "",item.Id)
-        }
-        SelectManagedRow(current)
+        for row in rows
+            ManagedList.Modify(row.Index,"",row.Name,row.Text,row.Key,row.ItemId)
     } finally {
-        ManagedList.Opt("+Redraw")
+        EndListRefresh(ManagedList,position,4)
     }
-    RefreshManagementUndo()
+    SelectManagedRow(current)
 }
 
 RefreshManagementUndo() {

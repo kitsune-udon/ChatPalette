@@ -4,7 +4,7 @@ class SettingsRepository {
     __New(path, create := false) {
         if FileExist(path) && FileGetSize(path)>128*1024*1024
             throw Error("設定データベースが上限128MiBを超えています。")
-        this.Path := path, this.Scopes := Map(), this.Scopes.CaseSense := "On", this.Loaded := create
+        this.Path := path, this.Saved := 0
         this.Db := SqliteConnection(path,create)
         try {
             if create {
@@ -14,15 +14,15 @@ class SettingsRepository {
                 if this.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
                     throw Error("ChatPaletteの設定データベースではありません。")
                 version := this.Db.Scalar("PRAGMA user_version")
-                if version != "1" && version != "2" && version != "3"
+                if version != "3"
                     throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
                 this.Db.ConfigureStorage()
-                if version = "1"
-                    this.Db.Transaction(() => CreateReactionRegistrationSchema(this.Db,this.Path))
-                if version != "3"
-                    this.Db.Transaction(() => CreateShortcutSchema(this.Db))
             }
             this.Db.Exec("PRAGMA max_page_count=" (128*1024*1024//Integer(this.Db.Scalar("PRAGMA page_size"))))
+            if create {
+                scopes := Map(), scopes.CaseSense := "On"
+                this.Saved := {Scopes:scopes,Preferences:0,DataVersion:this.Db.Scalar("PRAGMA data_version")}
+            }
         } catch as failure {
             ; Keep the schema error even if a broken connection cannot close cleanly.
             try this.Db.Close()
@@ -35,12 +35,14 @@ class SettingsRepository {
         this.Db.Exec("CREATE TABLE scopes(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, channel TEXT UNIQUE, position INTEGER NOT NULL CHECK(position>=0));"
             . "CREATE TABLE items(id TEXT PRIMARY KEY NOT NULL, scope_id TEXT NOT NULL REFERENCES scopes(id) ON DELETE CASCADE, position INTEGER NOT NULL, name TEXT NOT NULL, body TEXT NOT NULL, slot INTEGER CHECK(slot IS NULL OR slot IN(1,2)), UNIQUE(scope_id,position), UNIQUE(scope_id,slot));"
             . "CREATE TABLE preferences(id INTEGER PRIMARY KEY CHECK(id=1), active_scope TEXT REFERENCES scopes(id) ON DELETE SET NULL, auto_mode INTEGER NOT NULL CHECK(auto_mode IN(0,1)), reaction_kind INTEGER NOT NULL, reaction_count INTEGER NOT NULL, reaction_interval INTEGER NOT NULL, reaction_key TEXT NOT NULL);"
-            . "PRAGMA application_id=" SettingsRepository.ApplicationId "; PRAGMA user_version=1")
-        CreateReactionRegistrationSchema(this.Db,this.Path)
+            . "PRAGMA application_id=" SettingsRepository.ApplicationId "; PRAGMA user_version=3")
+        CreateReactionRegistrationSchema(this.Db)
         CreateShortcutSchema(this.Db)
     }
     Load() {
-        return this.Db.Transaction(ObjBindMethod(this,"ReadState"),false)
+        loaded := this.Db.Transaction(ObjBindMethod(this,"ReadState"),false)
+        this.Saved := loaded.Saved
+        return loaded.State
     }
     ReadState() {
         if Integer(this.Db.Scalar("SELECT COUNT(*) FROM scopes"))>10001 || Integer(this.Db.Scalar("SELECT COUNT(*) FROM items"))>100000
@@ -63,7 +65,7 @@ class SettingsRepository {
                 throw Error("弾幕の所属先がありません。")
             scope := scopes[row[2]], item := {Id:row[1],Name:row[4],Text:row[5],Slot:Integer(row[6])}
             scope.Items.Push(item)
-            scope.Rows[item.Id] := {Id:item.Id,Name:item.Name,Text:item.Text,Slot:item.Slot,Position:Integer(row[3]),Item:item}
+            scope.Rows[item.Id] := CreateStorageRow(item,Integer(row[3]))
             if Integer(row[3]) <= 0
                 throw Error("弾幕の保存順序が不正です。")
         }
@@ -82,110 +84,95 @@ class SettingsRepository {
         validated := BuildLibraryStoragePlan(state,scopes,true)
         for id, scope in scopes
             scope.TextBytes := validated.Scopes[id].TextBytes
-        this.Scopes := scopes
-        this.PreferenceValues := this.PreferenceRow(state)
-        this.DataVersion := this.Db.Scalar("PRAGMA data_version")
-        this.Loaded := true
-        return state
+        ; The caller publishes this baseline only after the read transaction commits.
+        return {State:state,Saved:{Scopes:scopes,Preferences:this.CopyPreferences(state),DataVersion:this.Db.Scalar("PRAGMA data_version")}}
     }
     EnsureLoaded() {
-        if !this.Loaded
+        if !this.Saved
             this.Load()
     }
     SaveAll(state) {
         this.EnsureLoaded()
         ValidateSettingsPreferences(state)
-        plan := BuildLibraryStoragePlan(state,this.Scopes,true)
-        this.Write(plan,this.PreferenceRow(state))
+        plan := BuildLibraryStoragePlan(state,this.Saved.Scopes,true)
+        this.Write(plan,this.CopyPreferences(state))
     }
     SaveLibrary(library, inputProfileId) {
         this.EnsureLoaded()
-        plan := BuildLibraryStoragePlan(library,this.Scopes)
-        values := this.PreferenceValues.Clone()
-        values[1] := inputProfileId
-        this.Write(plan,values)
+        plan := BuildLibraryStoragePlan(library,this.Saved.Scopes)
+        preferences := this.Saved.Preferences.Clone()
+        preferences.InputProfileId := inputProfileId
+        this.Write(plan,preferences)
     }
     SavePreferences(preferences) {
         this.EnsureLoaded()
         ValidateSettingsPreferences(preferences)
-        this.Write(0,this.PreferenceRow(preferences))
+        this.Write(0,this.CopyPreferences(preferences))
     }
-    Write(plan,values) {
-        scopes := plan ? plan.Scopes : this.Scopes
-        if values[1] != "" && (values[1] = "@shared" || !scopes.Has(values[1]))
+    Write(plan,preferences) {
+        scopes := plan ? plan.Scopes : this.Saved.Scopes
+        active := preferences.InputProfileId
+        if active != "" && (active = "@shared" || !scopes.Has(active))
             throw Error("選択中の配信者がありません。")
-        version := this.Db.Transaction(() => this.Apply(plan,values))
-        if plan
-            this.Scopes := plan.Scopes
-        this.PreferenceValues := values
-        this.DataVersion := version
+        version := this.Db.Transaction(() => this.Apply(plan,preferences))
+        this.Saved := {Scopes:scopes,Preferences:preferences,DataVersion:version}
     }
-    PreferenceRow(state) {
-        active := state.InputProfileId
-        values := [active,Integer(state.AutoMode),Integer(state.DefaultReactionKind),Integer(state.DefaultReactionCount),Integer(state.DefaultReactionIntervalMs),state.ShortcutKeys["reaction"]]
-        keys := state.ShortcutKeys
-        for definition in ShortcutDefinitions()
-            if definition.Id != "reaction"
-                values.Push(keys[definition.Id])
-        return values
+    CopyPreferences(state) {
+        return {InputProfileId:state.InputProfileId, AutoMode:Integer(state.AutoMode),
+            DefaultReactionKind:Integer(state.DefaultReactionKind), DefaultReactionCount:Integer(state.DefaultReactionCount),
+            DefaultReactionIntervalMs:Integer(state.DefaultReactionIntervalMs), ShortcutKeys:state.ShortcutKeys.Clone()}
     }
     ; Call inside the write transaction, after its lock has been acquired.
     VerifyDataVersion() {
         version := this.Db.Scalar("PRAGMA data_version")
-        if this.HasOwnProp("DataVersion") && this.DataVersion != version
+        if this.Saved && this.Saved.DataVersion != version
             throw Error("設定が別の接続で変更されました。再起動して最新の設定を読み込んでください。")
         return version
     }
-    Apply(plan,values) {
+    Apply(plan,preferences) {
         version := this.VerifyDataVersion()
         if plan
             this.ApplyLibrary(plan)
-        previous := this.HasOwnProp("PreferenceValues") ? this.PreferenceValues : 0
-        baseChanged := !previous
-        if previous {
-            Loop 6 {
-                if !(values[A_Index] == previous[A_Index]) {
-                    baseChanged := true
-                    break
-                }
-            }
-        }
+        previous := this.Saved.Preferences
+        baseChanged := !previous || !(preferences.InputProfileId == previous.InputProfileId)
+            || preferences.AutoMode != previous.AutoMode || preferences.DefaultReactionKind != previous.DefaultReactionKind
+            || preferences.DefaultReactionCount != previous.DefaultReactionCount
+            || preferences.DefaultReactionIntervalMs != previous.DefaultReactionIntervalMs
+            || !(preferences.ShortcutKeys["reaction"] == previous.ShortcutKeys["reaction"])
         if baseChanged
-            this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?,?)",values[1],values[2],values[3],values[4],values[5],values[6])
-        i := 6
-        for definition in ShortcutDefinitions() {
-            if definition.Id = "reaction"
-                continue
-            i++
-            if !previous || !(values[i] == previous[i])
-                this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=?",values[i],definition.Id)
+            this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?,?)",
+                preferences.InputProfileId,preferences.AutoMode,preferences.DefaultReactionKind,
+                preferences.DefaultReactionCount,preferences.DefaultReactionIntervalMs,preferences.ShortcutKeys["reaction"])
+        for action, key in preferences.ShortcutKeys {
+            if action != "reaction" && (!previous || !(key == previous.ShortcutKeys[action]))
+                this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=?",key,action)
         }
         return version
     }
     ApplyLibrary(plan) {
         ; Remove changed ownership first, then insert/update. A failed step rolls it all back.
-        for id, old in this.Scopes {
+        for id, old in this.Saved.Scopes {
             if !plan.Scopes.Has(id)
                 this.Db.Run("DELETE FROM scopes WHERE id=?",id)
         }
         for id, scope in plan.Scopes {
-            old := this.Scopes.Get(id,0)
+            old := this.Saved.Scopes.Get(id,0)
             if old && !(old.Channel == scope.Channel)
                 this.Db.Run("UPDATE scopes SET channel=NULL WHERE id=?",id)
         }
         for id, scope in plan.Scopes {
-            old := this.Scopes.Get(id,0)
+            old := this.Saved.Scopes.Get(id,0)
             if !old
                 this.Db.Run("INSERT INTO scopes VALUES(?,?,NULLIF(?,''),?)",id,scope.Name,scope.Channel,scope.Position)
             else if !(old.Name == scope.Name) || !(old.Channel == scope.Channel) || old.Position != scope.Position
                 this.Db.Run("UPDATE scopes SET name=?,channel=NULLIF(?,''),position=? WHERE id=?",scope.Name,scope.Channel,scope.Position,id)
         }
         changed := []
-        for id in plan.Touched {
-            scope := plan.Scopes[id], old := this.Scopes.Get(id,0)
-            for itemId in scope.Deleted
+        for delta in plan.Changes {
+            id := delta.Scope, scope := plan.Scopes[id], old := this.Saved.Scopes.Get(id,0)
+            for itemId in delta.Deleted
                 this.Db.Run("DELETE FROM items WHERE id=?",itemId)
-            for itemId in scope.Changed {
+            for itemId in delta.Changed {
                 row := scope.Rows[itemId]
                 prior := old ? old.Rows.Get(itemId,0) : 0
                 changed.Push({Scope:id,Row:row,Existing:!!prior,Stage:prior && (prior.Position != row.Position || prior.Slot != row.Slot)})
@@ -203,10 +190,6 @@ class SettingsRepository {
             else
                 this.Db.Run("INSERT INTO items VALUES(?,?,?,?,?,NULLIF(?,0))",row.Id,change.Scope,row.Position,row.Name,row.Text,row.Slot)
         }
-    }
-    CheckIntegrity() {
-        if this.Db.Scalar("PRAGMA integrity_check") != "ok" || this.Db.Rows("PRAGMA foreign_key_check").Length
-            throw Error("設定データベースの整合性を確認できません。")
     }
     Close() {
         this.Db.Close()

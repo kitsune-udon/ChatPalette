@@ -1,17 +1,13 @@
 ﻿; Palette orchestration and detected profile selection.
 ShowPalette(*) {
     global TargetBrowserHwnd
-    if DanmakuEditorWindow {
-        PresentWindow(DanmakuEditorWindow)
-        return
-    }
     if RestoreActiveEditorDialog()
         return
     if ActiveReactionJob {
         ShowReactionProgress()
         return
     }
-    if IsBrowserOperationBusy
+    if CurrentOperationState().BrowserBusy
         return
     active := WinExist("A")
     if IsBrowser(active)
@@ -47,17 +43,17 @@ SelectProfileFromBrowser(hwnd) {
         SetDetectionStatus("動画を確認できません。YouTubeの入力欄から開き直してください。")
         return false
     }
-    found := ChannelIndex.Get(DetectedChannel.Channel, "")
-    if found = "" {
-        SetDetectionStatus(ChannelIndex.Has(DetectedChannel.Channel) ? "チャンネル連携が重複しています。管理画面で確認してください。" : "チャンネル未連携：" DetectedChannel.Author "。「チャンネル連携」から登録できます。")
+    profile := FindProfileByChannel(Profiles,DetectedChannel.Channel)
+    if !profile {
+        SetDetectionStatus("チャンネル未連携：" DetectedChannel.Author "。「チャンネル連携」から登録できます。")
         return false
     }
-    try SaveInputProfileId(found)
+    try SaveInputProfileId(profile.Id)
     catch as failure {
         SetDetectionStatus("配信者を選択できませんでした。" failure.Message)
         return false
     }
-    SetDetectionStatus("自動：" DetectedChannel.Author " → " FindProfileById(Profiles,found).Name)
+    SetDetectionStatus("自動：" DetectedChannel.Author " → " profile.Name)
     return true
 }
 
@@ -66,17 +62,25 @@ UpdateTray() {
     A_IconTip := "ChatPalette：" (profile ? profile.Name : "配信者未選択")
 }
 
-RefreshProfiles() {
-    RefreshVisiblePalette()
-    if ManagementWindow && DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd)
-        RefreshManagement()
+; A failed view must not prevent the other from reflecting committed state.
+RefreshLibraryViews(updateManagement := 0) {
+    errors := ""
+    try RefreshVisiblePalette()
+    catch as failure
+        errors := "パレット：" failure.Message
+    try RefreshManagement(updateManagement)
+    catch as failure
+        errors .= (errors = "" ? "" : "`n") "管理画面：" failure.Message
+    if errors != ""
+        throw Error(errors)
 }
 
 ; Hidden palettes are refreshed unconditionally by ShowPalette/ReturnToPalette.
 RefreshVisiblePalette() {
-    UpdateTray()
     if DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd)
         RefreshPalette()
+    else
+        UpdateTray()
 }
 
 ; Editing starts from the selected palette item, without changing the input profile.
@@ -88,10 +92,6 @@ OpenPaletteLibrary(*) {
     global EditingProfileId
     if RestoreActiveEditorDialog() || !OperationAllowed("edit")
         return
-    if DanmakuEditorWindow {
-        PresentWindow(DanmakuEditorWindow)
-        return
-    }
     target := GetPaletteLibraryTarget()
     EditingProfileId := target.ProfileId
     ShowManagement(1)
@@ -100,23 +100,23 @@ OpenPaletteLibrary(*) {
 }
 
 GetPaletteLibraryTarget() {
-    selected := PaletteList.GetNext()
-    if selected && selected <= PaletteRows.Length {
-        row := PaletteRows[selected]
-        index := row.Shared ? 0 : FindProfileIndexById(Profiles,row.ProfileId)
-        if row.Shared || (index && HasPaletteInputProfile() && row.ProfileId == InputProfileId) {
-            items := row.Shared ? SharedDanmakuItems : Profiles[index].Items
+    profile := GetPaletteInputProfile(), row := GetSelectedPaletteRow()
+    if row {
+        shared := row.ProfileId = ""
+        if shared || (profile && row.ProfileId == profile.Id) {
+            items := shared ? SharedDanmakuItems : profile.Items
             if PaletteItemMatches(row,items)
-                return {ProfileId:row.Shared ? "" : row.ProfileId, Index:row.Index}
+                return {ProfileId:row.ProfileId, Index:row.Index}
         }
     }
-    profile := GetInputProfile()
-    matched := HasPaletteInputProfile()
-    return {ProfileId:matched ? profile.Id : "", Index:0}
+    return {ProfileId:profile ? profile.Id : "", Index:0}
 }
 
-; Display and editing use the same validity rule; manual selection survives window loss.
-HasPaletteInputProfile() {
-    return !!GetInputProfile() && (!AutoMode || (IsBrowser(TargetBrowserHwnd)
-        && DetectedChannel.State = "ok" && ChannelIndex.Get(DetectedChannel.Channel,"") == InputProfileId))
+; Resolve the valid owner once for presentation or editing; manual selection survives window loss.
+GetPaletteInputProfile() {
+    profile := GetInputProfile()
+    if profile && (!AutoMode || (IsBrowser(TargetBrowserHwnd)
+        && DetectedChannel.State = "ok" && profile.Channel != "" && profile.Channel == DetectedChannel.Channel))
+        return profile
+    return 0
 }

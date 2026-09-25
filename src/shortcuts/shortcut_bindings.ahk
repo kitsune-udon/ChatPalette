@@ -15,8 +15,6 @@ CurrentShortcutMap() {
 SetShortcutHotkey(action,key,enabled := true) {
     if key = ""
         return
-    if !ApplicationShortcutsInstalled
-        return
     return RuntimePorts.ShortcutKey ? RuntimePorts.ShortcutKey.Call(action,key,enabled) : NativeSetShortcutHotkey(action,key,enabled)
 }
 NativeSetShortcutHotkey(action,key,enabled := true) {
@@ -32,9 +30,49 @@ NativeSetShortcutHotkey(action,key,enabled := true) {
     } finally HotIf()
 }
 InstallApplicationShortcuts() {
-    global ApplicationShortcutsInstalled := true
-    for definition in ShortcutDefinitions()
-        SetShortcutHotkey(definition.Id,GetShortcutKey(definition.Id))
+    global ApplicationShortcutsInstalled
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        if ApplicationShortcutsInstalled
+            return
+        ValidateShortcutMap(ShortcutKeys)
+        CommitShortcutBindings(Map(),CurrentShortcutMap())
+        ApplicationShortcutsInstalled := true
+    } finally Critical(previousCritical)
+}
+; Both callers hold Critical through binding changes and publication. A failed
+; registration or persistence callback rolls back the same owned bindings.
+CommitShortcutBindings(previous,next,commit := 0) {
+    disabled := [], installed := []
+    try {
+        ; Remove changed bindings first so swapping two keys is safe.
+        for action in ChangedShortcutBindings(previous,next) {
+            SetShortcutHotkey(action,previous.Get(action,""),false)
+            disabled.Push(action)
+        }
+        for action in disabled {
+            SetShortcutHotkey(action,next[action])
+            installed.Push(action)
+        }
+        if commit
+            commit.Call()
+    } catch as failure {
+        recoveryFailures := ""
+        for action in installed {
+            try SetShortcutHotkey(action,next[action],false)
+            catch as recoveryFailure
+                recoveryFailures .= "`n新しい割当の解除（" ShortcutKeyLabel(next[action]) "）: " recoveryFailure.Message
+        }
+        for action in disabled {
+            try SetShortcutHotkey(action,previous.Get(action, ""))
+            catch as recoveryFailure
+                recoveryFailures .= "`n以前の割当の復元（" ShortcutKeyLabel(previous.Get(action, "")) "）: " recoveryFailure.Message
+        }
+        if recoveryFailures != ""
+            throw Error(failure.Message "`n一部のキー割当を元に戻せませんでした。ChatPaletteを再起動してください。" recoveryFailures)
+        throw failure
+    }
 }
 HandleConfiguredShortcut(action,*) {
     if action = "palette"
@@ -45,7 +83,7 @@ HandleConfiguredShortcut(action,*) {
         return QueueQuickReaction()
     if SubStr(action,1,7) = "profile" || SubStr(action,1,6) = "shared"
         return HandleDanmakuShortcut(SubStr(action,1,-1),Integer(SubStr(action,-1)))
-    return HandlePageShortcut(action,RegExReplace(GetShortcutKey(action),"[!^+]",""))
+    return HandlePageShortcut(action)
 }
 SaveShortcutMap(keys) {
     previousCritical := A_IsCritical

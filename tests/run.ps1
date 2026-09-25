@@ -10,6 +10,7 @@ $tests = @($tests | Where-Object {
 })
 if (!$tests.Count) { throw 'No matching test scripts found. Use -List to inspect available names.' }
 if ($List) { $tests.Name; return }
+. (Join-Path $PSScriptRoot 'support.ps1')
 $base = Join-Path $PSScriptRoot '.tmp'
 $runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
@@ -25,10 +26,9 @@ try {
         $out = Join-Path $runRoot ($testName + '.stdout.txt')
         $err = Join-Path $runRoot ($testName + '.stderr.txt')
         $process = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $testName) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
-        $null = $process.Handle
-        if (!$process.WaitForExit(120000)) { $process.Kill(); throw "Timed out: $testName" }
+        $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000
         Get-Content -LiteralPath $out,$err
-        if ($process.ExitCode -ne 0) { throw "Failed: $testName" }
+        if ($exitCode -ne 0) { throw "Failed: $testName" }
     }
     $completed = $true
     $selection = if ($Name) { $Name } else { $Group }

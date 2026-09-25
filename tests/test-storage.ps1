@@ -7,7 +7,7 @@ $entry = [pscustomobject]@{browser='fixture'; tokens=$tokens}
 $payload = @{version=1; profiles=@($entry)} | ConvertTo-Json -Depth 8 -Compress
 Set-ReactionRegistrationSnapshot $payload
 $old = $script:BrowserReactionSelectors
-$oldPlan=Get-ReactionPlan $old['fixture']
+$oldPlan=$old['fixture']
 $script:ReactionElementCache[123L]=@{Plan=$oldPlan;Elements=@()}
 if ($old.Count -ne 1 -or !$old.ContainsKey('fixture')) { throw 'Snapshot not loaded' }
 $invalid = [pscustomobject]@{browser='invalid'; tokens=@($tokens[0],$tokens[0],$tokens[0],$tokens[0],$tokens[0])}
@@ -15,16 +15,17 @@ foreach ($bad in @('{', (@{version=99;profiles=@($entry)} | ConvertTo-Json -Dept
     $failed=$false
     try { Set-ReactionRegistrationSnapshot $bad } catch { $failed=$true }
     if (!$failed -or ![object]::ReferenceEquals($old,$script:BrowserReactionSelectors)) { throw 'Invalid snapshot changed memory' }
-    if (!$script:ReactionElementCache.ContainsKey(123L) -or ![object]::ReferenceEquals($oldPlan,(Get-ReactionPlan $old['fixture']))) { throw 'Failed snapshot invalidated valid runtime state' }
+    if (!$script:ReactionElementCache.ContainsKey(123L) -or ![object]::ReferenceEquals($oldPlan,($old['fixture']))) { throw 'Failed snapshot invalidated valid runtime state' }
 }
 Set-ReactionRegistrationSnapshot '{"version":1,"profiles":[]}'
 if ($script:BrowserReactionSelectors.Count -or $script:ReactionElementCache.Count) { throw 'Empty snapshot failed to clear registrations and references' }
 # Memory cache reuses successful lookups, expires entries and bounds retries.
 . (Join-Path $release 'src\browser\video_metadata.ps1')
 $script:fetches = 0
+$script:metadataRecovered = $false
 function Fetch-Metadata($Video) {
     $script:fetches++
-    if ($Video -ceq 'failure0000') { throw 'fake failure' }
+    if ($Video -ceq 'failure0000' -and !$script:metadataRecovered) { throw 'fake failure' }
     return @{Author='fixture'; Channel='/channel/test'; Time=[DateTime]::UtcNow}
 }
 function Get-RuntimeFileSnapshot {
@@ -46,6 +47,19 @@ if ($script:fetches -ne 4) { throw 'Failure retry not suppressed' }
 $script:Failures['failure0000']=[DateTime]::UtcNow.AddSeconds(-6)
 $null=Resolve-Video 'failure0000'
 if ($script:fetches -ne 5) { throw 'Failure retry not released' }
+$script:Failures['failure0000']=[DateTime]::UtcNow.AddHours(1)
+$null=Resolve-Video 'failure0000'
+if ($script:fetches -ne 6) { throw 'Clock rollback kept failure retry suppressed' }
+$script:Failures['expired0000']=[DateTime]::UtcNow.AddSeconds(-6)
+$script:Failures['future00000']=[DateTime]::UtcNow.AddHours(1)
+$script:Failures['recent00000']=[DateTime]::UtcNow
+$null=Resolve-Video 'abcdefghijk'
+if ($script:fetches -ne 6 -or $script:Failures.ContainsKey('expired0000') -or $script:Failures.ContainsKey('future00000') -or !$script:Failures.ContainsKey('recent00000') -or !$script:Failures.ContainsKey('failure0000')) { throw 'Cache hit did not prune invalid retry records while preserving recent failures' }
+$script:Failures['failure0000']=[DateTime]::UtcNow.AddSeconds(-6)
+$script:metadataRecovered = $true
+$recovered=Resolve-Video 'failure0000'
+$null=Resolve-Video 'failure0000'
+if ($null -eq $recovered -or $script:fetches -ne 7 -or $script:Failures.ContainsKey('failure0000')) { throw 'Recovery did not replace retry suppression with a reusable success' }
 foreach ($i in 1..140) { $null=Resolve-Video ('v{0:d10}' -f $i) }
 if ($script:Videos.Count -ne 128 -or !$script:Videos.ContainsKey('v0000000140')) { throw 'Cache did not retain bounded recent entries' }
 $script:Videos['expired0000']=@{Author='old';Channel='/channel/test';Time=[DateTime]::UtcNow.AddHours(-13)}
@@ -61,8 +75,8 @@ if (Compare-Object $before $after) { throw 'Memory caching created or changed fi
 $video = $script:Videos['abcdefghijk']
 $script:ReactionElementCache[123L]=@{Elements=@()}
 Set-ReactionRegistrationSnapshot $payload
-$plan=Get-ReactionPlan $script:BrowserReactionSelectors['fixture']
+$plan=$script:BrowserReactionSelectors['fixture']
 if ($script:ReactionElementCache.Count -ne 0 -or ![object]::ReferenceEquals($video,$script:Videos['abcdefghijk'])) { throw 'Registration sync did not preserve metadata or invalidate elements' }
 Set-ReactionRegistrationSnapshot $payload
-if ([object]::ReferenceEquals($plan,(Get-ReactionPlan $script:BrowserReactionSelectors['fixture']))) { throw 'Registration replacement reused stale plan' }
+if ([object]::ReferenceEquals($plan,($script:BrowserReactionSelectors['fixture']))) { throw 'Registration replacement reused stale plan' }
 Write-Output 'PASS: registration invalidation and memory-only metadata caching.'

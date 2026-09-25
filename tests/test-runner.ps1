@@ -6,6 +6,7 @@ $fixture=Join-Path $runtime 'tests'
 New-Item -ItemType Directory -Path $fixture | Out-Null
 $runner=Join-Path $fixture 'run.ps1'
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run.ps1') -Destination $runner
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'support.ps1') -Destination $fixture
 $headless=Join-Path $fixture 'test-alpha.ps1'
 $desktop=Join-Path $fixture 'test-beta.ps1'
 [IO.File]::WriteAllText($headless,"# Test-Session: Headless`r`nWrite-Output 'fixture-alpha'`r`n",[Text.UTF8Encoding]::new($true))
@@ -34,4 +35,93 @@ $retained=@(Get-ChildItem -LiteralPath $base -Directory)
 if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Failed named run did not retain evidence or restore its environment' }
 $stderr=Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'
 if (!(Test-Path -LiteralPath $stderr) -or [IO.File]::ReadAllText($stderr) -notmatch 'fixture failure') { throw 'Failed test stderr was not retained' }
-Write-Output 'PASS: exact-name and group selection, side-effect-free listing, cleanup, failure evidence and environment restoration'
+# Benchmark options use the same binding boundary as the test runner.
+foreach ($benchmark in @('benchmark-storage.ps1','benchmark-ui.ps1')) {
+    $benchmarkPath=Join-Path $fixture $benchmark
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $benchmark) -Destination $benchmarkPath
+    $arguments=if ($benchmark -eq 'benchmark-storage.ps1') { @{SourceRoot=(Join-Path $fixture 'missing');SourceRoto='unused'} }
+        else { @{Counts=0;Countz=1} }
+    $rejected=$false
+    try { & $benchmarkPath @arguments | Out-Null }
+    catch [Management.Automation.ParameterBindingException] { $rejected=$true }
+    if (!$rejected) { throw "$benchmark did not reject a misspelled option before executing" }
+}
+# The same process owner handles successful, failing and unfinished child processes.
+$probe=Join-Path $runtime 'process-probe.ps1'
+[IO.File]::WriteAllText($probe,@'
+param([string]$Mode)
+[Console]::Out.WriteLine('probe stdout')
+[Console]::Error.WriteLine('probe stderr')
+if ($Mode -in @('timeout','invalid-timeout')) { Start-Sleep -Seconds 30 }
+if ($Mode -eq 'failure') { exit 17 }
+exit 0
+'@,[Text.UTF8Encoding]::new($true))
+foreach ($mode in @('success','failure','timeout','invalid-timeout')) {
+    $stdout=Join-Path $runtime ($mode+'.stdout.txt')
+    $stderr=Join-Path $runtime ($mode+'.stderr.txt')
+    $process=Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$probe+'"'),'-Mode',$mode -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $null=$process.Handle
+    $handle=$process.SafeHandle
+    $probeId=$process.Id
+    $probeStarted=$process.StartTime
+    $live=$null
+    try {
+        $failure=''
+        $timeout=if ($mode -eq 'invalid-timeout') { 0 } else { 5000 }
+        try { $code=Wait-TestProcess -Process $process -TimeoutMs $timeout }
+        catch { $failure=$_.Exception.Message }
+        if (!$handle.IsClosed) { throw "Process handle retained after $mode" }
+        $live=Get-Process -Id $probeId -ErrorAction SilentlyContinue
+        if ($live -and $live.StartTime -eq $probeStarted) { throw "Child process survived $mode" }
+        if ($mode -eq 'invalid-timeout') {
+            if ($failure -ne 'Test process timeout must be positive.') { throw 'Invalid timeout did not fail with cleanup' }
+        } elseif ($mode -eq 'timeout') {
+            if ($failure -notmatch '^Test process timed out after 5000ms') { throw "Timeout did not fail with cleanup: $failure" }
+        } else {
+            $expected=if ($mode -eq 'failure') { 17 } else { 0 }
+            if ($failure -or $code -ne $expected) { throw "Child exit code was lost: $mode / $failure" }
+        }
+        if ($mode -ne 'invalid-timeout' -and ([IO.File]::ReadAllText($stdout).Trim() -ne 'probe stdout' -or [IO.File]::ReadAllText($stderr).Trim() -ne 'probe stderr')) { throw "Child output was lost after $mode" }
+    } finally {
+        # If an assertion exposes a lifecycle bug, clean up only this exact child.
+        if (!$handle.IsClosed) {
+            try { if (!$process.HasExited) { $process.Kill(); $process.WaitForExit() } }
+            finally { $process.Dispose() }
+        }
+        if ($live) {
+            try { if ($live.StartTime -eq $probeStarted -and !$live.HasExited) { $live.Kill(); $live.WaitForExit() } }
+            finally { $live.Dispose() }
+        }
+    }
+}
+# Unhandled AHK failures must reach stderr and the process exit code, even from timers.
+foreach ($kind in @('synchronous','timer','caught')) {
+    $ahkRuntime=Join-Path $runtime ('ahk-'+$kind)
+    New-Item -ItemType Directory -Path $ahkRuntime | Out-Null
+    $source=@'
+#Requires AutoHotkey v2.0
+OnExit((reason,code) => FileAppend(reason "," code,A_ScriptDir "\exit.txt"))
+TriggerFixtureFailure(*) {
+    throw Error("AHK fixture failure")
+}
+'@
+    $source += "`r`n" + $(if ($kind -eq 'timer') {
+        "SetTimer(TriggerFixtureFailure,-10)`r`nSleep(1000)`r`nExitApp(0)`r`n"
+    } elseif ($kind -eq 'caught') {
+        "try TriggerFixtureFailure()`r`ncatch {`r`n    FileAppend('caught fixture failure', '*')`r`n}`r`nExitApp(0)`r`n"
+    } else { "TriggerFixtureFailure()`r`nExitApp(0)`r`n" })
+    $failure=''
+    try { Invoke-AhkTest -Runtime $ahkRuntime -Source $source -TimeoutMs 5000 | Out-Null }
+    catch { $failure=$_.Exception.Message }
+    $stderr=[IO.File]::ReadAllText((Join-Path $ahkRuntime 'stderr.txt'))
+    $exitFile=Join-Path $ahkRuntime 'exit.txt'
+    if (!(Test-Path -LiteralPath $exitFile)) { throw "AHK $kind failure skipped normal exit cleanup: $failure" }
+    if ($kind -eq 'caught') {
+        if ($failure -or $stderr -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,0') { throw 'Caught AHK exception was incorrectly treated as unhandled' }
+    } else {
+        if ($failure -notmatch '^Test failed \(1\):' -or $stderr -notmatch 'AHK fixture failure' -or $stderr -notmatch 'test\.ahk:\d+' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,1') {
+            throw "AHK $kind failure did not record its location and exit with cleanup: $failure"
+        }
+    }
+}
+Write-Output 'PASS: exact-name and group selection, side-effect-free listing, cleanup, failure evidence, environment restoration, process exit/timeout ownership and unhandled AHK errors'

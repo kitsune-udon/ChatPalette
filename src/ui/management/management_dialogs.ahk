@@ -1,151 +1,153 @@
 ﻿; Owned editors and their explicit save/cancel lifetime.
 
 OpenDanmakuEditor(isNew) {
-    global DanmakuEditorWindow
-    if !OperationAllowed("edit")
-        return
-    index := isNew ? 0 : GetSelectedManagedIndex()
-    if !isNew && !index
-        return
-    editId := GetEditingProfileId()
-    items := GetEditingDanmakuItems(), original := index ? items[index] : {Name:"",Text:"",Slot:0}
-    DanmakuEditorWindow := Gui("+Owner" ManagementWindow.Hwnd,"弾幕を" (isNew ? "追加" : "編集"))
-    DanmakuEditorWindow.SetFont("s10","Yu Gothic UI")
-    DanmakuEditorWindow.AddText("w420","編集対象：" ((editId = "") ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
-    DanmakuEditorWindow.AddText(,"弾幕名")
-    name := DanmakuEditorWindow.AddEdit("w420",original.Name)
-    DanmakuEditorWindow.AddText(,"本文（1行）")
-    text := DanmakuEditorWindow.AddEdit("w420",original.Text)
-    DanmakuEditorWindow.AddText(,"キーの割当 — 現在の割当を表示")
-    labels := ["割当なし"], assigned := Map()
-    for item in items
-        if ItemSlot(item)
-            assigned[ItemSlot(item)] := item.Name
-    Loop 2
-        labels.Push(ShortcutKeyLabel(GetShortcutKey((editId = "" ? "shared" : "profile") A_Index)) " — " assigned.Get(A_Index,"未割当"))
-    slot := DanmakuEditorWindow.AddDropDownList("w420 Choose" (ItemSlot(original)+1),labels)
-    assignmentHint := DanmakuEditorWindow.AddText("w420 r2","")
-    slot.OnEvent("Change",UpdateAssignment)
-    UpdateAssignment()
+    previousCritical := A_IsCritical, view := 0
+    Critical("On")
+    try {
+        if RestoreActiveEditorDialog() || !OperationAllowed("edit")
+            return
+        selected := isNew ? 0 : GetSelectedManagedTarget()
+        if !isNew && !selected
+            return
+        editId := selected ? selected.ProfileId : GetEditingProfileId()
+        items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},editId)
+        original := selected ? selected.Item : {Name:"",Text:"",Slot:0}
+        view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕を" (isNew ? "追加" : "編集"))
+        view.SetFont("s10","Yu Gothic UI")
+        view.AddText("w420","編集対象：" ((editId = "") ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
+        view.AddText(,"弾幕名")
+        name := view.AddEdit("w420",original.Name)
+        view.AddText(,"本文（1行）")
+        text := view.AddEdit("w420",original.Text)
+        view.AddText(,"キーの割当 — 現在の割当を表示")
+        labels := ["割当なし"], assigned := Map()
+        for item in items
+            if item.Slot
+                assigned[item.Slot] := item.Name
+        Loop 2
+            labels.Push(ShortcutKeyLabel(GetShortcutKey((editId = "" ? "shared" : "profile") A_Index)) " — " assigned.Get(A_Index,"未割当"))
+        slot := view.AddDropDownList("w420 Choose" (original.Slot+1),labels)
+        assignmentHint := view.AddText("w420 r2","")
+        slot.OnEvent("Change",UpdateAssignment)
+        UpdateAssignment()
+        view.IsDirty := (*) => !(name.Value == original.Name) || !(text.Value == original.Text) || slot.Value-1 != original.Slot
+        status := view.AddText("w420 r2","")
+        view.AddButton("w120 Default","保存").OnEvent("Click",Save)
+        view.AddButton("x+8 w120","キャンセル").OnEvent("Click",CloseDanmakuEditor.Bind(view))
+        view.OnEvent("Close",CloseDanmakuEditor.Bind(view))
+        view.OnEvent("Escape",CloseDanmakuEditor.Bind(view))
+        BeginEditorDialog(view,"弾幕の編集")
+        PresentWindow(view)
+    } catch as failure {
+        if view
+            DestroyEditorDialog(view)
+        throw failure
+    } finally Critical(previousCritical)
     UpdateAssignment(*) {
         chosen := slot.Value-1
-        assignmentHint.Text := chosen && assigned.Has(chosen) && chosen != ItemSlot(original)
+        assignmentHint.Text := chosen && assigned.Has(chosen) && chosen != original.Slot
             ? "保存すると「" assigned[chosen] "」のキーを解除し、この弾幕へ付け替えます。"
             : chosen ? "保存すると、この弾幕にキーを割り当てます。" : "キーでは呼び出さず、パレットから選んで使います。"
-    }
-    DanmakuEditorWindow.IsDirty := (*) => !(name.Value == original.Name) || !(text.Value == original.Text) || slot.Value-1 != ItemSlot(original)
-    status := DanmakuEditorWindow.AddText("w420 r2","")
-    DanmakuEditorWindow.AddButton("w120 Default","保存").OnEvent("Click",Save)
-    DanmakuEditorWindow.AddButton("x+8 w120","キャンセル").OnEvent("Click",CloseDanmakuEditor)
-    DanmakuEditorWindow.OnEvent("Close",CloseDanmakuEditor)
-    DanmakuEditorWindow.OnEvent("Escape",CloseDanmakuEditor)
-    try {
-        BeginEditorDialog(DanmakuEditorWindow,"弾幕の編集")
-        PresentWindow(DanmakuEditorWindow)
-    }
-    catch as failure {
-        FinishDanmakuEditor()
-        throw failure
     }
     Save(*) {
         if !Trim(name.Value) || !Trim(text.Value) {
             status.Text := "弾幕名と本文を入力してください。"
             return
         }
-        try result := ExecuteDanmakuCommand(index ? "edit" : "add",editId,index,{Name:name.Value,Text:text.Value,Slot:slot.Value-1})
+        try result := ExecuteDanmakuCommand(isNew ? "add" : "edit",editId,isNew ? "" : original.Id,{Name:name.Value,Text:text.Value,Slot:slot.Value-1})
         catch as failure {
             status.Text := "保存できませんでした。" failure.Message
             return
         }
-        FinishDanmakuEditor()
-        RefreshManagementAfterCommand(editId)
-        SelectManagedRow(result.Index)
+        FinishDanmakuEditor(view)
+        RefreshManagementAfterCommand(editId,result.Label "：保存済み",RenderManagedSelection.Bind(result.Index))
         if WinActive("ahk_id " ManagementWindow.Hwnd)
             ManagedList.Focus()
     }
 }
 
-CloseDanmakuEditor(*) {
-    if !DanmakuEditorWindow
+CloseDanmakuEditor(view,*) {
+    if !ActiveEditorDialog || ActiveEditorDialog.Window != view
         return
-    if DanmakuEditorWindow.IsDirty.Call() && !ConfirmEditorDiscard(DanmakuEditorWindow)
+    if view.IsDirty.Call() && !ConfirmEditorDiscard(view)
         return
-    FinishDanmakuEditor()
+    FinishDanmakuEditor(view)
 }
-FinishDanmakuEditor() {
-    global DanmakuEditorWindow
-    if !DanmakuEditorWindow
-        return
-    editor := DanmakuEditorWindow
-    restoreFocus := !!WinActive("ahk_id " editor.Hwnd)
-    ; The owner must be enabled before Windows chooses a successor to the dialog.
-    EndEditorDialog(editor)
-    editor.Destroy()
-    DanmakuEditorWindow := 0
-    RefreshOperationControls()
-    if restoreFocus && DllCall("IsWindowVisible", "Ptr", ManagementWindow.Hwnd)
-        && DllCall("IsWindowEnabled", "Ptr", ManagementWindow.Hwnd) {
-        WinActivate("ahk_id " ManagementWindow.Hwnd)
-        ManagedList.Focus()
-    }
+FinishDanmakuEditor(view) {
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        if !ActiveEditorDialog || ActiveEditorDialog.Window != view
+            return
+        restoreFocus := !!WinActive("ahk_id " view.Hwnd)
+        ; Restore the owner before Windows chooses a successor to the dialog.
+        DestroyEditorDialog(view)
+        if restoreFocus && DllCall("IsWindowVisible", "Ptr", ManagementWindow.Hwnd)
+            && DllCall("IsWindowEnabled", "Ptr", ManagementWindow.Hwnd) {
+            WinActivate("ahk_id " ManagementWindow.Hwnd)
+            ManagedList.Focus()
+        }
+    } finally Critical(previousCritical)
 }
 
 TransferItem(*) {
-    if !OperationAllowed("edit")
-        return
-    index := GetSelectedManagedIndex()
-    if !index
-        return
-    view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕の移動先")
-    view.SetFont("s10","Yu Gothic UI")
-    editId := GetEditingProfileId(), destinationIds := [], names := []
-    view.AddText("w380 r2","移動する弾幕：" GetEditingDanmakuItems()[index].Name)
-    view.AddText("w380 r2","移動元：" (editId = "" ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
-    view.AddText("w380 r2","移動先を選んでください。移動すると元の一覧から外れ、キーの割当も解除されます。")
-    if editId != ""
-        names.Push("共通の弾幕"), destinationIds.Push("")
-    for profile in Profiles {
-        if profile.Id == editId
-            continue
-        names.Push(profile.Name), destinationIds.Push(profile.Id)
-    }
-    target := view.AddDropDownList("w380 Choose1",names)
-    status := view.AddText("w380 r2","")
-    moveButton := view.AddButton("w100","移動")
-    moveButton.OnEvent("Click",Move)
-    moveButton.Enabled := names.Length > 0
-    if !names.Length
-        status.Text := "移動先がありません。先に配信者を追加してください。"
-    view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
-    view.OnEvent("Close",Close), view.OnEvent("Escape",Close)
+    previousCritical := A_IsCritical, view := 0
+    Critical("On")
     try {
+        if RestoreActiveEditorDialog() || !OperationAllowed("edit")
+            return
+        selected := GetSelectedManagedTarget()
+        if !selected
+            return
+        view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕の移動先")
+        view.SetFont("s10","Yu Gothic UI")
+        editId := selected.ProfileId, item := selected.Item, choices := []
+        view.AddText("w380 r2","移動する弾幕：" item.Name)
+        view.AddText("w380 r2","移動元：" (editId = "" ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
+        view.AddText("w380 r2","移動先を選んでください。移動すると元の一覧から外れ、キーの割当も解除されます。")
+        if editId != ""
+            choices.Push({Id:"",Name:"共通の弾幕"})
+        for profile in Profiles {
+            if profile.Id == editId
+                continue
+            choices.Push({Id:profile.Id,Name:profile.Name})
+        }
+        target := view.AddDropDownList("w380",[])
+        SyncProfileChoices(target,choices)
+        if choices.Length
+            target.Choose(1)
+        status := view.AddText("w380 r2","")
+        moveButton := view.AddButton("w100","移動")
+        moveButton.OnEvent("Click",Move)
+        moveButton.Enabled := choices.Length > 0
+        if !choices.Length
+            status.Text := "移動先がありません。先に配信者を追加してください。"
+        view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
+        view.OnEvent("Close",Close), view.OnEvent("Escape",Close)
         BeginEditorDialog(view,"弾幕の移動")
         PresentWindow(view)
-    }
-    catch as failure {
-        Close()
+    } catch as failure {
+        if view
+            DestroyEditorDialog(view)
         throw failure
-    }
+    } finally Critical(previousCritical)
     Close(*) {
-        EndEditorDialog(view)
-        view.Destroy()
+        if !ActiveEditorDialog || ActiveEditorDialog.Window != view
+            return
+        DestroyEditorDialog(view)
     }
     Move(*) {
         if !target.Value
             return
-        try result := ExecuteDanmakuCommand("move",editId,index,0,destinationIds[target.Value])
+        try result := ExecuteDanmakuCommand("move",editId,item.Id,0,GetSelectedProfileId(target))
         catch as failure {
             status.Text := "保存できませんでした。" failure.Message
             return
         }
         Close()
-        RefreshManagementAfterCommand(editId)
-        SetManagementNotice(result.Label "：保存済み")
+        RefreshManagementAfterCommand(editId,result.Label "：保存済み")
     }
 }
-
-
-
 
 OpenChannelLinkDialog(preferredProfileId := "",*) {
     if RestoreActiveEditorDialog() || !OperationAllowed("edit")
@@ -160,70 +162,81 @@ OpenChannelLinkDialog(preferredProfileId := "",*) {
         SetManagementNotice("チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。")
         return
     }
-    if preferredProfileId != "" && !FindProfileById(Profiles,preferredProfileId) {
-        SetManagementNotice("対象の配信者がありません。選び直してください。")
-        return
-    }
-    view := Gui("+Owner" ManagementWindow.Hwnd,"このチャンネルと連携")
-    view.SetFont("s10","Yu Gothic UI")
-    view.AddText("w440 r2","YouTubeのチャンネル：" candidate.Author)
-    view.AddText("w440","このチャンネルで自動選択する配信者")
-    names := ["新しい配信者として登録"], ids := [""], selected := 1
-    for profile in Profiles {
-        names.Push(profile.Name), ids.Push(profile.Id)
-        if preferredProfileId != "" ? profile.Id == preferredProfileId : profile.Channel == candidate.Channel
-            selected := ids.Length
-    }
-    target := view.AddDropDownList("w440 Choose" selected,names)
-    nameLabel := view.AddText("w440","アプリ内で表示する名前")
-    name := view.AddEdit("w440",candidate.Author)
-    summary := view.AddText("w440 r5","")
-    status := view.AddText("w440 r2","")
-    target.OnEvent("Change",UpdateChoice)
-    name.OnEvent("Change",UpdateChoice)
-    view.AddButton("w180 Default","連携する").OnEvent("Click",Save)
-    view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
-    view.OnEvent("Close",Close),view.OnEvent("Escape",Close)
-    UpdateChoice()
+    previousCritical := A_IsCritical, view := 0
+    Critical("On")
     try {
+        if RestoreActiveEditorDialog() || !OperationAllowed("edit")
+            return
+        if preferredProfileId != "" && !FindProfileById(Profiles,preferredProfileId) {
+            SetManagementNotice("対象の配信者がありません。選び直してください。")
+            return
+        }
+        view := Gui("+Owner" ManagementWindow.Hwnd,"このチャンネルと連携")
+        view.SetFont("s10","Yu Gothic UI")
+        view.AddText("w440 r2","YouTubeのチャンネル：" candidate.Author)
+        view.AddText("w440","このチャンネルで自動選択する配信者")
+        choices := [{Id:"",Name:"新しい配信者として登録"}], selected := 1
+        for profile in Profiles {
+            choices.Push({Id:profile.Id,Name:profile.Name})
+            if preferredProfileId != "" ? profile.Id == preferredProfileId : profile.Channel == candidate.Channel
+                selected := choices.Length
+        }
+        target := view.AddDropDownList("w440",[])
+        SyncProfileChoices(target,choices), target.Choose(selected)
+        nameLabel := view.AddText("w440","アプリ内で表示する名前")
+        name := view.AddEdit("w440",candidate.Author)
+        summary := view.AddText("w440 r5","")
+        status := view.AddText("w440 r2","")
+        target.OnEvent("Change",UpdateChoice)
+        name.OnEvent("Change",UpdateChoice)
+        view.AddButton("w180 Default","連携する").OnEvent("Click",Save)
+        view.AddButton("x+8 w100","キャンセル").OnEvent("Click",Close)
+        view.OnEvent("Close",Close),view.OnEvent("Escape",Close)
+        UpdateChoice()
         BeginEditorDialog(view,"チャンネル連携")
         PresentWindow(view)
-    }
-    catch as failure {
-        Close()
+    } catch as failure {
+        if view
+            DestroyEditorDialog(view)
         throw failure
-    }
+    } finally Critical(previousCritical)
     UpdateChoice(*) {
-        isNew := target.Value = 1
+        try selectedId := GetSelectedProfileId(target)
+        catch as failure {
+            summary.Text := failure.Message
+            return
+        }
+        isNew := selectedId = ""
         name.Enabled := isNew, nameLabel.Enabled := isNew
-        selectedName := isNew ? name.Value : names[target.Value]
-        current := isNew ? "" : Profiles[FindProfileIndexById(Profiles,ids[target.Value])].Channel
+        selectedName := isNew ? name.Value : target.Text
+        current := isNew ? "" : FindProfileById(Profiles,selectedId).Channel
         summary.Text := (isNew ? "新しい配信者「" selectedName "」を作成します。" : "配信者「" selectedName "」の連携を設定します。")
             . "`n現在：" (current = "" ? "未連携" : current) "`n変更後：" candidate.Channel
             . "`n" (current != "" && !(current == candidate.Channel) ? "以前のチャンネルでは自動選択されなくなります。" : "このチャンネルで弾幕を自動選択します。")
     }
     Close(*) {
+        if !ActiveEditorDialog || ActiveEditorDialog.Window != view
+            return
         restore := !!WinActive("ahk_id " view.Hwnd)
-        EndEditorDialog(view)
-        view.Destroy()
+        DestroyEditorDialog(view)
         if restore
             WinActivate("ahk_id " ManagementWindow.Hwnd)
     }
     Save(*) {
         try {
+            selectedId := GetSelectedProfileId(target), submittedName := name.Value
             fresh := ResolveBrowserChannel(TargetBrowserHwnd)
             if fresh.State != "ok" || !(fresh.Channel == candidate.Channel)
                 throw Error("チャンネルが変わりました。連携画面を閉じて、もう一度開いてください。")
-            if target.Value = 1
-                result := ExecuteProfileCommand("add","",name.Value,candidate.Channel)
+            if selectedId = ""
+                result := ExecuteProfileCommand("add","",submittedName,candidate.Channel)
             else
-                result := ExecuteProfileCommand("bind",ids[target.Value],candidate.Channel)
+                result := ExecuteProfileCommand("bind",selectedId,candidate.Channel)
         } catch as failure {
             status.Text := "連携できませんでした。" failure.Message
             return
         }
         Close()
-        RefreshManagementAfterCommand(result.ProfileId)
-        SetManagementNotice("チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。")
+        RefreshManagementAfterCommand(result.ProfileId,"チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。")
     }
 }

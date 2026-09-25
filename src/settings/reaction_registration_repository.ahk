@@ -1,20 +1,6 @@
 ﻿; Durable browser registrations. JSON is a validated document inside SQLite, never a second settings file.
-CreateReactionRegistrationSchema(db,path) {
+CreateReactionRegistrationSchema(db) {
     db.Exec("CREATE TABLE reaction_registrations(browser TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL CHECK(json_valid(payload)))")
-    SplitPath(path,,&directory)
-    legacy := directory "\reaction_selectors.json"
-    if FileExist(legacy) {
-        if FileGetSize(legacy)>65536
-            throw Error("旧リアクション登録情報が上限を超えています。")
-        document := FileRead(legacy,"UTF-8")
-        if db.Scalar("SELECT json_valid(?)",document) != "1"
-            throw Error("旧リアクション登録情報が壊れています。元ファイルを確認してください。")
-        if db.Scalar("SELECT json_extract(?,'$.version')",document) != "1" || db.Scalar("SELECT json_type(?,'$.profiles')",document) != "array"
-            throw Error("旧リアクション登録情報の形式に対応していません。")
-        for row in db.Rows("SELECT value FROM json_each(?,'$.profiles')",document)
-            WriteReactionRegistration(db,row[1])
-    }
-    db.Exec("PRAGMA user_version=2")
 }
 ValidateReactionRegistration(db,payload) {
     if StrPut(payload,"UTF-8")>8192 || db.Scalar("SELECT json_valid(?)",payload) != "1"

@@ -11,17 +11,31 @@ Invoke-AppFixture -Body @'
     Assert(AutoMode=modeChange.AutoMode && LoadSettings(SettingsDatabasePath).AutoMode=modeChange.AutoMode,"common preference commit publishes auto mode after saving")
     modeChange.AutoMode := modeBefore
     ApplyPreferences(modeChange)
+    ; A captured reaction draft must not own or overwrite later key assignments.
+    reactionDraft := PaletteOptions(), reactionDraft.Reaction := DefaultReactionKind=1 ? 2 : 1
+    savedKeys := CurrentShortcutMap(), changedKeys := savedKeys.Clone(), changedKeys["reaction"] := "^+r"
+    SaveShortcutMap(changedKeys)
+    global KeyCalls := []
+    SaveReactionDefaults(reactionDraft)
+    persisted := LoadSettings(SettingsDatabasePath)
+    Assert(GetShortcutKey("reaction")=="^+r" && persisted.ShortcutKeys["reaction"]=="^+r" && KeyCalls.Length=0,"reaction defaults preserve a subsequently changed key without registration")
+    Assert(persisted.DefaultReactionKind=reactionDraft.Reaction && persisted.DefaultReactionCount=reactionDraft.Count
+        && persisted.DefaultReactionIntervalMs=reactionDraft.Interval,"reaction draft still saves its kind, count and interval")
+    SaveShortcutMap(savedKeys)
+    SaveReactionDefaults(CreateReactionOptions(preferences.DefaultReactionKind,preferences.DefaultReactionCount,preferences.DefaultReactionIntervalMs))
     libraryBefore := Profiles, sharedBefore := SharedDanmakuItems, historyBefore := LibraryHistory.Length
     preferences.DefaultReactionCount := 10
     SaveSettingsPreferences(preferences,SettingsDatabasePath)
     Assert(LoadSettings(SettingsDatabasePath).DefaultReactionCount=10,"dedicated preference API persists without a library")
     Assert(Profiles=libraryBefore && SharedDanmakuItems=sharedBefore && LibraryHistory.Length=historyBefore,"preference persistence leaves library and history untouched")
     SaveSettingsPreferences(CreatePreferences(),SettingsDatabasePath)
-    global KeyCalls := []
+    KeyCalls := []
     oldPreferences := CreatePreferences(), savedPath := SettingsDatabasePath
     SettingsDatabasePath := A_ScriptDir "\missing\preferences.db"
     failed := false
-    try SaveReactionDefaults(CreateReactionOptions(2,10,25,"^+r"))
+    combinedChange := CreatePreferences(), combinedChange.DefaultReactionKind := 2, combinedChange.DefaultReactionCount := 10
+    combinedChange.DefaultReactionIntervalMs := 25, combinedChange.ShortcutKeys["reaction"] := "^+r"
+    try ApplyPreferences(combinedChange)
     catch
         failed := true
     SettingsDatabasePath := savedPath
@@ -45,12 +59,13 @@ Invoke-AppFixture -Body @'
     ReloadAppSettings()
     priorKey := ShortcutKeys["reaction"]
     failed := false
-    try SaveReactionDefaults(CreateReactionOptions(1,1,100,"^!q"))
+    conflictingKeys := CurrentShortcutMap(), conflictingKeys["reaction"] := "^!q"
+    try SaveShortcutMap(conflictingKeys)
     catch
         failed := true
-    Assert(failed && ShortcutKeys["reaction"]=priorKey,"reserved key rejected transactionally")
+    Assert(failed && ShortcutKeys["reaction"]=priorKey,"duplicate key rejected transactionally")
     for interval in ReactionIntervals {
-        SaveReactionDefaults(CreateReactionOptions(1,1,interval,priorKey))
+        SaveReactionDefaults(CreateReactionOptions(1,1,interval))
         Assert(LoadSettings(SettingsDatabasePath).DefaultReactionIntervalMs=interval,"interval persisted " interval)
     }
     for count in ReactionCounts {
@@ -61,12 +76,12 @@ Invoke-AppFixture -Body @'
     }
 
     schemaPath := A_ScriptDir "\schema-check.db"
-    schemaState := CreateSettingsSnapshot()
+    schemaState := CreateTestSettingsSnapshot()
     schemaState.SharedDanmakuItems := [
-        {Name:Chr(34) "quoted label" Chr(34), Text:"  👏👏  "},
-        {Name:"quoted text", Text:Chr(34) "👏" Chr(34)},
-        {Name:"single quotes", Text:"'👏'"}]
-    SaveSettings(schemaState, schemaPath)
+        {Id:"quotes-label",Name:Chr(34) "quoted label" Chr(34), Text:"  👏👏  ",Slot:0},
+        {Id:"quotes-body",Name:"quoted text", Text:Chr(34) "👏" Chr(34),Slot:0},
+        {Id:"single-quotes",Name:"single quotes", Text:"'👏'",Slot:0}]
+    OpenSettingsRepository(schemaPath).SaveAll(schemaState)
     roundTrip := LoadSettings(schemaPath)
     for i, expected in schemaState.SharedDanmakuItems {
         Assert(roundTrip.SharedDanmakuItems[i].Name == expected.Name, "database preserves label quotes")
@@ -77,22 +92,12 @@ Invoke-AppFixture -Body @'
         longText .= "👏"
     for length in [32767, 65534, 70000] {
         expected := SubStr(longText, 1, length - Mod(length, 2))
-        schemaState.SharedDanmakuItems := [{Name:"long",Text:expected}]
-        schemaState.Profiles[1].Items := [{Name:"long",Text:expected}]
-        SaveSettings(schemaState, schemaPath)
+        schemaState.SharedDanmakuItems := [{Id:"long-shared",Name:"long",Text:expected,Slot:0}]
+        schemaState.Profiles[1].Items := [{Id:"long-profile",Name:"long",Text:expected,Slot:0}]
+        OpenSettingsRepository(schemaPath).SaveAll(schemaState)
         actual := LoadSettings(schemaPath)
         Assert(actual.SharedDanmakuItems[1].Text == expected, "long shared text round-trip " length)
         Assert(actual.Profiles[1].Items[1].Text == expected, "long profile text round-trip " length)
-    }
-    legacyPath := A_ScriptDir "\legacy-reader.ini"
-    legacyText := "; comment`r`n[general]`r`nCount=0`r`n[commondanmaku]`r`nCount=2`r`nLabel1=' legacy '`r`nText1=" Chr(34) "  a=b;👏  " Chr(34) "`r`nLabel2=plain`r`nText2=  unquoted  `r`n"
-    for encoding in ["UTF-16", "UTF-8"] {
-        if FileExist(legacyPath)
-            FileDelete(legacyPath)
-        FileAppend(legacyText, legacyPath, encoding)
-        legacy := ReadLegacySettings(legacyPath)
-        Assert(legacy.SharedDanmakuItems[1].Name == " legacy " && legacy.SharedDanmakuItems[1].Text == "  a=b;👏  ", "legacy quotes, case and BOM " encoding)
-        Assert(legacy.SharedDanmakuItems[2].Text == "unquoted", "legacy unquoted whitespace " encoding)
     }
     LastReactionResult.Detail := "previous failure"
     completedJob := CreateReactionJob({StartedAt:0,Completed:0, Total:1, Cancelled:false})
@@ -102,20 +107,20 @@ Invoke-AppFixture -Body @'
     savedRoundTrip := FileRead(schemaPath,"RAW")
     schemaState.SharedDanmakuItems[1].Text := "first`nsecond"
     rejected := false
-    try SaveSettings(schemaState, schemaPath)
+    try OpenSettingsRepository(schemaPath).SaveAll(schemaState)
     catch
         rejected := true
     Assert(rejected && SameFileBytes(FileRead(schemaPath,"RAW"),savedRoundTrip) && !FileExist(schemaPath ".new"), "multiline text cannot corrupt persisted database")
     schemaState.SharedDanmakuItems[1].Text := "👏"
-    bulkState := CreateSettingsSnapshot()
+    bulkState := CreateTestSettingsSnapshot()
     bulkState.Profiles := [], bulkState.InputProfileId := ""
     Loop 50 {
         bulkProfile := {Name:"配信者" A_Index,Channel:"/channel/fixture" A_Index,Id:NewRecordId(),Items:[]}
         Loop 10
-            bulkProfile.Items.Push({Name:"弾幕" A_Index,Text:"  👏" Chr(34) "引用符" Chr(34) "👏  "})
+            bulkProfile.Items.Push({Id:NewRecordId(),Name:"弾幕" A_Index,Text:"  👏" Chr(34) "引用符" Chr(34) "👏  ",Slot:0})
         bulkState.Profiles.Push(bulkProfile)
     }
-    SaveSettings(bulkState, schemaPath)
+    OpenSettingsRepository(schemaPath).SaveAll(bulkState)
     bulkRead := LoadSettings(schemaPath)
     Assert(bulkRead.Profiles.Length = 50, "bulk save retains all sections")
     for i, profile in bulkRead.Profiles {
@@ -127,7 +132,7 @@ Invoke-AppFixture -Body @'
     blocker := SqliteConnection(schemaPath)
     blocker.Exec("BEGIN IMMEDIATE")
     failed := false
-    try SaveSettings(schemaState,schemaPath)
+    try OpenSettingsRepository(schemaPath).SaveAll(schemaState)
     catch
         failed := true
     finally {
@@ -139,7 +144,7 @@ Invoke-AppFixture -Body @'
     try {
         schemaState.DefaultReactionCount := 7
         schemaState.DefaultReactionIntervalMs := 75
-        SaveSettings(schemaState, schemaPath)
+        OpenSettingsRepository(schemaPath).SaveAll(schemaState)
         schemaRead := LoadSettings(schemaPath)
         Assert(schemaRead.DefaultReactionCount = 7 && schemaRead.DefaultReactionIntervalMs = 75, "store accepts options from shared schema")
         Assert(SettingOptionLabels(ReactionCounts, "回")[-1] = "7回" && SettingOptionLabels(ReactionIntervals, " ms")[-1] = "75 ms", "UI labels follow shared schema")

@@ -11,15 +11,23 @@ function Test-ReactionTokens($Tokens) {
     return $true
 }
 
+# Own only validated lookup fields; decoded input objects are never retained.
+function New-ReactionPlan($Tokens) {
+    if (!(Test-ReactionTokens $Tokens)) { throw 'Invalid registration tokens' }
+    return @{Tokens=@(foreach ($token in $Tokens) {
+        @{name=$token.name; id=$token.id; class=$token.class; type=$token.type}
+    })}
+}
+
 # Replace the in-memory snapshot only after every registration validates.
 function Set-ReactionRegistrationSnapshot([string]$Payload) {
     $saved = $Payload | ConvertFrom-Json
     if ($saved.version -ne 1 -or $saved.profiles -isnot [array]) { throw 'Invalid registration snapshot' }
     $candidate = @{}
     foreach ($entry in $saved.profiles) {
-        if ($entry.browser -isnot [string] -or $entry.browser -cnotmatch '^[a-z][a-z0-9_-]{0,63}$' -or !(Test-ReactionTokens $entry.tokens) -or $candidate.ContainsKey($entry.browser)) { throw 'Invalid registration entry' }
+        if ($entry.browser -isnot [string] -or $entry.browser -cnotmatch '^[a-z][a-z0-9_-]{0,63}$' -or $candidate.ContainsKey($entry.browser)) { throw 'Invalid registration entry' }
         # Accept only persisted fields, never caller-provided runtime plans.
-        $candidate[$entry.browser] = @{tokens=$entry.tokens}
+        $candidate[$entry.browser] = New-ReactionPlan $entry.tokens
     }
     $script:BrowserReactionSelectors = $candidate
     $script:ReactionElementCache.Clear()

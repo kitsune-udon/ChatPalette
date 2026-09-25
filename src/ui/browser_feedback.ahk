@@ -1,6 +1,6 @@
 ﻿; Result wording is shared by notifications and diagnostics.
 BrowserOperationLabel(mode) {
-    static modes := Map("なし","まだ実行していません", "resolve","配信者の自動判別", "verify","動画の確認",
+    static modes := Map("なし","まだ実行していません", "resolve","配信者の自動判別",
         "verify_input","チャット欄・コメント欄の確認", "browser_context","現在の動画の確認",
         "chat_clear","チャット欄のクリア", "chat_focus","チャット欄への移動", "verify_chat","チャット欄の確認", "reactions_show","リアクションUIの表示操作",
         "reaction_capture","リアクションボタンの登録", "reaction_check","リアクションの検出確認",
@@ -17,7 +17,7 @@ BrowserResultInfo(state) {
         "wrong_window","操作先が変わったため中止しました", "unavailable","情報を取得できませんでした",
         "unknown","操作結果を確認できませんでした", "cancelled","中止しました", "not_registered","操作ボタンが未登録です",
         "menu_closed","リアクションメニューが見つかりません", "unsupported","操作対象を識別できませんでした",
-        "cooldown","操作間隔が短いため停止しました", "save_failed","登録情報を保存できませんでした", "sync_failed","登録情報を同期できませんでした")
+        "save_failed","登録情報を保存できませんでした", "sync_failed","登録情報を同期できませんでした")
     static advice := Map("chat_missing","チャットの表示と入力可能な状態を確認してください。",
         "chat_ambiguous","操作する欄をクリックしてください。", "focus_failed","入力欄をクリックしてください。",
         "wrong_input","入力欄をクリックしてやり直してください。", "unsupported","YouTube側の操作対象を確認してください。",

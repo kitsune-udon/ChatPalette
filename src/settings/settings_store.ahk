@@ -20,9 +20,6 @@ LoadSettings(path) {
         throw failure
     }
 }
-SaveSettings(state,path) {
-    OpenSettingsRepository(path).SaveAll(state)
-}
 SaveLibrarySettings(library,inputProfileId,path) {
     OpenSettingsRepository(path).SaveLibrary(library,inputProfileId)
 }
@@ -40,16 +37,15 @@ CreateSettingsDatabase(path) {
     SplitPath(path,,&directory)
     if !DirExist(directory)
         throw Error("設定の保存先フォルダーがありません。")
-    legacy := directory "\settings.ini"
-    state := ReadLegacySettings(legacy)
+    state := CreateDefaultSettings()
     temporary := path ".creating-" NewRecordId(), store := 0
     try {
         store := SettingsRepository(temporary,true)
         store.SaveAll(state)
-        store.CheckIntegrity()
-        VerifySettingsMigration(state,store.Load())
+        store.Db.CheckIntegrity()
+        VerifySettingsRoundTrip(state,store.Load())
         store.Close(), store := 0
-        ; Never replace an existing database. An interrupted attempt leaves the INI intact.
+        ; Publish only a complete database; never replace an existing file.
         FileMove(temporary,path,false)
     } finally {
         if store
@@ -60,32 +56,32 @@ CreateSettingsDatabase(path) {
             FileDelete(temporary "-journal")
     }
 }
-VerifySettingsMigration(expected,actual) {
+VerifySettingsRoundTrip(expected,actual) {
     if expected.Profiles.Length != actual.Profiles.Length || !(expected.InputProfileId == actual.InputProfileId)
-        throw Error("配信者の移行結果が一致しません。")
+        throw Error("配信者の保存結果が一致しません。")
     for key in ["AutoMode","DefaultReactionKind","DefaultReactionCount","DefaultReactionIntervalMs"] {
         if !(expected.%key% == actual.%key%)
-            throw Error("共通設定の移行結果が一致しません。")
+            throw Error("共通設定の保存結果が一致しません。")
     }
     expectedKeys := expected.ShortcutKeys, actualKeys := actual.ShortcutKeys
     for action,key in expectedKeys
         if !(actualKeys[action] == key)
-            throw Error("ショートカットの移行結果が一致しません。")
-    VerifyMigratedItems(expected.SharedDanmakuItems,actual.SharedDanmakuItems)
+            throw Error("ショートカットの保存結果が一致しません。")
+    VerifyStoredItems(expected.SharedDanmakuItems,actual.SharedDanmakuItems)
     for i, profile in expected.Profiles {
         other := actual.Profiles[i]
         if !(profile.Id == other.Id) || !(profile.Name == other.Name) || !(profile.Channel == other.Channel)
-            throw Error("配信者の移行結果が一致しません。")
-        VerifyMigratedItems(profile.Items,other.Items)
+            throw Error("配信者の保存結果が一致しません。")
+        VerifyStoredItems(profile.Items,other.Items)
     }
 }
-VerifyMigratedItems(expected,actual) {
+VerifyStoredItems(expected,actual) {
     if expected.Length != actual.Length
-        throw Error("弾幕の移行件数が一致しません。")
+        throw Error("弾幕の保存件数が一致しません。")
     for i, item in expected {
         other := actual[i]
-        if !(item.Id == other.Id) || !(item.Name == other.Name) || !(item.Text == other.Text) || ItemSlot(item) != ItemSlot(other)
-            throw Error("弾幕の移行結果が一致しません。")
+        if !(item.Id == other.Id) || !(item.Name == other.Name) || !(item.Text == other.Text) || item.Slot != other.Slot
+            throw Error("弾幕の保存結果が一致しません。")
     }
 }
 BackupSettingsDatabase(destination) {

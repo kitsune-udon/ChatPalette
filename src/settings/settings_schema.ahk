@@ -22,9 +22,15 @@ ReactionIntervalLabels() {
 }
 
 ; Explicit reaction options for defaults and one palette execution.
-CreateReactionOptions(choice, count, interval, key) {
-    return {Reaction: choice, Count: count, Interval: interval, Key: key}
+CreateReactionOptions(choice, count, interval) {
+    return {Reaction: choice, Count: count, Interval: interval}
 }
 
 global RandomReactionKind := 6
 global ReactionNames := ["❤️ ハート", "😁 笑顔", "🎉 お祝い", "😲 驚き", "💯 100点", "ランダム（毎回）"]
+
+CreateDefaultSettings() {
+    return {Profiles:[], SharedDanmakuItems:[], InputProfileId:"", AutoMode:1,
+        DefaultReactionKind:ReactionDefaults.Choice, DefaultReactionCount:ReactionDefaults.Count,
+        DefaultReactionIntervalMs:ReactionDefaults.Interval, ShortcutKeys:DefaultShortcutKeys()}
+}

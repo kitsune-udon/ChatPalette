@@ -2,6 +2,12 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+# Inject ancestor property failures without querying the user's UIA tree.
+$pageActions=Join-Path $release 'src\browser\page_actions.ps1'
+$pageSource=[IO.File]::ReadAllText($pageActions)
+$parentRead='[System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)'
+if (($pageSource.Split(@($parentRead),[StringSplitOptions]::None)).Count -ne 2) { throw 'Launcher ancestry boundary missing' }
+[IO.File]::WriteAllText($pageActions,$pageSource.Replace($parentRead,'(Get-TestLauncherParent $element)'),[Text.UTF8Encoding]::new($true))
 . (Join-Path $release 'src\browser\browser_worker.ps1') -Library
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -10,6 +16,24 @@ function Assert($value,$label) { if (!$value) { throw "FAIL: $label" }; $script:
 $document=@{Id='';Class='';Type=50030}
 $chat=@{Id='';Class='yt-live-chat-renderer';Type=50033}
 function Launcher([string]$Id='',[string]$Name='') { return @{Id=$Id;Name=$Name;Class='';Type=50000;Enabled=$true;Hidden=$false} }
+$script:AncestorAttributeReads=0
+function Get-TestLauncherParent($Element) { return $Element.Parent }
+function LauncherAncestor([int]$Type,[long]$Handle,$Parent) {
+    $info=[pscustomobject]@{AutomationId='';ClassName='yt-live-chat-renderer';ControlType=[pscustomobject]@{Id=$Type};NativeWindowHandle=$Handle}
+    foreach ($property in @('Name','IsEnabled','IsOffscreen')) {
+        $info | Add-Member ScriptProperty $property { $script:AncestorAttributeReads++; throw 'Unused ancestor attribute is unavailable' }
+    }
+    return [pscustomobject]@{Current=$info;Parent=$Parent}
+}
+$ancestorDocument=LauncherAncestor 50030 0 $null
+$ancestorChat=LauncherAncestor 50026 0 $ancestorDocument
+$launcherTarget=[pscustomobject]@{Current=[pscustomobject]@{AutomationId='';ClassName='';ControlType=[pscustomobject]@{Id=50000};NativeWindowHandle=0;Name='Send a reaction';IsEnabled=$true;IsOffscreen=$false};Parent=$ancestorChat}
+$observed=@(Get-ReactionLauncherRecords $launcherTarget 123)
+Assert ($observed.Count -eq 3 -and (Test-ReactionLauncher $observed)) 'launcher remains recognizable when unused ancestor attributes are unavailable'
+Assert ($script:AncestorAttributeReads -eq 0) 'launcher ancestry reads only structural attributes'
+$ancestorChat.Parent=LauncherAncestor 50032 123 $null
+$observed=@(Get-ReactionLauncherRecords $launcherTarget 123)
+Assert ($observed.Count -eq 3 -and !(Test-ReactionLauncher $observed) -and $script:AncestorAttributeReads -eq 0) 'window boundary still rejects ancestry without a web document'
 foreach ($field in @((Launcher 'reaction-control-panel'),(Launcher 'reaction-button'),(Launcher '' 'Send a reaction'),(Launcher '' 'リアクションを送信'))) {
     Assert (Test-ReactionLauncher @($field,$chat,$document)) 'recognized launcher in chat'
     Assert (!(Test-ReactionLauncher @($field,$document))) 'launcher outside chat rejected'
@@ -29,6 +53,35 @@ Assert (Test-ReactionLauncher @($heart,$collapsed,$chat,$document)) 'observed Ch
 Assert (!(Test-ReactionLauncher @($heart,$chat,$document))) 'heart without collapsed launcher ancestry rejected'
 $heart.Class='style-scope yt-reaction-button-view-model'
 Assert (!(Test-ReactionLauncher @($heart,$collapsed,$chat,$document))) 'individual sending button never accepted as launcher'
+# Selection uses validated field snapshots, without querying the live elements.
+function Candidate($Field) {
+    $element=[pscustomobject]@{}
+    $element | Add-Member ScriptProperty Current { throw 'Selection must not reread UI Automation properties' }
+    return @{Element=$element;Field=$Field}
+}
+$collapsedField=Launcher '' '❤'
+$collapsedField.Class='yt-reaction-control-panel-button-view-model'
+$collapsedCandidate=Candidate $collapsedField
+$panelCandidate=Candidate (Launcher 'reaction-control-panel')
+$namedCandidate=Candidate (Launcher '' 'Send a reaction')
+$buttonCandidate=Candidate (Launcher 'reaction-button')
+foreach ($candidates in @(
+    @($collapsedCandidate), @($panelCandidate,$collapsedCandidate,$namedCandidate),
+    @($namedCandidate,$collapsedCandidate,$panelCandidate))) {
+    Assert ([object]::ReferenceEquals((Select-ReactionLauncher $candidates),$collapsedCandidate.Element)) 'unique collapsed launcher takes precedence regardless of discovery order'
+}
+foreach ($candidates in @(@($panelCandidate),@($namedCandidate,$panelCandidate),@($panelCandidate,$buttonCandidate,$namedCandidate))) {
+    Assert ([object]::ReferenceEquals((Select-ReactionLauncher $candidates),$panelCandidate.Element)) 'unique exact panel takes precedence over other launchers'
+}
+foreach ($candidate in @($namedCandidate,$buttonCandidate)) {
+    Assert ([object]::ReferenceEquals((Select-ReactionLauncher @($candidate)),$candidate.Element)) 'single recognized fallback launcher is selected'
+}
+foreach ($candidates in @(
+    @(), @($namedCandidate,$buttonCandidate),
+    @($panelCandidate,(Candidate (Launcher 'reaction-control-panel')),$namedCandidate),
+    @($collapsedCandidate,(Candidate $collapsedField),$panelCandidate))) {
+    Assert ($null -eq (Select-ReactionLauncher $candidates)) 'missing or ambiguous preferred launchers have no fallback target'
+}
 $noPoint=[pscustomobject]@{}
 $noPoint | Add-Member ScriptMethod TryGetClickablePoint { param($point) return $false }
 Assert ($null -eq (Get-ReactionHoverPoint $noPoint)) 'unsupported hover point rejected without moving pointer'
@@ -42,8 +95,9 @@ function Test-ReactionForeground($WindowHandle) { return $script:foreground }
 function Test-ElementWindow($Element,$WindowHandle) { return $script:belongs }
 function Find-ChatInput($WindowHandle) { if (!$script:missing) { return $script:target } }
 function Find-ReactionLauncher($WindowHandle) { if (!$script:missing) { return $script:target } }
+$script:chatField=@{Id='input';Name='';Class='yt-live-chat-text-input-field-renderer';Type=50004;Focused=$false;Enabled=$true;Hidden=$false;Editable=$true}
 function Get-YouTubeInputRecords($Target,$WindowHandle) {
-    return @(@{Id='input';Name='';Class='yt-live-chat-text-input-field-renderer';Type=50004;Focused=$false;Enabled=$true;Hidden=$false;Editable=$true},$document)
+    return @($script:chatField,$document)
 }
 function Get-ReactionLauncherRecords($Target,$WindowHandle) { return @((Launcher 'reaction-control-panel'),$chat,$document) }
 function Focus-ChatElement($Target) {
@@ -69,6 +123,7 @@ function Request($Mode,$Expected='') {
     return Invoke-WorkerRequest @{Mode=$Mode;Window=123;Seq=1;Video=$Expected}
 }
 Assert ((Request 'chat_focus').State -eq 'focused' -and $script:focusCalls -eq 1) 'chat focus succeeds once'
+Assert (!$script:chatField.Focused) 'focus discovery preserves the observed input record'
 Assert ((Request 'reactions_show').State -eq 'hovered' -and $script:hoverCalls -eq 1) 'launcher hovered without registration or invocation'
 $script:missing=$true
 Assert ((Request 'chat_focus').State -eq 'chat_missing') 'missing chat is distinguished from focus failure'

@@ -30,25 +30,28 @@ NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extr
     try {
         waitView := CreateWorkerWait(mode)
         BeginWorkerWait(waitView)
-        started := A_TickCount
+        started := AppClockMs()
         ready := true
         if InStr(mode,"reaction_") = 1 {
             try ready := PrepareReactionRegistrations(hwnd)
-            catch {
-                StopBrowserWorker()
+            catch
                 ready := false
-            }
         }
         reply := ready ? SendWorkerRequest(hwnd, mode, expectedVideo, extra)
             : {State:"sync_failed",Author:"",Channel:"",Video:""}
         ; Display-only queries must not erase the operation the user is investigating.
         if mode != "reaction_status"
-            RecordBrowserOperation({Mode:mode, State:reply.State, Window:hwnd, Duration:A_TickCount-started})
+            RecordBrowserOperation({Mode:mode, State:reply.State, Window:hwnd, Duration:Round(AppClockMs()-started)})
         return reply
     } finally {
-        IsBrowserOperationBusy := false
-        if IsSet(waitView)
-            EndWorkerWait(waitView)
+        ; Release the request and restore its windows before another owner can enter.
+        cleanupCritical := A_IsCritical
+        Critical("On")
+        try {
+            IsBrowserOperationBusy := false
+            if IsSet(waitView)
+                EndWorkerWait(waitView)
+        } finally Critical(cleanupCritical)
     }
 }
 
@@ -61,11 +64,8 @@ VerifyInputTarget(hwnd, expectedVideo) {
     return RuntimePorts.VerifyInput ? RuntimePorts.VerifyInput.Call(hwnd,expectedVideo) : NativeVerifyInputTarget(hwnd,expectedVideo)
 }
 
+; Input orchestration owns foreground checks; this adapter verifies only video and field.
 NativeVerifyInputTarget(hwnd, expectedVideo) {
-    if !WinActive("ahk_id " hwnd)
-        return false
     result := RequestBrowserOperation(hwnd, "verify_input", expectedVideo)
-    if result.State = "ok" && (expectedVideo = "" || result.Video == expectedVideo) && WinActive("ahk_id " hwnd)
-        return true
-    return false
+    return result.State = "ok" && (expectedVideo = "" || result.Video == expectedVideo)
 }

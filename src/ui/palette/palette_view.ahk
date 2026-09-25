@@ -37,8 +37,7 @@
         PaletteOptionLabels.Push(PaletteWindow.AddText("x16 y480 w120 h20",label))
     PaletteChoice := PaletteWindow.AddDropDownList("x16 y490 w160", ReactionNames)
     PaletteCount := PaletteWindow.AddDropDownList("x184 y490 w120", SettingOptionLabels(ReactionCounts, "回"))
-    intervalLabels := ReactionIntervalLabels(), intervalLabels[1] := "待機なし"
-    PaletteInterval := PaletteWindow.AddDropDownList("x312 y490 w228", intervalLabels)
+    PaletteInterval := PaletteWindow.AddDropDownList("x312 y490 w228", ReactionIntervalLabels())
     PaletteInterval.OnEvent("Change",RefreshPaletteIntervalHint)
     PaletteIntervalHint := PaletteWindow.AddText("x16 y524 w524 h24", "処理間隔：処理時間を含みます。待機なしは追加待機なし。")
     PaletteStart := PaletteWindow.AddButton("x16 y556 w170 h32", "リアクションを開始（3秒後）")
@@ -117,14 +116,14 @@ OpenPaletteMenu(*) {
 
 
 RefreshPalette() {
+    UpdateTray()
     PaletteMode.Choose(AutoMode ? 1 : 2)
-    model := BuildPaletteContext(Profiles,InputProfileId,AutoMode,HasPaletteInputProfile(),DetectionMessage)
+    model := BuildPaletteContext(Profiles,GetPaletteInputProfile(),AutoMode,DetectionMessage)
     SyncProfileChoices(PaletteProfile,model.Choices)
     PaletteProfile.Choose(model.Choice)
     SetControlEnabled(PaletteProfile,model.CanChoose && OperationAllowed("preferences"))
     PaletteContext.Text := model.Context
     RefreshPaletteItems()
-    UpdateTray()
 }
 
 
@@ -136,13 +135,13 @@ RefreshPaletteItems() {
         CancelScheduledPaletteSearch()
         SetControlEnabled(PaletteInsert,false)
         SetControlEnabled(PaletteManageButton,false)
-        model := BuildPaletteItems(Profiles,SharedDanmakuItems,InputProfileId,HasPaletteInputProfile(),PaletteSearch.Value,ShortcutKeys)
+        model := BuildPaletteItems(GetPaletteInputProfile(),SharedDanmakuItems,PaletteSearch.Value,ShortcutKeys)
         rows := model.Rows
         position := BeginListRefresh(PaletteList,4)
         try {
             PaletteList.Delete()
             for row in rows
-                PaletteList.Add("",row.Shared ? "共通" : "配信者",row.Label,row.Key,row.ItemId)
+                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)
             ; Publish only after the native list and its backing rows agree.
             PaletteRows := rows
         } catch as failure {
@@ -159,6 +158,18 @@ RefreshPaletteItems() {
     }
 }
 
+; Native sorting changes row numbers; the hidden ID identifies the published row.
+GetSelectedPaletteRow() {
+    index := PaletteList.GetNext()
+    if !index
+        return 0
+    id := PaletteList.GetText(index,4)
+    for row in PaletteRows
+        if row.ItemId == id
+            return row
+    return 0
+}
+
 PaletteItemMatches(row, items) {
     if row.Index < 1 || row.Index > items.Length
         return false
@@ -173,12 +184,11 @@ InsertPaletteItem(*) {
         return
     if !OperationAllowed("input")
         return
-    index := PaletteList.GetNext()
-    if !index || index > PaletteRows.Length
+    row := GetSelectedPaletteRow()
+    if !row
         return
-    row := PaletteRows[index]
-    profile := row.Shared ? 0 : GetInputProfile()
-    items := row.Shared ? SharedDanmakuItems : (profile && profile.Id == row.ProfileId ? profile.Items : [])
+    shared := row.ProfileId = "", profile := shared ? 0 : GetInputProfile()
+    items := shared ? SharedDanmakuItems : (profile && profile.Id == row.ProfileId ? profile.Items : [])
     if !PaletteItemMatches(row,items) {
         RefreshPalette()
         return
@@ -231,7 +241,7 @@ ResetPaletteSession(*) {
 }
 
 PaletteOptions() {
-    return CreateReactionOptions(PaletteChoice.Value, ReactionCounts[PaletteCount.Value], ReactionIntervals[PaletteInterval.Value], ShortcutKeys["reaction"])
+    return CreateReactionOptions(PaletteChoice.Value, ReactionCounts[PaletteCount.Value], ReactionIntervals[PaletteInterval.Value])
 }
 
 StartPaletteReaction(*) {
@@ -254,9 +264,9 @@ SavePaletteDefaults(*) {
 PreviewPaletteItem(*) {
     if PaletteRefresh.Active
         return
-    index := PaletteList.GetNext()
-    SetControlEnabled(PaletteInsert,index > 0 && index <= PaletteRows.Length && !PaletteSearchPending && OperationAllowed("input"))
-    SetControlText(PalettePreview,index && index <= PaletteRows.Length ? PaletteRows[index].Text : "")
+    row := GetSelectedPaletteRow()
+    SetControlEnabled(PaletteInsert,!!row && !PaletteSearchPending && OperationAllowed("input"))
+    SetControlText(PalettePreview,row ? row.Text : "")
 }
 
 RefreshPaletteIntervalHint(*) {
@@ -278,8 +288,8 @@ ResizePalette(gui, state, width, height) {
 QueuePaletteSearch(*) {
     global PaletteSearchPending
     CancelScheduledPaletteSearch()
-    profile := GetInputProfile()
-    count := SharedDanmakuItems.Length + (profile && HasPaletteInputProfile() ? profile.Items.Length : 0)
+    profile := GetPaletteInputProfile()
+    count := SharedDanmakuItems.Length + (profile ? profile.Items.Length : 0)
     if count <= 200 {
         RefreshPaletteItems()
         return

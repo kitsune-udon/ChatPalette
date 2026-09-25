@@ -19,18 +19,14 @@ function Invoke-ReportProbe([string]$ReportPath) {
     $stderr=Join-Path $runtime 'stderr.txt'
     $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$entry+'"'),'-Checker',('"'+$checker+'"'),'-ReportPath',('"'+$ReportPath+'"'),'-Location',('"'+$runtime+'"'))
     $process=Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-    try {
-        $null=$process.Handle
-        if (!$process.WaitForExit(15000)) { $process.Kill(); $process.WaitForExit(); throw 'Report probe timed out' }
-        return $process.ExitCode
-    } finally { $process.Dispose() }
+    return Wait-TestProcess -Process $process -TimeoutMs 15000
 }
 # An invalid handle records a failed inspection without accessing a browser.
 $relative='reports [new]\report.json'
 $reportPath=Join-Path $runtime $relative
 if ((Invoke-ReportProbe $relative) -ne 1 -or !(Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw "Missing output directory or PowerShell-relative path was not handled; artifacts: $runtime" }
 $report=[IO.File]::ReadAllText($reportPath) | ConvertFrom-Json
-if (!$report.Error -or $report.VideoDetected -or $report.ChatDetected -or $report.Focus -ne 'not-run' -or $report.Hover -ne 'not-run') { throw 'Failed inspection was not recorded accurately' }
+if ($report.AddressDetected -isnot [bool] -or $report.AddressDetected -or !$report.Error -or $report.VideoDetected -or $report.ChatDetected -or $report.Focus -ne 'not-run' -or $report.Hover -ne 'not-run') { throw 'Failed inspection was not recorded accurately' }
 [IO.File]::WriteAllText($reportPath,'existing report')
 if ((Invoke-ReportProbe $relative) -eq 0 -or [IO.File]::ReadAllText($reportPath) -cne 'existing report') { throw 'Existing report was overwritten' }
 # Simulate another writer publishing after the initial existence check.

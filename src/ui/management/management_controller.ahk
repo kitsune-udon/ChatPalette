@@ -2,50 +2,46 @@
 GetEditingProfileId() {
     return FindProfileById(Profiles,EditingProfileId) ? EditingProfileId : ""
 }
-GetEditingDanmakuItems() {
-    return GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},GetEditingProfileId())
-}
-; Validate the displayed identity before interpreting the selected row as a library index.
-GetSelectedManagedIndex() {
+; Capture the validated item and its owner together; callers must not resolve the row again.
+GetSelectedManagedTarget() {
     index := ManagedList.GetNext()
     if !index
         return 0
-    items := GetEditingDanmakuItems()
+    profile := FindProfileById(Profiles,EditingProfileId)
+    items := profile ? profile.Items : SharedDanmakuItems
     if index <= items.Length && items[index].Id == ManagedList.GetText(index,4)
-        return index
+        return {ProfileId:profile ? profile.Id : "", Index:index, Item:items[index]}
     RefreshManagement()
     ManagedList.Modify(0,"-Select")
     UpdateManagementActions()
     SetManagementNotice("一覧を更新しました。操作する弾幕を選び直してください。")
     return 0
 }
-RefreshManagementAfterCommand(editId) {
+RefreshManagementAfterCommand(editId, message := "変更は保存済みです。", updateManagement := 0) {
     global EditingProfileId := FindProfileById(Profiles,editId) ? editId : ""
-    RefreshVisiblePalette()
-    RefreshManagement()
+    try {
+        RefreshLibraryViews(updateManagement)
+        SetManagementNotice(message)
+    } catch as failure {
+        SetManagementNotice("変更は保存済みです。画面を更新できませんでした。`n" failure.Message)
+    }
 }
 HandleDanmakuCommand(action, *) {
     if !OperationAllowed("edit")
         return
-    index := GetSelectedManagedIndex()
-    if !index
+    selected := GetSelectedManagedTarget()
+    if !selected
         return
-    editId := GetEditingProfileId()
-    try result := ExecuteDanmakuCommand(action,editId,index)
+    try result := ExecuteDanmakuCommand(action,selected.ProfileId,selected.Item.Id)
     catch as failure {
         SetManagementNotice("保存できませんでした。" failure.Message)
         return
     }
     if !result
         return
-    if action = "up" || action = "down" {
-        RefreshManagedOrder(index,result.Index)
-        RefreshVisiblePalette()
-    } else {
-        RefreshManagementAfterCommand(editId)
-        SelectManagedRow(result.Index)
-    }
-    SetManagementNotice(result.Label "：保存済み")
+    updateManagement := action = "up" || action = "down"
+        ? RenderManagedOrder.Bind(selected.Index,result.Index) : RenderManagedSelection.Bind(result.Index)
+    RefreshManagementAfterCommand(selected.ProfileId,result.Label "：保存済み",updateManagement)
 }
 UndoLibraryChange(*) {
     if !OperationAllowed("edit")
@@ -56,9 +52,8 @@ UndoLibraryChange(*) {
         SetManagementNotice("取り消しを保存できませんでした。" failure.Message)
         return
     }
-    RefreshManagementAfterCommand(editId)
     if label != ""
-        SetManagementNotice(label "を取り消しました。")
+        RefreshManagementAfterCommand(editId,label "を取り消しました。")
 }
 ManageProfile(action, *) {
     if !OperationAllowed("edit")
@@ -95,8 +90,7 @@ RunProfileDialog(action) {
     }
     if action = "add"
         editId := result.ProfileId
-    RefreshManagementAfterCommand(editId)
-    SetManagementNotice(result.Label "：保存済み")
+    RefreshManagementAfterCommand(editId,result.Label "：保存済み")
 }
 
 
@@ -119,7 +113,7 @@ SaveReactionDefaultsFromControls(*) {
         ReactionDefaultsStatusControl.Text := "実行が終わってから変更してください。"
         return
     }
-    draft := CreateReactionOptions(ReactionDefaultChoiceControl.Value,ReactionCounts[ReactionDefaultCountControl.Value],ReactionIntervals[ReactionDefaultIntervalControl.Value],ShortcutKeys["reaction"])
+    draft := CreateReactionOptions(ReactionDefaultChoiceControl.Value,ReactionCounts[ReactionDefaultCountControl.Value],ReactionIntervals[ReactionDefaultIntervalControl.Value])
     try SaveReactionDefaults(draft)
     catch as failure {
         RefreshReactionDefaultControls()
@@ -141,7 +135,7 @@ PrepareReaction(mode) {
 }
 
 ReturnToPalette(*) {
-    if RestoreActiveEditorDialog() || IsBrowserOperationBusy
+    if RestoreActiveEditorDialog() || CurrentOperationState().BrowserBusy
         return
     RefreshPaletteForTarget()
     ManagementWindow.Hide()
@@ -149,7 +143,7 @@ ReturnToPalette(*) {
 }
 
 LoadDefaultsAndReturn(*) {
-    if ActiveReactionJob || IsBrowserOperationBusy
+    if ActiveReactionJob || CurrentOperationState().BrowserBusy
         return
     ResetPaletteSession()
     ReturnToPalette()

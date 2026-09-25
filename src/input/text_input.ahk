@@ -1,20 +1,4 @@
-﻿DeliverText(text, hwnd, expectedVideo, activate := false) {
-    if activate {
-        try WinActivate("ahk_id " hwnd)
-        catch TargetError
-            return {State:"input_cancelled"}
-        if !WinWaitActive("ahk_id " hwnd, , 2)
-            return {State:"input_cancelled"}
-        KeyWait("Enter")
-        KeyWait("LButton")
-    }
-    if !IsTargetForeground(hwnd)
-        return {State:"input_cancelled"}
-    if !VerifyInputTarget(hwnd, expectedVideo)
-        return {State:"input_cancelled"}
-    return SendInputText(text)
-}
-SendInputText(text) {
+﻿SendInputText(text) {
     try {
         if RuntimePorts.Text
             RuntimePorts.Text.Call(text)

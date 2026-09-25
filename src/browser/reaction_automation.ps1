@@ -23,83 +23,66 @@ function Get-ReactionInvoker($Target) {
     return $null
 }
 
-function Get-ReactionGroup($Element) {
+function Get-ReactionTokens($Element) {
     $invokeCondition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::IsInvokePatternAvailableProperty, $true)
     $buttonCondition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
     $condition = New-Object System.Windows.Automation.OrCondition($invokeCondition, $buttonCondition)
-    $controls = @($Element.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition) |
-        Where-Object { -not $_.Current.IsOffscreen -and $_.Current.IsEnabled })
+    $records = @(
+        foreach ($control in $Element.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
+            $record = Get-ReactionRecord $control
+            if (!$record.Hidden -and $record.Enabled) { $record }
+        }
+    )
     $selected = @()
     $tokens = @()
     $missing = @()
     $ambiguous = @()
     $labels = @('ハート','笑顔','お祝い','驚き','100点')
     for ($i = 0; $i -lt 5; $i++) {
-        $matches = @($controls | Where-Object {
-            ($_.Current.Name + ' ' + $_.Current.AutomationId) -match $script:ReactionAliases[$i]
+        $matches = @($records | Where-Object {
+            ($_.Name + ' ' + $_.Id) -match $script:ReactionAliases[$i]
         })
         if ($matches.Count -eq 0) { $missing += $labels[$i]; continue }
         if ($matches.Count -gt 1) { $ambiguous += $labels[$i]; continue }
-        $control = $matches[0]
-        $info = $control.Current
-        $selected += ,$control
-        $tokens += @{name=$info.Name; id=$info.AutomationId; class=$info.ClassName; type=$info.ControlType.Id}
+        $record = $matches[0]
+        $selected += ,$record
+        $tokens += @{name=$record.Name; id=$record.Id; class=$record.Class; type=$record.Type}
     }
-    $script:ReactionDiagnostic = "操作対象=$($controls.Count)、識別=$($selected.Count)/5、不足=$($missing -join ',')、重複=$($ambiguous -join ',')"
+    $script:ReactionDiagnostic = "操作対象=$($records.Count)、識別=$($selected.Count)/5、不足=$($missing -join ',')、重複=$($ambiguous -join ',')"
     # Diagnostics only: inspect names near the already recognized controls.
     # Geometry is never used to select or click an unknown reaction.
-    $nearby = @($controls | Select-Object -First 40)
+    $nearby = @($records | Select-Object -First 40)
     if ($selected.Count -ge 2) {
-        $rect = $selected[0].Current.BoundingRectangle
-        if ($rect.Width -gt 0) {
-            $top = ($selected | ForEach-Object { $_.Current.BoundingRectangle.Top } | Measure-Object -Minimum).Minimum
-            $bottom = ($selected | ForEach-Object { $_.Current.BoundingRectangle.Bottom } | Measure-Object -Maximum).Maximum
-            $nearby = @($controls | Where-Object {
-                $r = $_.Current.BoundingRectangle
-                [Math]::Abs($r.Left - $rect.Left) -le $rect.Width -and $r.Top -ge ($top - $rect.Height) -and $r.Bottom -le ($bottom + $rect.Height)
-            })
+        try {
+            # One local observation per candidate; later geometry cannot change the filter.
+            $bounds = @{}
+            foreach ($record in $records) {
+                $bounds[$record.RuntimeId] = $record.Element.Current.BoundingRectangle
+                if ($null -eq $bounds[$record.RuntimeId]) { throw 'Candidate geometry is unavailable.' }
+            }
+            $rect = $bounds[$selected[0].RuntimeId]
+            if ($rect.Width -gt 0) {
+                $top = ($selected | ForEach-Object { $bounds[$_.RuntimeId].Top } | Measure-Object -Minimum).Minimum
+                $bottom = ($selected | ForEach-Object { $bounds[$_.RuntimeId].Bottom } | Measure-Object -Maximum).Maximum
+                $nearby = @($records | Where-Object {
+                    $r = $bounds[$_.RuntimeId]
+                    [Math]::Abs($r.Left - $rect.Left) -le $rect.Width -and $r.Top -ge ($top - $rect.Height) -and $r.Bottom -le ($bottom + $rect.Height)
+                })
+            }
+        } catch {
+            # Optional geometry must not discard identified buttons or candidate names.
         }
     }
     $names = @($nearby | ForEach-Object {
-        $name = [string]$_.Current.Name + ' {' + [string]$_.Current.AutomationId + '}'
+        $name = [string]$_.Name + ' {' + [string]$_.Id + '}'
         $name.Substring(0,[Math]::Min(80,$name.Length))
     })
     $nameText = $names -join ' | '
     $script:ReactionDiagnostic += '、近くのボタン名=[' + $nameText.Substring(0,[Math]::Min(700,$nameText.Length)) + ']'
-    if ($selected.Count -ne 5) { return $null }
-    $signatures = @($tokens | ForEach-Object { $_ | ConvertTo-Json -Compress })
-    if (@($signatures | Select-Object -Unique).Count -ne 5) { return $null }
-    return @{Elements=$selected; Tokens=$tokens; Class=$Element.Current.ClassName; Id=$Element.Current.AutomationId}
-}
-
-function Select-RegisteredReactions($Records, $Saved) {
-    $plan = New-ReactionPlan $Saved
-    if ($null -eq $plan) {
-        $script:ReactionLookupDiagnostic = '登録情報が不正です。5種類のボタンを再登録してください。'
-        return $null
-    }
-    return Select-ReactionRecords $Records $plan
-}
-
-function New-ReactionPlan($Saved) {
-    if (!(Test-ReactionTokens $Saved.tokens)) { return $null }
-    # Copy at the boundary: runtime registrations are replaced, never mutated.
-    $tokens = @(foreach ($token in $Saved.tokens) {
-        @{name=$token.name; id=$token.id; class=$token.class; type=$token.type}
-    })
-    return @{Tokens=$tokens}
-}
-
-function Get-ReactionPlan($Saved) {
-    if ($null -ne $Saved.PreparedPlan) { return $Saved.PreparedPlan }
-    $plan = New-ReactionPlan $Saved
-    if ($null -eq $plan) { return $null }
-    # The immutable registration owns its plan; replacing it releases the old plan.
-    if ($Saved -is [Collections.IDictionary]) { $Saved.PreparedPlan = $plan }
-    else { $Saved | Add-Member NoteProperty PreparedPlan $plan }
-    return $plan
+    if (!(Test-ReactionTokens $tokens)) { return $null }
+    return $tokens
 }
 
 function Select-ReactionRecords($Records, $Plan) {
@@ -120,8 +103,12 @@ function Select-ReactionRecords($Records, $Plan) {
         $diagnostics += "[$($token.name)] 一致=$exactCount、表示中=$($unique.Count)"
         if ($unique.Count -eq 1) {
             $record = @($unique.Values)[0]
-            if (!$record.RuntimeId -or !$selectedIds.Add([string]$record.RuntimeId)) { return $null }
-            $selected += ,$record.Element
+            if ($record.RuntimeId -and $selectedIds.Add([string]$record.RuntimeId)) {
+                $selected += ,$record.Element
+            } else {
+                # Finish this lookup's diagnostic even when identity cannot be trusted.
+                $diagnostics += "[$($token.name)] 識別情報が不明または重複"
+            }
         }
     }
     $script:ReactionLookupDiagnostic = '登録したボタンを直接検索: ' + ($diagnostics -join ' / ')
@@ -129,10 +116,10 @@ function Select-ReactionRecords($Records, $Plan) {
     return @{Elements=$selected}
 }
 
-function New-ReactionLookupCondition($Saved) {
+function New-ReactionLookupCondition($Plan) {
     # Capture accepts invokable Custom controls too. Lookup must preserve their types.
     $conditions = [System.Windows.Automation.Condition[]]@(
-        foreach ($token in $Saved.tokens) {
+        foreach ($token in $Plan.Tokens) {
             $name = [System.Windows.Automation.PropertyCondition]::new(
                 [System.Windows.Automation.AutomationElement]::NameProperty, [string]$token.name)
             $type = [System.Windows.Automation.PropertyCondition]::new(
@@ -144,9 +131,7 @@ function New-ReactionLookupCondition($Saved) {
     return [System.Windows.Automation.OrCondition]::new($conditions)
 }
 
-function Find-RegisteredReactions([long]$WindowHandle, $Saved) {
-    $plan = Get-ReactionPlan $Saved
-    if ($null -eq $plan) { return $null }
+function Find-RegisteredReactions([long]$WindowHandle, $Plan) {
     # Revalidate live properties every time; rescan only when references or registration are invalid.
     if ($script:ReactionElementCache.ContainsKey($WindowHandle)) {
         $entry = $script:ReactionElementCache[$WindowHandle]
@@ -207,15 +192,15 @@ function Register-ReactionSelectors($Request, $Reply) {
     $point = [System.Windows.Point]::new([double]$Request.X, [double]$Request.Y)
     $element = [System.Windows.Automation.AutomationElement]::FromPoint($point)
     if (-not (Test-ElementWindow $element ([long]$Request.Window))) { $Reply.State = 'wrong_window'; return $Reply }
-    $group = $null
+    $tokens = $null
     $diagnostics = @()
     for ($depth = 0; $depth -lt 7 -and $null -ne $element; $depth++) {
-        $group = Get-ReactionGroup $element
+        $tokens = Get-ReactionTokens $element
         $diagnostics += "階層${depth}: $script:ReactionDiagnostic"
-        if ($null -ne $group) { break }
+        if ($null -ne $tokens) { break }
         $element = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($element)
     }
-    if ($null -eq $group) {
+    if ($null -eq $tokens) {
         $Reply.State = 'unsupported'
         $Reply.Detail = $diagnostics -join ' / '
         if ($Reply.Detail.Length -gt 5000) { $Reply.Detail = $Reply.Detail.Substring(0,5000) }
@@ -223,7 +208,7 @@ function Register-ReactionSelectors($Request, $Reply) {
     }
     if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $Reply.Video) { $Reply.State = 'changed'; return $Reply }
     $browser = Get-BrowserProcessName ([long]$Request.Window)
-    $entry = @{browser = $browser.ToLowerInvariant(); tokens = $group.Tokens}
+    $entry = @{browser = $browser.ToLowerInvariant(); tokens = $tokens}
     $Reply.Detail = $entry | ConvertTo-Json -Depth 8 -Compress
     $Reply.State = 'captured'
     return $Reply

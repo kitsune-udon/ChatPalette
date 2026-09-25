@@ -30,12 +30,11 @@ SaveInputProfileId(id) {
     }
 }
 
-RebuildChannelIndex() {
-    global ChannelIndex
-    ChannelIndex := Map()
-    ChannelIndex.CaseSense := "On"
-    for p in Profiles {
-        if p.Channel != ""
-            ChannelIndex[p.Channel] := ChannelIndex.Has(p.Channel) ? "" : p.Id
-    }
+FindProfileByChannel(profiles, channel) {
+    if channel = ""
+        return 0
+    for profile in profiles
+        if profile.Channel == channel
+            return profile
+    return 0
 }

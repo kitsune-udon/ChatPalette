@@ -14,13 +14,8 @@ function Find-ChatInput([long]$WindowHandle, [ref]$Failure = ([ref]$null)) {
         foreach ($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
             try {
                 if (!(Test-ElementWindow $element $WindowHandle)) { continue }
-                # Links can also expose TextPattern; discard non-editable elements
-                # before walking their ancestry through a long live chat.
-                $field = Get-InputRecord $element $true
-                if (!$field.Enabled -or $field.Hidden -or !$field.Editable) { continue }
                 $records = @(Get-YouTubeInputRecords $element $WindowHandle)
                 # Discovery checks the same editable/chat ancestry before moving focus.
-                $records[0].Focused = $true
                 if ((Get-YouTubeInputKind $records) -eq 'chat') { $element }
             } catch { }
         }
@@ -52,9 +47,13 @@ function Get-ReactionLauncherRecords($Target, [long]$WindowHandle) {
     $element = $Target
     for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
         $info = $element.Current
-        $records += @{Id=$info.AutomationId; Class=$info.ClassName; Type=$info.ControlType.Id;
-            Name=$info.Name; Enabled=$info.IsEnabled; Hidden=$info.IsOffscreen}
-        if ($info.ControlType.Id -eq 50030 -or $info.NativeWindowHandle -eq $WindowHandle) { break }
+        $record = @{Id=$info.AutomationId; Class=$info.ClassName; Type=$info.ControlType.Id}
+        # Only the candidate needs a label and interaction state; ancestry is structural.
+        if ($depth -eq 0) {
+            $record.Name=$info.Name; $record.Enabled=$info.IsEnabled; $record.Hidden=$info.IsOffscreen
+        }
+        $records += $record
+        if ($record.Type -eq 50030 -or $info.NativeWindowHandle -eq $WindowHandle) { break }
         $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
     }
     return $records
@@ -72,20 +71,25 @@ function Find-ReactionLauncher([long]$WindowHandle) {
                 $info = $element.Current
                 if ($info.IsOffscreen -or !$info.IsEnabled -or
                     !(Get-ReactionLauncherKind @{Id=$info.AutomationId;Class=$info.ClassName;Name=$info.Name})) { continue }
-                if ((Test-ElementWindow $element $WindowHandle) -and
-                    (Test-ReactionLauncher @(Get-ReactionLauncherRecords $element $WindowHandle))) { $element }
+                if (!(Test-ElementWindow $element $WindowHandle)) { continue }
+                $records = @(Get-ReactionLauncherRecords $element $WindowHandle)
+                if (Test-ReactionLauncher $records) { @{Element=$element;Field=$records[0]} }
             } catch { }
         }
     )
-    # Chromium exposes the collapsed launcher as a heart-labelled Button. Its
-    # model class and collapsed ancestor distinguish it from sending buttons.
-    $buttons = @($matches | Where-Object { $_.Current.ClassName -match '\byt-reaction-control-panel-button-view-model\b' })
+    return Select-ReactionLauncher $matches
+}
+# Select from the already validated records; do not mix in later UIA observations.
+# The caller revalidates the chosen element immediately before pointer movement.
+function Select-ReactionLauncher($Candidates) {
+    # Chromium's collapsed launcher takes precedence over its surrounding panel.
+    $buttons = @($Candidates | Where-Object { (Get-ReactionLauncherKind $_.Field) -eq 'collapsed' })
     if ($buttons.Count -gt 1) { return $null }
-    if ($buttons.Count -eq 1) { return $buttons[0] }
+    if ($buttons.Count -eq 1) { return $buttons[0].Element }
     # Prefer the exact panel ID if a labelled child button is also exposed.
-    $panels = @($matches | Where-Object { $_.Current.AutomationId -eq 'reaction-control-panel' })
-    if ($panels.Count -eq 1) { return $panels[0] }
-    if ($matches.Count -eq 1) { return $matches[0] }
+    $panels = @($Candidates | Where-Object { $_.Field.Id -eq 'reaction-control-panel' })
+    if ($panels.Count -eq 1) { return $panels[0].Element }
+    if ($Candidates.Count -eq 1) { return $Candidates[0].Element }
     return $null
 }
 function Focus-ChatElement($Target) { $Target.SetFocus() }
@@ -145,7 +149,6 @@ function Invoke-PageAction($Request) {
             if ($null -eq $target) { $reply.State=$failure; return $reply }
             if (!(Test-ElementWindow $target $window)) { $reply.State='wrong_window'; return $reply }
             $records = @(Get-YouTubeInputRecords $target $window)
-            $records[0].Focused=$true
             if ((Get-YouTubeInputKind $records) -ne 'chat') { $reply.State='chat_missing'; return $reply }
             if ((Read-BrowserVideoId $window) -cne $video) { $reply.State='changed'; return $reply }
             if (!(Test-ReactionForeground $window)) { $reply.State='wrong_window'; return $reply }

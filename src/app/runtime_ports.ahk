@@ -20,3 +20,16 @@ class RuntimePorts {
 IsTargetForeground(hwnd) {
     return RuntimePorts.Foreground ? RuntimePorts.Foreground.Call(hwnd) : !!WinActive("ahk_id " hwnd)
 }
+
+; Monotonic milliseconds for deadlines, elapsed time, rendering and reaction pacing.
+AppClockMs() {
+    return RuntimePorts.Clock ? RuntimePorts.Clock.Call() : NativeAppClockMs()
+}
+
+NativeAppClockMs() {
+    static frequency := 0
+    if !frequency
+        DllCall("QueryPerformanceFrequency", "Int64*", &frequency)
+    DllCall("QueryPerformanceCounter", "Int64*", &counter := 0)
+    return counter * (1000 / frequency)
+}

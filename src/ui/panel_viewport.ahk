@@ -8,19 +8,24 @@ class PanelViewport {
         this.FocusHandler := ObjBindMethod(this,"FollowFocus")
         this.PendingResize := false, this.PendingOffset := 0
         this.UpdateHandler := ObjBindMethod(this,"FlushUpdates")
-        view.Opt("+Resize +MinSize160x160")
-        this.CaptureChildren()
-        if !layout
-            view.OnEvent("Size", ObjBindMethod(this, "Resize"))
-        this.ScrollHandler := ObjBindMethod(this, "Scroll")
-        this.WheelHandler := ObjBindMethod(this, "Wheel")
-
-        OnMessage(0x114, this.ScrollHandler)
-        OnMessage(0x115, this.ScrollHandler)
-        OnMessage(0x20A, this.WheelHandler)
-        ; Focus is sampled by an AHK timer only while the panel is visible.
+        this.SizeHandler := layout ? 0 : ObjBindMethod(this,"Resize")
+        this.ScrollHandler := ObjBindMethod(this,"Scroll")
+        this.WheelHandler := ObjBindMethod(this,"Wheel")
         this.ExitHandler := ObjBindMethod(this,"Dispose")
-        OnExit(this.ExitHandler)
+        try {
+            view.Opt("+Resize +MinSize160x160")
+            this.CaptureChildren()
+            if this.SizeHandler
+                view.OnEvent("Size",this.SizeHandler)
+            OnMessage(0x114,this.ScrollHandler)
+            OnMessage(0x115,this.ScrollHandler)
+            OnMessage(0x20A,this.WheelHandler)
+            ; Focus is sampled by an AHK timer only while the panel is visible.
+            OnExit(this.ExitHandler)
+        } catch as failure {
+            this.Dispose()
+            throw failure
+        }
     }
 
     CaptureChildren() {
@@ -180,7 +185,13 @@ class PanelViewport {
         OnMessage(0x115,this.ScrollHandler,0)
         OnMessage(0x20A,this.WheelHandler,0)
         SetTimer(this.FocusHandler,0)
+        if this.SizeHandler && DllCall("IsWindow","Ptr",this.Hwnd)
+            this.View.OnEvent("Size",this.SizeHandler,0)
         this.LastFocus := 0
+        ; Bound methods retain this object; unregistering alone leaves a reference cycle.
+        this.FocusHandler := this.UpdateHandler := this.SizeHandler := 0
+        this.ScrollHandler := this.WheelHandler := this.ExitHandler := 0
+        this.View := 0, this.Layout := 0, this.Children := []
     }
 
     FollowFocus() {
