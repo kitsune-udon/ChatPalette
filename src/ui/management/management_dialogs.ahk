@@ -4,7 +4,7 @@ OpenDanmakuEditor(isNew) {
     global DanmakuEditorWindow
     if !OperationAllowed("edit")
         return
-    index := isNew ? 0 : ManagedList.GetNext()
+    index := isNew ? 0 : GetSelectedManagedIndex()
     if !isNew && !index
         return
     editId := GetEditingProfileId()
@@ -91,8 +91,10 @@ FinishDanmakuEditor() {
 }
 
 TransferItem(*) {
-    index := ManagedList.GetNext()
-    if !index || !OperationAllowed("edit")
+    if !OperationAllowed("edit")
+        return
+    index := GetSelectedManagedIndex()
+    if !index
         return
     view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕の移動先")
     view.SetFont("s10","Yu Gothic UI")

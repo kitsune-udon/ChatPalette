@@ -40,15 +40,17 @@ Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。ブ�
 | UIAによるボタン検出 | [src/browser/reaction_automation.ps1](../../src/browser/reaction_automation.ps1) |
 | 常駐プロセスとの通信 | [src/browser/worker_client.ahk](../../src/browser/worker_client.ahk)、`browser_worker.ps1` |
 
-変更前に[状態の所有と確定順序](architecture.md)を確認してください。画面の選択値をそのまま保存済み状態へ代入する変更や、結果不明の操作を自動再送する変更は、既存の保証を崩します。
+変更前に[状態の所有](architecture.md#状態を混ぜない)と、対象に応じた[保存の契約](architecture.md#永続化の契約)・[画面更新の契約](architecture.md#キャッシュと画面更新)を確認してください。画面の選択値をそのまま保存済み状態へ代入する変更や、結果不明の操作を自動再送する変更は、既存の保証を崩します。
 
 ## テストを実行する
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
+# 一つのテストだけ実行
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Name test-sqlite.ps1
 ```
 
-AutoHotkeyが標準外の場所にある場合は、末尾へ `-AutoHotkeyPath '実行ファイルの絶対パス'` を追加します。成功時は終了コード0と全体のPASSを確認します。
+AutoHotkeyが標準外の場所にある場合は、末尾へ `-AutoHotkeyPath '実行ファイルの絶対パス'` を追加します。単体実行でも同じ指定を使え、環境変数`AHK_EXE`でも指定できます。明示したファイルが存在しない場合はエラーにし、別のインストール先へ切り替えません。未指定の場合だけ標準のインストール先を検索します。成功時は終了コード0と全体のPASSを確認します。
 
 テストは一時フォルダーへソースをコピーして実行します。実ブラウザーへの入力・リアクション送信・ネットワーク取得は代替処理を使いますが、画面生成やフォーカスを扱うテストはあります。操作できるWindowsセッションで実行し、途中で別のウィンドウへフォーカスを奪う操作を避けてください。
 
@@ -88,15 +90,19 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release
 4. ZIPを別フォルダーへ展開し、新規起動・弾幕の保存・再起動後の読み込みを確認します。保存・更新に変更がある場合は、[バックアップと復元](../user/maintenance.md#バックアップから復元する)も確認します。
 5. 差分と検証結果を確認してコミットします。pushや公開は別の操作です。
 
-`verify-release.ps1`は配布対象を一時フォルダーへ固定し、形式確認・全テスト・ZIP生成を同じコピーに対して実行します。テスト中に配布対象が変化した場合は失敗します。失敗時は作業フォルダーを残すため、表示されたパスで原因を調べます。作成途中のZIPを検証済みとして配布しないでください。
+`verify-release.ps1`は配布対象を一時フォルダーへ固定し、形式確認・全テスト・ZIP生成を同じコピーに対して実行します。テスト中に配布対象が変化した場合は失敗します。失敗時は作業フォルダーを残すため、表示されたパスで原因を調べます。ZIPの存在だけで検証完了と判断せず、終了コードと同名の検証記録も確認してください。
 
 `.validation.json`には版、検査日時、テスト群数、ZIPとソースマニフェストのSHA-256を記録します。実ブラウザーでの成功を示す記録ではありません。ブラウザー確認は別レポートとして保管します。
 
 ### 配布物の範囲
 
-収録対象は[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。バージョンの読み込みと形式判定も同ファイルの`Get-ReleaseVersion`に集約し、ソース検査・梱包・配布検証で共有します。同ファイルの`Copy-ReleaseFiles`を検証用コピー・ZIP梱包・配布テストの準備で共有するため、呼び出し側に別の収録一覧を作りません。ソース、文書、ライセンス、開発設定、テストと合成データを含み、`data/`・`.git/`・一時ファイルは含みません。ZIP内の`SHA256SUMS`は内容照合用であり、発行者を証明する署名ではありません。
+収録対象は[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。バージョンの読み込みと形式判定も同ファイルの`Get-ReleaseVersion`に集約し、ソース検査・梱包・配布検証で共有します。同ファイルの`Copy-ReleaseFiles`を検証用コピー・ZIP梱包・配布テストの準備で共有します。
 
-[build-release.ps1](../../scripts/build-release.ps1)は検証コマンドから呼ぶ梱包処理です。単独実行では検証済み配布物にならないため、通常のリリース入口には使いません。現在の配布はソース形式で、実行にはAutoHotkey v2とWindows PowerShell 5.1が必要です。
+ソース、文書、ライセンス、開発設定、テストと合成データを含み、`data/`・`.git/`・一時ファイルは含みません。ZIP内の`SHA256SUMS`は内容照合用であり、発行者を証明する署名ではありません。
+
+[build-release.ps1](../../scripts/build-release.ps1)は検証コマンドから呼ぶ梱包処理です。単独実行では検証済み配布物にならないため、通常のリリース入口には使いません。
+
+ZIPは一時ディレクトリ内で完成させてから、既存ファイルを上書きしない移動で正式名へ確定します。圧縮中の読み取り失敗では不完全なZIPを正式名へ残さず、一時出力を片付けるため、原因を解消後に同じ出力先で再実行できます。現在の配布はソース形式で、実行にはAutoHotkey v2とWindows PowerShell 5.1が必要です。
 
 形式だけ確認する場合は、次を実行します。
 

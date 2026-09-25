@@ -119,7 +119,7 @@ OpenPaletteMenu(*) {
 RefreshPalette() {
     PaletteMode.Choose(AutoMode ? 1 : 2)
     model := BuildPaletteContext(Profiles,InputProfileId,AutoMode,HasPaletteInputProfile(),DetectionMessage)
-    SyncChoiceNames(PaletteProfile,model.Names)
+    SyncProfileChoices(PaletteProfile,model.Choices)
     PaletteProfile.Choose(model.Choice)
     SetControlEnabled(PaletteProfile,model.CanChoose && OperationAllowed("preferences"))
     PaletteContext.Text := model.Context
@@ -207,7 +207,7 @@ ChangePaletteMode(*) {
 SelectPaletteProfile(*) {
     if !OperationAllowed("preferences")
         return
-    try SaveInputProfileSelection(PaletteProfile.Value)
+    try SaveInputProfileId(GetSelectedProfileId(PaletteProfile))
     catch as failure {
         RefreshPalette()
         PaletteHint.Text := "選択を保存できませんでした。" failure.Message

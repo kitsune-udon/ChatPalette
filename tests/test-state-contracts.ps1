@@ -2,6 +2,12 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+# Pause at the commit boundary only in the isolated runtime, allowing a real AHK timer to compete.
+$settingsPath = Join-Path $release 'src\settings\settings_service.ahk'
+$settingsSource = [IO.File]::ReadAllText($settingsPath)
+$commitAnchor = 'ApplyPreferences(state, persist := true) {'
+if (!$settingsSource.Contains($commitAnchor)) { throw 'Preference commit injection point missing' }
+[IO.File]::WriteAllText($settingsPath,$settingsSource.Replace($commitAnchor,$commitAnchor + "`r`n    ProbePreferenceCommit()"),[Text.UTF8Encoding]::new($true))
 $tests = @'
 global ContractChecks := 0
 try {
@@ -36,13 +42,38 @@ try {
     SaveInputProfileId(c)
     BuildManagement()
     EditingProfileId := b
+    RefreshPalette(), RefreshManagement()
+    oldBChoice := FindProfileIndexById(Profiles,b)
     ExecuteProfileCommand("delete",a)
     CheckContract(GetInputProfile().Id=c && GetEditingProfileId()=b,"deleting preceding profile preserves both independent identities")
     CheckContract(LoadSettings(SettingsDatabasePath).InputProfileId=c,"active identity persists without a list index")
+    ; The displayed choices still predate the deletion, as after a failed refresh.
+    ManagementTarget.Choose(oldBChoice+1)
+    ChangeManagementTarget()
+    CheckContract(EditingProfileId==b,"management resolves the displayed profile identity after preceding deletion")
+    PaletteProfile.Choose(oldBChoice)
+    SelectPaletteProfile()
+    CheckContract(InputProfileId==b && LoadSettings(SettingsDatabasePath).InputProfileId==b,"palette saves the displayed profile identity after preceding deletion")
+    SaveInputProfileId(c)
     UndoLibraryCommand()
     CheckContract(GetInputProfile().Id=c && GetEditingProfileId()=b,"undo restores order without retargeting either selection")
+    RefreshPalette(), RefreshManagement()
+    oldCChoice := FindProfileIndexById(Profiles,c)
     ExecuteProfileCommand("delete",c)
     CheckContract(!GetInputProfile() && InputProfileId="","deleting selected profile clears input target")
+    ManagementTarget.Choose(oldCChoice+1)
+    ChangeManagementTarget()
+    CheckContract(EditingProfileId==b && InStr(ManagementStatus.Text,"選び直してください"),"deleted management choice is rejected without choosing another profile")
+    PaletteProfile.Choose(oldCChoice)
+    SelectPaletteProfile()
+    CheckContract(InputProfileId="" && LoadSettings(SettingsDatabasePath).InputProfileId="" && InStr(PaletteHint.Text,"選び直してください"),"deleted palette choice is rejected without changing saved selection")
+    ManagementTarget.Choose(0)
+    ChangeManagementTarget()
+    CheckContract(EditingProfileId==b,"absent selection is not interpreted as shared items")
+    ManagementTarget.Choose(1)
+    ChangeManagementTarget()
+    CheckContract(EditingProfileId="","explicit shared choice selects shared items")
+    EditingProfileId := b
     UndoLibraryCommand()
     CheckContract(!GetInputProfile(),"undo does not reselect deleted input target")
     EditingProfileId := ""
@@ -142,11 +173,45 @@ try {
     SetReactionStatus("queued",false,"queued")
     QuickReaction()
     CheckContract(!ActiveReactionJob && queued.Phase="finished" && LastReactionResult.Reason="cancelled" && ReactionExecutionStatus.Final,"cancel during queued context request publishes terminal cancellation")
+    ; A queued selection change must run wholly before or after a preference edit.
+    global ProbePreferenceArmed := false, ProbePreferenceRuns := 0, ProbePreferenceTarget := b
+    for saveChange in [() => SaveAutoDetection(!AutoMode),
+        () => SaveReactionDefaults(CreateReactionOptions(DefaultReactionKind,DefaultReactionCount,DefaultReactionIntervalMs,"^+r")),
+        () => SaveShortcutMap(MapWithChangedFocusKey())] {
+        SaveInputProfileId(a)
+        ProbePreferenceRuns := 0, ProbePreferenceArmed := true
+        saveChange.Call()
+        deadline := A_TickCount+1000
+        while !ProbePreferenceRuns && A_TickCount<deadline
+            Sleep(10)
+        CheckContract(!ProbePreferenceArmed && ProbePreferenceRuns=1,"queued selection actually reaches preference commit boundary")
+        persisted := LoadSettings(SettingsDatabasePath)
+        CheckContract(InputProfileId==b && persisted.InputProfileId==b,"preference edit cannot overwrite a concurrent profile selection")
+        CheckContract(persisted.AutoMode=AutoMode && persisted.ShortcutKeys["reaction"]==ShortcutKeys["reaction"]
+            && persisted.ShortcutKeys["chat_focus"]==ShortcutKeys["chat_focus"],"concurrent selection retains committed preference values")
+    }
     FileAppend("PASS: " ContractChecks " identity, publication, storage-range and job-state checks`n","*")
     ExitApp()
 } catch as failure {
     FileAppend("FAIL: " failure.Message " at " failure.File ":" failure.Line "`n","**")
     ExitApp(1)
+}
+ProbePreferenceCommit() {
+    global ProbePreferenceArmed
+    if !IsSet(ProbePreferenceArmed) || !ProbePreferenceArmed
+        return
+    ProbePreferenceArmed := false
+    SetTimer(SelectProfileDuringPreferences,-1)
+    Sleep(30)
+}
+SelectProfileDuringPreferences() {
+    global ProbePreferenceRuns
+    SaveInputProfileId(ProbePreferenceTarget)
+    ProbePreferenceRuns++
+}
+MapWithChangedFocusKey() {
+    keys := CurrentShortcutMap(), keys["chat_focus"] := "^+f"
+    return keys
 }
 CancelQueuedContext(*) {
     global IsBrowserOperationBusy := true

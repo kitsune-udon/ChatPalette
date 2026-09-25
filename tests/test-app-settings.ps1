@@ -5,6 +5,12 @@ Invoke-AppFixture -Body @'
     preferences := CreatePreferences()
     Assert(!preferences.HasOwnProp("Profiles") && !preferences.HasOwnProp("SharedDanmakuItems"),"preferences carry no library payload")
     Assert(preferences.ShortcutKeys.Count=10 && !preferences.HasOwnProp("ReactionShortcut"),"all shortcuts have one state owner")
+    modeBefore := AutoMode, modeChange := CreatePreferences()
+    modeChange.AutoMode := !modeBefore
+    ApplyPreferences(modeChange)
+    Assert(AutoMode=modeChange.AutoMode && LoadSettings(SettingsDatabasePath).AutoMode=modeChange.AutoMode,"common preference commit publishes auto mode after saving")
+    modeChange.AutoMode := modeBefore
+    ApplyPreferences(modeChange)
     libraryBefore := Profiles, sharedBefore := SharedDanmakuItems, historyBefore := LibraryHistory.Length
     preferences.DefaultReactionCount := 10
     SaveSettingsPreferences(preferences,SettingsDatabasePath)
@@ -21,6 +27,13 @@ Invoke-AppFixture -Body @'
     SettingsDatabasePath := savedPath
     Assert(failed && ShortcutKeys["reaction"]=oldPreferences.ShortcutKeys["reaction"] && DefaultReactionCount=oldPreferences.DefaultReactionCount,"failed preference save preserves live defaults")
     Assert(KeyCalls.Length=4 && KeyCalls[4].Key=oldPreferences.ShortcutKeys["reaction"] && KeyCalls[4].Enabled && KeyCalls[3].Key="^+r" && !KeyCalls[3].Enabled,"failed preference save restores old hotkey and removes new key")
+    SettingsDatabasePath := A_ScriptDir "\missing\preferences.db"
+    failed := false
+    try SaveAutoDetection(!AutoMode)
+    catch
+        failed := true
+    SettingsDatabasePath := savedPath
+    Assert(failed && AutoMode=oldPreferences.AutoMode,"failed auto mode save leaves live state unchanged")
     reloaded := CreatePreferences()
     reloaded.DefaultReactionCount := 10, reloaded.ShortcutKeys["reaction"] := "^+r"
     SaveSettingsPreferences(reloaded,SettingsDatabasePath)

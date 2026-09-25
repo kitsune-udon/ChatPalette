@@ -14,6 +14,7 @@ global PerfChecks := 0
 try {
     a := ExecuteProfileCommand("add","","A","/channel/a").ProfileId
     b := ExecuteProfileCommand("add","","B","/channel/b").ProfileId
+    ExecuteProfileCommand("add","","untouched","/channel/untouched")
     for id in ["",a,b] {
         ExecuteDanmakuCommand("add",id,0,{Name:"first",Text:"first",Slot:1})
         ExecuteDanmakuCommand("add",id,0,{Name:"second",Text:"second",Slot:2})
@@ -26,6 +27,11 @@ try {
             index := action="up" ? 2 : 1
             result := ExecuteDanmakuCommand(action,id,index,{Name:"changed",Text:"changed",Slot:2},id=b ? a : b)
             CheckPerf(Fingerprint(old)==signature,"published history immutable: " id action)
+            for oldProfile in old.Profiles {
+                if oldProfile.Id == id || (action="move" && oldProfile.Id == (id=b ? a : b))
+                    continue
+                CheckPerf(FindProfileById(Profiles,oldProfile.Id)=oldProfile,"unchanged profile reused after item command: " id action)
+            }
             UndoLibraryCommand()
             CheckPerf(Fingerprint({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems})==signature,"undo restores data and slots: " id action)
             oldPath := SettingsDatabasePath, SettingsDatabasePath := A_ScriptDir "\missing\settings.ini"
@@ -42,6 +48,9 @@ try {
         old := {Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems}, signature := Fingerprint(old)
         ExecuteProfileCommand(action,a,action="bind" ? "/channel/new" : "changed")
         CheckPerf(Fingerprint(old)==signature,"profile metadata immutable: " action)
+        for oldProfile in old.Profiles
+            if !(oldProfile.Id == a)
+                CheckPerf(FindProfileById(Profiles,oldProfile.Id)=oldProfile,"other profiles reused after metadata command: " action)
         UndoLibraryCommand()
         CheckPerf(Fingerprint({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems})==signature,"profile undo: " action)
     }
@@ -54,11 +63,11 @@ try {
     Loop 30
         ExecuteDanmakuCommand("down","",1)
     for entry in LibraryHistory
-        CheckPerf(entry.Items[1]=item || entry.Items[2]=item,"unchanged item reused across history")
-    held := LibraryHistory[-1], signature := Fingerprint({Profiles:held.Profiles,SharedDanmakuItems:held.Items})
+        CheckPerf(entry.SharedDanmakuItems[1]=item || entry.SharedDanmakuItems[2]=item,"unchanged item reused across history")
+    held := LibraryHistory[-1], signature := Fingerprint(held)
     UndoLibraryCommand()
     ExecuteDanmakuCommand("edit","",1,{Name:"branch",Text:"branch",Slot:2})
-    CheckPerf(Fingerprint({Profiles:held.Profiles,SharedDanmakuItems:held.Items})==signature,"edit after undo does not mutate prior branch")
+    CheckPerf(Fingerprint(held)==signature,"edit after undo does not mutate prior branch")
     oldPath := SettingsDatabasePath, SettingsDatabasePath := A_ScriptDir "\missing\settings.ini"
     SaveReactionDefaults(CreateReactionOptions(DefaultReactionKind,DefaultReactionCount,DefaultReactionIntervalMs,ShortcutKeys["reaction"]))
     SaveAutoDetection(AutoMode)

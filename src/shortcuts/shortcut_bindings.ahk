@@ -48,6 +48,10 @@ HandleConfiguredShortcut(action,*) {
     return HandlePageShortcut(action,RegExReplace(GetShortcutKey(action),"[!^+]",""))
 }
 SaveShortcutMap(keys) {
-    state := CreatePreferences(), state.ShortcutKeys := keys.Clone()
-    ApplyPreferences(state)
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        state := CreatePreferences(), state.ShortcutKeys := keys.Clone()
+        ApplyPreferences(state)
+    } finally Critical(previousCritical)
 }

@@ -41,8 +41,12 @@ EndWorkerWait(view) {
     RefreshOperationControls()
 }
 
-ShowInputFailure() {
-    PaletteHint.Text := "入力できませんでした。YouTubeのチャット欄かコメント欄をクリックし、" ShortcutKeyLabel(GetShortcutKey("palette")) "を押してください。"
+ShowInputFailure(state) {
+    if state = "unknown" {
+        info := BrowserResultInfo(state)
+        PaletteHint.Text := info.Summary "。" info.Advice
+    } else
+        PaletteHint.Text := "入力できませんでした。YouTubeのチャット欄かコメント欄をクリックし、" ShortcutKeyLabel(GetShortcutKey("palette")) "を押してください。"
     ShowStatusTip(PaletteHint.Text,3500)
 }
 
@@ -135,23 +139,33 @@ EndListRefresh(list, state, keyColumn) {
     }
 }
 
-; Compare exact labels before crossing into the native control. No shared mutable cache.
-SyncChoiceNames(control, names) {
-    same := control.HasOwnProp("ChoiceNames") && control.ChoiceNames.Length = names.Length
-    if same {
-        for i, name in names {
-            if !(name == control.ChoiceNames[i]) {
-                same := false
-                break
-            }
-        }
+; Choice identities belong to the displayed labels, even when the live library changes.
+SyncProfileChoices(control, choices) {
+    sameNames := control.HasOwnProp("ProfileChoices") && control.ProfileChoices.Length = choices.Length
+    names := [], snapshot := []
+    for i, choice in choices {
+        names.Push(choice.Name)
+        snapshot.Push({Id:choice.Id,Name:choice.Name})
+        if sameNames && !(choice.Name == control.ProfileChoices[i].Name)
+            sameNames := false
     }
-    if same
-        return false
-    control.Delete()
-    control.Add(names)
-    control.ChoiceNames := names.Clone()
-    return true
+    if !sameNames {
+        control.ProfileChoices := []
+        control.Delete()
+        control.Add(names)
+    }
+    control.ProfileChoices := snapshot
+    return !sameNames
+}
+
+GetSelectedProfileId(control) {
+    index := control.Value
+    if !control.HasOwnProp("ProfileChoices") || index < 1 || index > control.ProfileChoices.Length
+        throw Error("配信者を選び直してください。")
+    id := control.ProfileChoices[index].Id
+    if id != "" && !FindProfileById(Profiles,id)
+        throw Error("選択した配信者が見つかりません。一覧から選び直してください。")
+    return id
 }
 
 RefreshOperationControls() {

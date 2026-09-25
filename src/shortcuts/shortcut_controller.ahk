@@ -72,7 +72,11 @@ RunPageAction(action, hwnd, releaseKey := "") {
                 result := {State:"cancelled"}
                 return false
             }
-            result := RequestBrowserOperation(hwnd,"verify_chat",result.Video)
+            if !result.HasOwnProp("Detail") || result.Detail = "" {
+                result := {State:"wrong_input"}
+                return false
+            }
+            result := RequestBrowserOperation(hwnd,"verify_chat",result.Video,"FocusToken=" result.Detail)
             if result.State = "ok" {
                 if !OperationAllowed("input") || !IsTargetForeground(hwnd) {
                     result := {State:"cancelled"}

@@ -56,10 +56,7 @@ CompleteFocusedDanmaku(focus,result) {
             return cancelled
         ; Verify the frozen item again after yielding to the worker.
         PlanDanmakuInput(request,context)
-        try SendInputText(plan.Text)
-        catch
-            return {State:"unknown"}
-        return {State:"inserted"}
+        return SendInputText(plan.Text)
     } catch {
         return cancelled
     }

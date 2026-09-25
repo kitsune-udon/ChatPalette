@@ -6,22 +6,30 @@ class SettingsRepository {
             throw Error("設定データベースが上限128MiBを超えています。")
         this.Path := path, this.Scopes := Map(), this.Scopes.CaseSense := "On", this.Loaded := create
         this.Db := SqliteConnection(path,create)
-        if create {
-            this.Db.ConfigureStorage()
-            this.Db.Transaction(ObjBindMethod(this,"CreateSchema"))
-        } else {
-            if this.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
-                throw Error("ChatPaletteの設定データベースではありません。")
-            version := this.Db.Scalar("PRAGMA user_version")
-            if version != "1" && version != "2" && version != "3"
-                throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
-            this.Db.ConfigureStorage()
-            if version = "1"
-                this.Db.Transaction(() => CreateReactionRegistrationSchema(this.Db,this.Path))
-            if version != "3"
-                this.Db.Transaction(() => CreateShortcutSchema(this.Db))
+        try {
+            if create {
+                this.Db.ConfigureStorage()
+                this.Db.Transaction(ObjBindMethod(this,"CreateSchema"))
+            } else {
+                if this.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
+                    throw Error("ChatPaletteの設定データベースではありません。")
+                version := this.Db.Scalar("PRAGMA user_version")
+                if version != "1" && version != "2" && version != "3"
+                    throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
+                this.Db.ConfigureStorage()
+                if version = "1"
+                    this.Db.Transaction(() => CreateReactionRegistrationSchema(this.Db,this.Path))
+                if version != "3"
+                    this.Db.Transaction(() => CreateShortcutSchema(this.Db))
+            }
+            this.Db.Exec("PRAGMA max_page_count=" (128*1024*1024//Integer(this.Db.Scalar("PRAGMA page_size"))))
+        } catch as failure {
+            ; Keep the schema error even if a broken connection cannot close cleanly.
+            try this.Db.Close()
+            catch {
+            }
+            throw failure
         }
-        this.Db.Exec("PRAGMA max_page_count=" (128*1024*1024//Integer(this.Db.Scalar("PRAGMA page_size"))))
     }
     CreateSchema() {
         this.Db.Exec("CREATE TABLE scopes(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, channel TEXT UNIQUE, position INTEGER NOT NULL CHECK(position>=0));"
@@ -106,13 +114,7 @@ class SettingsRepository {
         scopes := plan ? plan.Scopes : this.Scopes
         if values[1] != "" && (values[1] = "@shared" || !scopes.Has(values[1]))
             throw Error("選択中の配信者がありません。")
-        writePreferences := !this.HasOwnProp("PreferenceValues")
-        if !writePreferences {
-            for i, value in values
-                if !(value == this.PreferenceValues[i])
-                    writePreferences := true
-        }
-        version := this.Db.Transaction(() => this.Apply(plan,values,writePreferences))
+        version := this.Db.Transaction(() => this.Apply(plan,values))
         if plan
             this.Scopes := plan.Scopes
         this.PreferenceValues := values
@@ -134,25 +136,29 @@ class SettingsRepository {
             throw Error("設定が別の接続で変更されました。再起動して最新の設定を読み込んでください。")
         return version
     }
-    Apply(plan,values,writePreferences) {
+    Apply(plan,values) {
         version := this.VerifyDataVersion()
         if plan
             this.ApplyLibrary(plan)
-        if writePreferences {
-            baseChanged := !this.HasOwnProp("PreferenceValues")
-            if !baseChanged {
-                Loop 6
-                    if !(values[A_Index] == this.PreferenceValues[A_Index])
-                        baseChanged := true
+        previous := this.HasOwnProp("PreferenceValues") ? this.PreferenceValues : 0
+        baseChanged := !previous
+        if previous {
+            Loop 6 {
+                if !(values[A_Index] == previous[A_Index]) {
+                    baseChanged := true
+                    break
+                }
             }
-            if baseChanged
-                this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?,?)",values[1],values[2],values[3],values[4],values[5],values[6])
-            i := 6
-            for definition in ShortcutDefinitions() {
-                if definition.Id = "reaction"
-                    continue
-                this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=? AND key<>?",values[++i],definition.Id,values[i])
-            }
+        }
+        if baseChanged
+            this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?,?)",values[1],values[2],values[3],values[4],values[5],values[6])
+        i := 6
+        for definition in ShortcutDefinitions() {
+            if definition.Id = "reaction"
+                continue
+            i++
+            if !previous || !(values[i] == previous[i])
+                this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=?",values[i],definition.Id)
         }
         return version
     }

@@ -1,10 +1,10 @@
 ﻿; Pure presentation builders: no controls, timers, globals or browser calls.
 BuildPaletteContext(profiles, inputId, autoMode, matched, detectionMessage) {
-    names := []
+    choices := []
     for profile in profiles
-        names.Push(profile.Name)
+        choices.Push({Id:profile.Id,Name:profile.Name})
     index := FindProfileIndexById(profiles,inputId), profile := index ? profiles[index] : 0
-    return {Names:names, Choice:autoMode && !matched ? 0 : index,
+    return {Choices:choices, Choice:autoMode && !matched ? 0 : index,
         CanChoose:!autoMode && profiles.Length > 0,
         Context:"弾幕の入力対象：" (profile && matched ? profile.Name : "共通の弾幕のみ")
             . "`n" (autoMode ? detectionMessage : "手動選択：下の欄で配信者を選べます。")}
@@ -20,12 +20,12 @@ BuildPaletteItems(profiles, sharedItems, inputId, matched, query, keys := 0) {
 }
 BuildManagementPresentation(profiles, sharedItems, editId, keys := 0) {
     index := FindProfileIndexById(profiles,editId), profile := index ? profiles[index] : 0
-    names := ["共通の弾幕"], rows := []
+    choices := [{Id:"",Name:"共通の弾幕"}], rows := []
     for entry in profiles
-        names.Push(entry.Name)
+        choices.Push({Id:entry.Id,Name:entry.Name})
     id := profile ? profile.Id : ""
     CollectPresentationItems(rows,profile ? profile.Items : sharedItems,id,"",0,keys)
-    return {Names:names, Choice:index+1, ProfileId:id,
+    return {Choices:choices, Choice:index+1, ProfileId:id,
         HasProfile:!!profile, Rows:rows, Channel:profile ? "チャンネル：" (profile.Channel != "" ? profile.Channel : "チャンネル未連携") : "すべてのチャンネルで使う弾幕です。"}
 }
 CollectPresentationItems(rows, items, profileId, query := "", limit := 0, keys := 0) {

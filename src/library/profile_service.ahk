@@ -14,11 +14,6 @@ FindProfileById(profiles, id) {
     index := FindProfileIndexById(profiles,id)
     return index ? profiles[index] : 0
 }
-; Only GUI adapters translate list positions into IDs.
-SaveInputProfileSelection(index) {
-    if index >= 1 && index <= Profiles.Length
-        SaveInputProfileId(Profiles[index].Id)
-}
 SaveInputProfileId(id) {
     global InputProfileId
     previousCritical := A_IsCritical

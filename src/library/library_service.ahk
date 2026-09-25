@@ -35,7 +35,7 @@ CommitLibraryDraft(library, label) {
     previousCritical := A_IsCritical
     Critical("On")
     try {
-        before := {Profiles:Profiles, Items:SharedDanmakuItems, Label:label}
+        before := {Profiles:Profiles, SharedDanmakuItems:SharedDanmakuItems, Label:label}
         SaveLibraryDraft(library)
         LibraryHistory.Push(before)
         if LibraryHistory.Length > 30
@@ -51,7 +51,7 @@ UndoLibraryCommand() {
         if !LibraryHistory.Length
             return ""
         previous := LibraryHistory[-1]
-        SaveLibraryDraft({Profiles:previous.Profiles,SharedDanmakuItems:previous.Items})
+        SaveLibraryDraft(previous)
         LibraryHistory.Pop()
         return previous.Label
     } finally {
@@ -71,6 +71,7 @@ ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId :
             case "add", "edit":
                 if !IsObject(value) || !Trim(value.Name) || !Trim(value.Text)
                     throw Error("弾幕名と本文を入力してください。")
+                original := action = "edit" ? items[index] : 0
                 item := {Id:action = "add" ? NewRecordId() : items[index].Id, Name:Trim(value.Name), Text:value.Text, Slot:0}
                 if action = "add"
                     items.Push(item), selected := items.Length
@@ -78,6 +79,8 @@ ExecuteDanmakuCommand(action, profileId, index := 0, value := 0, destinationId :
                     items[index] := item
                 AssignItemSlot(items,selected,ItemSlot(value))
                 label := "「" item.Name "」の" (action = "add" ? "追加" : "編集")
+                if original && item.Name == original.Name && item.Text == original.Text && ItemSlot(value) = ItemSlot(original)
+                    return {Label:label, Index:selected, ProfileId:profileId}
             case "delete":
                 label := "「" items[index].Name "」の削除"
                 items.RemoveAt(index)
@@ -115,16 +118,21 @@ ExecuteProfileCommand(action, profileId := "", value := "", channel := "") {
         library := CreateLibraryDraft(), index := FindProfileIndexById(library.Profiles,profileId)
         if action != "add" && !index
             throw Error("対象の配信者が見つかりません。選び直してください。")
+        if (action = "add" || action = "rename") && !Trim(value)
+            throw Error("配信者名を入力してください。")
+        if action = "bind" && value = ""
+            throw Error("連携するチャンネルがありません。")
+        binding := action = "add" ? channel : (action = "bind" ? value : "")
+        if binding != "" {
+            for i, profile in library.Profiles
+                if (action = "add" || i != index) && profile.Channel == binding
+                    throw Error("既に「" profile.Name "」と連携しています。")
+        }
+        if action != "add" && action != "delete"
+            library.Profiles[index] := library.Profiles[index].Clone()
         switch action {
             case "add", "rename":
-                if !Trim(value)
-                    throw Error("配信者名を入力してください。")
                 if action = "add" {
-                    if channel != "" {
-                        for profile in library.Profiles
-                            if profile.Channel == channel
-                                throw Error("既に「" profile.Name "」と連携しています。")
-                    }
                     profileId := NewRecordId()
                     library.Profiles.Push({Id:profileId,Name:Trim(value),Channel:channel,Items:[]})
                 } else
@@ -135,28 +143,24 @@ ExecuteProfileCommand(action, profileId := "", value := "", channel := "") {
             case "unbind":
                 library.Profiles[index].Channel := "", label := "チャンネル連携の解除"
             case "bind":
-                if value = ""
-                    throw Error("連携するチャンネルがありません。")
-                for i, profile in library.Profiles
-                    if i != index && profile.Channel == value
-                        throw Error("既に「" profile.Name "」に連携されています。")
                 library.Profiles[index].Channel := value, label := "チャンネル連携の変更"
             default:
                 throw Error("不明な配信者操作です。")
         }
-        CommitLibraryDraft(library,label)
+        ; Metadata-only no-ops must not consume the bounded undo history.
+        if action = "add" || action = "delete"
+            || !(library.Profiles[index].Name == Profiles[index].Name)
+            || !(library.Profiles[index].Channel == Profiles[index].Channel)
+            CommitLibraryDraft(library,label)
         return {Label:label, ProfileId:profileId}
     } finally {
         Critical(previousCritical)
     }
 }
 
-; Clone profile metadata, sharing immutable item arrays until a command edits one.
+; Share immutable profiles and item arrays; clone the owner when a command edits it.
 CreateLibraryDraft() {
-    clonedProfiles := []
-    for profile in Profiles
-        clonedProfiles.Push(profile.Clone())
-    return {Profiles:clonedProfiles, SharedDanmakuItems:SharedDanmakuItems}
+    return {Profiles:Profiles.Clone(), SharedDanmakuItems:SharedDanmakuItems}
 }
 
 EditLibraryItems(library, profileId) {
@@ -167,8 +171,10 @@ EditLibraryItems(library, profileId) {
     index := FindProfileIndexById(library.Profiles,profileId)
     if !index
         throw Error("対象の配信者が見つかりません。選び直してください。")
-    library.Profiles[index].Items := library.Profiles[index].Items.Clone()
-    return library.Profiles[index].Items
+    profile := library.Profiles[index].Clone()
+    profile.Items := profile.Items.Clone()
+    library.Profiles[index] := profile
+    return profile.Items
 }
 
 SaveShortcutItemAssignments(profileId,firstId,secondId) {
@@ -178,18 +184,19 @@ SaveShortcutItemAssignments(profileId,firstId,secondId) {
     Critical("On")
     try {
         library := CreateLibraryDraft(), items := EditLibraryItems(library,profileId)
-        unmatched := (firstId != "") + (secondId != "")
+        unmatched := (firstId != "") + (secondId != ""), changed := false
         for i,item in items {
             slot := item.Id == firstId ? 1 : (item.Id == secondId ? 2 : 0)
             if slot
                 unmatched--
             if ItemSlot(item) != slot {
                 replacement := item.Clone(), replacement.Slot := slot
-                items[i] := replacement
+                items[i] := replacement, changed := true
             }
         }
         if unmatched
             throw Error("対象の弾幕が変更されました。画面を開き直してください。")
-        CommitLibraryDraft(library,"ショートカットの弾幕割当")
+        if changed
+            CommitLibraryDraft(library,"ショートカットの弾幕割当")
     } finally Critical(previousCritical)
 }

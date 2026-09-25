@@ -9,15 +9,19 @@ $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $zipPath = Join-Path $output "ChatPalette-$version.zip"
 if (Test-Path -LiteralPath $zipPath) { throw 'Release archive already exists. Use a new version or output directory.' }
 $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
+$payload = Join-Path $stage 'files'
+$temporaryZip = Join-Path $stage 'release.zip'
 try {
-    New-Item -ItemType Directory -Path $stage | Out-Null
-    Copy-ReleaseFiles $project $stage
-    $hashes = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
-        (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring($stage.Length + 1).Replace('\','/')
+    New-Item -ItemType Directory -Path $payload -Force | Out-Null
+    Copy-ReleaseFiles $project $payload
+    $hashes = @(Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
+        (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring($payload.Length + 1).Replace('\','/')
     })
-    [IO.File]::WriteAllLines((Join-Path $stage 'SHA256SUMS'), $hashes, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllLines((Join-Path $payload 'SHA256SUMS'), $hashes, [Text.UTF8Encoding]::new($false))
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zipPath)
+    [IO.Compression.ZipFile]::CreateFromDirectory($payload, $temporaryZip)
+    # Publish only a complete archive. Move refuses to overwrite a concurrent output.
+    [IO.File]::Move($temporaryZip, $zipPath)
     Write-Output $zipPath
 } finally {
     if (Test-Path -LiteralPath $stage) {

@@ -43,25 +43,31 @@ BackupSettingsForReset(path) {
     suffix := ".backup-" FormatTime(, "yyyyMMdd-HHmmss") "-" A_TickCount
     moved := []
     try {
+        SplitPath(path,,&directory)
+        files := []
         ; Preserve sidecar names relative to the renamed database for recovery.
-        for tail in ["", "-journal", "-wal", "-shm"] {
-            if FileExist(path tail) {
-                FileMove(path tail,path suffix tail,false)
-                moved.Push([path tail,path suffix tail])
-            }
-        }
+        for tail in ["", "-journal", "-wal", "-shm"]
+            files.Push([path tail,path suffix tail])
         for name in ["settings.ini","reaction_selectors.json"] {
-            legacy := AppDataDirectory "\" name
-            if FileExist(legacy) {
-                FileMove(legacy,legacy suffix,false)
-                moved.Push([legacy,legacy suffix])
+            legacy := directory "\" name
+            files.Push([legacy,legacy suffix])
+        }
+        for pair in files {
+            if FileExist(pair[1]) {
+                FileMove(pair[1],pair[2],false)
+                moved.Push(pair)
             }
         }
     } catch as failure {
+        unrestored := ""
         while moved.Length {
             pair := moved.Pop()
             try FileMove(pair[2],pair[1],false)
+            catch
+                unrestored .= "`n" pair[2] " → " pair[1]
         }
+        if unrestored != ""
+            throw Error(failure.Message "`n`n元に戻せなかったファイルがあります。退避先 → 元の場所：" unrestored)
         throw failure
     }
     return path suffix

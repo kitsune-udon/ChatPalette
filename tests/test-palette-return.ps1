@@ -10,7 +10,7 @@ try {
     BuildManagement()
     TargetBrowserHwnd := 123, AutoMode := true
     old := ExecuteProfileCommand("add","","Previous","/channel/previous")
-    SaveInputProfileSelection(FindProfileIndexById(Profiles,old.ProfileId))
+    SaveInputProfileId(old.ProfileId)
     SelectProfileFromBrowser(TargetBrowserHwnd)
     added := ExecuteProfileCommand("add","","Linked","/channel/return")
     ExecuteDanmakuCommand("add",added.ProfileId,0,{Name:"New",Text:"new danmaku",Slot:1})
@@ -29,7 +29,7 @@ try {
     AssertReturn(PaletteRows.Length=0 && InStr(PaletteContext.Text,"共通の弾幕のみ"),"failed detection never shows stale profile")
     AutoMode := false
     before := ResolveCalls
-    SaveInputProfileSelection(FindProfileIndexById(Profiles,added.ProfileId))
+    SaveInputProfileId(added.ProfileId)
     PaletteSearch.Value := "new"
     ReturnToPalette()
     AssertReturn(ResolveCalls=before && GetInputProfile().Id=added.ProfileId,"manual selection is preserved without detection")
@@ -39,7 +39,7 @@ try {
         channel := "/channel/" scenario
         entry := ExecuteProfileCommand("add","",scenario,scenario="linked-auto" ? channel : "")
         AutoMode := scenario!="unlinked-manual"
-        SaveInputProfileSelection(FindProfileIndexById(Profiles,entry.ProfileId))
+        SaveInputProfileId(entry.ProfileId)
         TestChannel := {State:scenario="failed-auto" ? "unavailable" : "ok",Channel:channel,Author:scenario,Video:"abcdefghijk"}
         visible := scenario="linked-auto" || scenario="unlinked-manual"
         for scope in ["",entry.ProfileId] {
@@ -68,7 +68,7 @@ try {
     }
     ; Manual input selection is independent of an unrelated editing target.
     AutoMode := false
-    SaveInputProfileSelection(FindProfileIndexById(Profiles,entry.ProfileId))
+    SaveInputProfileId(entry.ProfileId)
     ExecuteProfileCommand("rename",entry.ProfileId,"Renamed input profile")
     ReturnToPalette()
     AssertReturn(InStr(PaletteContext.Text,"Renamed input profile"),"profile rename refresh")
@@ -83,7 +83,7 @@ try {
     editProfile := ExecuteProfileCommand("add","","Edit target")
     ExecuteDanmakuCommand("add",editProfile.ProfileId,0,{Name:"One",Text:"profile-first",Slot:0})
     ExecuteDanmakuCommand("add",editProfile.ProfileId,0,{Name:"Two",Text:"profile-second",Slot:0})
-    SaveInputProfileSelection(FindProfileIndexById(Profiles,editProfile.ProfileId))
+    SaveInputProfileId(editProfile.ProfileId)
     RefreshPalette()
     PaletteList.Modify(0,"-Select")
     PaletteList.Modify(2,"Select")
@@ -135,7 +135,7 @@ try {
     ; Reopening from the palette must refresh actions synchronously for either scope.
     AutoMode := false, PaletteSearch.Value := ""
     buttonProfile := ExecuteProfileCommand("add","","Button states")
-    SaveInputProfileSelection(FindProfileIndexById(Profiles,buttonProfile.ProfileId))
+    SaveInputProfileId(buttonProfile.ProfileId)
     for scope in ["",buttonProfile.ProfileId] {
         Loop 3
             ExecuteDanmakuCommand("add",scope,0,{Name:"button" A_Index,Text:"button-" scope "-" A_Index,Slot:0})
@@ -157,7 +157,7 @@ try {
         }
     }
     emptyProfile := ExecuteProfileCommand("add","","Empty buttons")
-    SaveInputProfileSelection(FindProfileIndexById(Profiles,emptyProfile.ProfileId))
+    SaveInputProfileId(emptyProfile.ProfileId)
     ReturnToPalette()
     PaletteList.Modify(0,"-Select")
     OpenPaletteLibrary()

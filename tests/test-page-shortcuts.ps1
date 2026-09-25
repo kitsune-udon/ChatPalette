@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'app-fixture.ps1')
 Invoke-AppFixture -Body @'
     global PageCalls := [], ClearCalls := 0, PageForeground := true, PageFailure := "", PageSwitch := false
-    global FocusFailure := ""
+    global FocusFailure := "", PageFocusToken := "clear-proof", PageTargetChanged := false
     RuntimePorts.BrowserRequest := PageRequest
     RuntimePorts.Foreground := (hwnd) => PageForeground && hwnd=123
     RuntimePorts.ClearChat := () => CountClear()
@@ -14,6 +14,12 @@ Invoke-AppFixture -Body @'
     Assert(RunPageAction("chat_clear",123) && ClearCalls=1 && PageCalls.Length=2,"clear focuses and verifies before one deletion")
     Assert(LastBrowserOperation.Mode="chat_clear" && LastBrowserOperation.State="cleared" && LastBrowserOperation.Stage="クリアキー送信","diagnostics describe complete clear action")
     Assert(PageCalls[2].Mode="verify_chat" && PageCalls[2].Video="abcdefghijk","clear pins video from focus result")
+    Assert(PageCalls[2].Extra="FocusToken=clear-proof","clear pins the exact element from focus result")
+    PageTargetChanged := true
+    Assert(!RunPageAction("chat_clear",123) && ClearCalls=1,"another chat in the same video is not cleared")
+    PageTargetChanged := false, PageFocusToken := "", PageCalls := []
+    Assert(!RunPageAction("chat_clear",123) && ClearCalls=1 && PageCalls.Length=1,"missing focus identity prevents deletion before verification")
+    PageFocusToken := "clear-proof"
     for state in ["wrong_input","changed","unavailable","unknown"] {
         PageFailure := state, PageCalls := []
         Assert(!RunPageAction("chat_clear",123) && ClearCalls=1,"failed verification prevents deletion: " state)
@@ -51,10 +57,12 @@ Invoke-AppFixture -Body @'
 '@ -Helpers @'
 PageRequest(hwnd,mode,video,extra) {
     global PageForeground
-    PageCalls.Push({Mode:mode,Video:video})
+    PageCalls.Push({Mode:mode,Video:video,Extra:extra})
     if mode="chat_focus"
-        return {State:FocusFailure!="" ? FocusFailure : "focused",Video:"abcdefghijk"}
+        return {State:FocusFailure!="" ? FocusFailure : "focused",Video:"abcdefghijk",Detail:PageFocusToken}
     if mode="verify_chat" {
+        if PageTargetChanged && extra="FocusToken=clear-proof"
+            return {State:"wrong_input",Video:video}
         if PageSwitch
             PageForeground := false
         return {State:PageFailure!="" ? PageFailure : "ok",Video:video}

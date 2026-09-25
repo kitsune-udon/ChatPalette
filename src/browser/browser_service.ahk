@@ -3,11 +3,19 @@ IsBrowser(hwnd) {
     return RuntimePorts.BrowserIdentity ? RuntimePorts.BrowserIdentity.Call(hwnd) : NativeIsBrowser(hwnd)
 }
 
+BrowserNames() {
+    static names := Map("chrome.exe","Chrome", "msedge.exe","Edge", "firefox.exe","Firefox",
+        "brave.exe","Brave", "opera.exe","Opera", "vivaldi.exe","Vivaldi")
+    return names
+}
+
 NativeIsBrowser(hwnd) {
-    if !hwnd || !WinExist("ahk_id " hwnd)
+    if !hwnd
         return false
-    name := StrLower(WinGetProcessName("ahk_id " hwnd))
-    return name = "chrome.exe" || name = "msedge.exe" || name = "firefox.exe" || name = "brave.exe" || name = "opera.exe" || name = "vivaldi.exe"
+    try name := StrLower(WinGetProcessName("ahk_id " hwnd))
+    catch TargetError
+        return false
+    return BrowserNames().Has(name)
 }
 
 RequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "") {

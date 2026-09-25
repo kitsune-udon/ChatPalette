@@ -12,11 +12,11 @@ Invoke-AppFixture -Body @'
     plan := ResolveShortcutInput("profile",1,123)
     Assert(FixtureResolveCount=1 && plan.Text="A-one" && plan.Video="aaaaaaaaaaa","shortcut resolves profile and slot exactly once")
     FixtureCurrentVideo := "bbbbbbbbbbb"
-    Assert(!DeliverText(plan.Text,plan.Window,plan.Video) && FixtureSent.Length=0,"video change after resolving prevents any input")
+    Assert(DeliverText(plan.Text,plan.Window,plan.Video).State="input_cancelled" && FixtureSent.Length=0,"video change after resolving prevents any input")
     Assert(FixtureResolveCount=1,"delivery never re-resolves profile or list index")
     FixtureCurrentVideo := "aaaaaaaaaaa"
-    Assert(DeliverText(plan.Text,plan.Window,plan.Video) && FixtureSent[1]="A-one","unchanged target delivers the frozen text")
-    Assert(!DeliverText(plan.Text,plan.Window,plan.Video,true) && FixtureSent.Length=1,"closed palette target returns input failure without typing")
+    Assert(DeliverText(plan.Text,plan.Window,plan.Video).State="inserted" && FixtureSent[1]="A-one","unchanged target delivers the frozen text")
+    Assert(DeliverText(plan.Text,plan.Window,plan.Video,true).State="input_cancelled" && FixtureSent.Length=1,"closed palette target returns input failure without typing")
     rejected := false
     try ResolveDanmakuInput({ProfileId:"input-b",ItemId:Profiles[2].Items[1].Id,ExpectedText:"B-one",Window:123,Origin:"palette"})
     catch
@@ -40,5 +40,20 @@ Invoke-AppFixture -Body @'
     catch
         rejected := true
     Assert(rejected,"a replacement with identical text cannot reuse the selected identity")
+    global PartialInputAttempts := 0
+    RuntimePorts.Text := PartialInputFailure
+    FixtureSent := [], escaped := false
+    try RunDanmakuInput(() => plan,"shortcut")
+    catch
+        escaped := true
+    Assert(!escaped && PartialInputAttempts=1 && FixtureSent.Length=1,"partial input failure is handled without replay")
+    Assert(InStr(PaletteHint.Text,"結果を確認できません") && InStr(PaletteHint.Text,"自動では再実行しません"),"partial input failure is reported as unknown rather than not typed")
     FixtureInputMode := false
+'@ -Helpers @'
+PartialInputFailure(text) {
+    global PartialInputAttempts
+    PartialInputAttempts++
+    FixtureSent.Push(SubStr(text,1,2))
+    throw Error("Synthetic failure after partial input")
+}
 '@

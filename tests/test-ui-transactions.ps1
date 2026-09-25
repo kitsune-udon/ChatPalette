@@ -126,19 +126,40 @@ try {
     destination := ExecuteProfileCommand("add","","destination").ProfileId
     EditingProfileId := ""
     RefreshManagement()
-    ManagedList.Modify(1,"Select Focus")
-    movedId := SharedDanmakuItems[1].Id
-    TransferItem()
-    global ProbeAfterSaveFailure := true
-    failed := false
-    try ProbeCommitAction.Call()
-    catch as failure
-        failed := failure.Message == "fixture post-save refresh failure"
-    CheckUi(failed && !ActiveEditorDialog,"move closes committed editor before failed refresh")
-    saved := LoadSettings(SettingsDatabasePath)
-    CheckUi(GetLibraryItems(saved,destination).Length=1 && GetLibraryItems(saved,destination)[1].Id=movedId,"move remains saved after refresh failure")
-    ProbeAfterSaveFailure := false
-    RefreshManagement()
+    for action in ["duplicate","up","down","edit","transfer","delete"] {
+        selected := action="up" ? 2 : 1
+        ManagedList.Modify(0,"-Select")
+        ManagedList.Modify(selected,"Select Focus")
+        movedId := SharedDanmakuItems[selected].Id
+        TransferItem()
+        global ProbeAfterSaveFailure := true
+        failed := false
+        try ProbeCommitAction.Call()
+        catch as failure
+            failed := failure.Message == "fixture post-save refresh failure"
+        CheckUi(failed && !ActiveEditorDialog,"move closes committed editor before failed refresh: " action)
+        saved := LoadSettings(SettingsDatabasePath)
+        CheckUi(GetLibraryItems(saved,destination).Length=1 && GetLibraryItems(saved,destination)[1].Id=movedId,"move remains saved after refresh failure: " action)
+        ProbeAfterSaveFailure := false
+        remainingId := SharedDanmakuItems[1].Id, historyBefore := LibraryHistory.Length
+        CheckUi(ManagedList.GetText(selected,4)=movedId,"failed refresh leaves the moved item displayed: " action)
+        if action="edit"
+            OpenDanmakuEditor(false)
+        else if action="transfer"
+            TransferItem()
+        else
+            HandleDanmakuCommand(action)
+        CheckUi(!ActiveEditorDialog && !DanmakuEditorWindow,"stale selection cannot open an editor for another item: " action)
+        CheckUi(SharedDanmakuItems.Length=1 && SharedDanmakuItems[1].Id=remainingId && LibraryHistory.Length=historyBefore,"stale selection preserves library and history: " action)
+        saved := LoadSettings(SettingsDatabasePath)
+        CheckUi(saved.SharedDanmakuItems.Length=1 && saved.SharedDanmakuItems[1].Id=remainingId && GetLibraryItems(saved,destination).Length=1 && GetLibraryItems(saved,destination)[1].Id=movedId,"stale selection cannot change saved items: " action)
+        CheckUi(ManagedList.GetCount()=1 && ManagedList.GetText(1,4)=remainingId && !ManagedList.GetNext() && InStr(ManagementStatus.Text,"選び直してください"),"stale selection refreshes the view and requires a new selection: " action)
+        HandleDanmakuCommand("delete")
+        CheckUi(SharedDanmakuItems.Length=1 && LibraryHistory.Length=historyBefore,"repeated action without selection cannot delete an item: " action)
+        if action!="delete"
+            UndoLibraryCommand()
+        RefreshManagement()
+    }
     RuntimePorts.BrowserIdentity := (hwnd) => hwnd=ManagementWindow.Hwnd
     RuntimePorts.ResolveChannel := (hwnd) => {State:"ok",Author:"new channel",Channel:"/channel/new",Video:"abcdefghijk"}
     RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"not_registered"}

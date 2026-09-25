@@ -5,9 +5,7 @@
     if hwnd {
         try {
             process := StrLower(WinGetProcessName("ahk_id " hwnd))
-            browsers := Map("chrome.exe","Chrome", "msedge.exe","Edge", "firefox.exe","Firefox",
-                "brave.exe","Brave", "opera.exe","Opera", "vivaldi.exe","Vivaldi")
-            browser := browsers.Get(process, "対象外のブラウザー")
+            browser := BrowserNames().Get(process, "対象外のブラウザー")
         } catch {
             browser := "対象のウィンドウは閉じられています"
         }

@@ -113,7 +113,7 @@ RenderManagement() {
         return
     model := BuildManagementPresentation(Profiles,SharedDanmakuItems,EditingProfileId,ShortcutKeys)
     EditingProfileId := model.ProfileId
-    SyncChoiceNames(ManagementTarget,model.Names)
+    SyncProfileChoices(ManagementTarget,model.Choices)
     ManagementTarget.Choose(model.Choice)
     ManagementTitle.Text := "編集する弾幕"
     ManagementChannel.Text := model.Channel

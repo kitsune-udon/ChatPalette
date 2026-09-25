@@ -34,9 +34,9 @@ try {
     ; Exercise production delivery in our own edit, including literal AHK syntax.
     FixtureChat.Focus()
     literal := "日本語の弾幕 {Enter} ^!+#"
-    SendInputText(literal)
+    result := SendInputText(literal)
     Sleep(100)
-    CheckHotkey(FixtureChat.Value=literal,"IME-off delivery preserves Unicode and literal key syntax")
+    CheckHotkey(result.State="inserted" && FixtureChat.Value=literal,"IME-off delivery preserves Unicode and literal key syntax")
     ExecuteDanmakuCommand("add","",0,{Name:"queued",Text:"queued text",Slot:1})
     global QueueSent := []
     RuntimePorts.Text := (text) => QueueSent.Push(text)

@@ -68,6 +68,7 @@ RunDanmakuInput(resolve, origin) {
         return
     if origin = "palette"
         PaletteWindow.Hide()
-    if !DeliverText(plan.Text,plan.Window,plan.Video,origin = "palette")
-        ShowInputFailure()
+    result := DeliverText(plan.Text,plan.Window,plan.Video,origin = "palette")
+    if result.State != "inserted"
+        ShowInputFailure(result.State)
 }

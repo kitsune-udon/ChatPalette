@@ -40,9 +40,36 @@ try {
         }
     }
 } finally { [IO.File]::WriteAllBytes($versionFile,$originalVersion) }
-$out=Join-Path $release 'dist'
-& (Join-Path $release 'scripts\build-release.ps1') -OutputDirectory $out | Out-Null
-$version=([IO.File]::ReadAllText((Join-Path $release 'VERSION'))).Trim()
+# Lock an input after hashing so compression fails after opening its output archive.
+$builderPath=Join-Path $release 'scripts\build-release.ps1'
+$builderBytes=[IO.File]::ReadAllBytes($builderPath)
+$builderSource=[IO.File]::ReadAllText($builderPath)
+$archiveCalls=@($builderSource -split '\r?\n' | Where-Object { $_ -match '^    \[IO.Compression.ZipFile\]::CreateFromDirectory\(' })
+if ($archiveCalls.Count -ne 1) { throw 'Archive creation injection point missing' }
+$lockedArchiveCall=@'
+    $lockedInput=Get-ChildItem -LiteralPath $stage -Recurse -File -Filter 'README.md' | Select-Object -First 1
+    $inputLock=[IO.File]::Open($lockedInput.FullName,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)
+    try {
+ARCHIVE_CALL
+    } finally { $inputLock.Dispose() }
+'@
+$failedOutput=Join-Path $release 'dist'
+$version=Get-ReleaseVersion $release
+try {
+    [IO.File]::WriteAllText($builderPath,$builderSource.Replace($archiveCalls[0],$lockedArchiveCall.Replace('ARCHIVE_CALL',$archiveCalls[0])),[Text.UTF8Encoding]::new($true))
+    $rejected=$false
+    try { & $builderPath -OutputDirectory $failedOutput | Out-Null }
+    catch {
+        if ($_.Exception.InnerException -isnot [IO.IOException]) { throw }
+        $rejected=$true
+    }
+    if (!$rejected) { throw 'Compression accepted an exclusively locked input' }
+    if (Test-Path -LiteralPath (Join-Path $failedOutput "ChatPalette-$version.zip")) { throw 'Failed compression published an incomplete release archive' }
+    if (@(Get-ChildItem -LiteralPath $failedOutput -Force).Count) { throw 'Failed compression left temporary release artifacts' }
+} finally { [IO.File]::WriteAllBytes($builderPath,$builderBytes) }
+# Retry into the same directory, then validate the resulting archive below.
+$out=$failedOutput
+& $builderPath -OutputDirectory $out | Out-Null
 $zipPath=Join-Path $out "ChatPalette-$version.zip"
 $before=(Get-FileHash -LiteralPath $zipPath).Hash
 $archive=[IO.Compression.ZipFile]::OpenRead($zipPath)
@@ -102,4 +129,4 @@ try {
         throw 'Validation report overwrite protection failed for literal path'
     }
 } finally { [IO.File]::WriteAllBytes($runnerPath,$runnerSource) }
-Write-Output 'PASS: release contents, privacy exclusions, includes, checksums and overwrite protection.'
+Write-Output 'PASS: release contents, privacy exclusions, checksums, compression failure recovery and overwrite protection.'

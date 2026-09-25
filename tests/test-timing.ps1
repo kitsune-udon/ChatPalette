@@ -36,7 +36,7 @@ try {
     measured := CreateReactionJob({StartedAt:1000,Completed:0,Total:3,Cancelled:false})
     ActiveReactionJob := measured
     ApplyReactionResult(measured,{State:"operated"})
-    AssertTiming(measured.Measurement="","single operation has no interval")
+    AssertTiming(!InStr(ReactionExecutionStatus.Message,"平均開始間隔"),"single operation does not display an average interval")
     measured.StartedAt := 1200
     ApplyReactionResult(measured,{State:"operated"})
     measured.StartedAt := 1400

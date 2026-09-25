@@ -26,10 +26,22 @@ Invoke-AppFixture -Runtime $release -Body @'
     Assert(settingsY!=reactionY,"first palette frame separates notification rows")
     WinActivate("ahk_id " PaletteWindow.Hwnd)
     Assert(WinWaitActive("ahk_id " PaletteWindow.Hwnd,,2),"palette active before first click")
+    global PaletteClickCount := 0
+    PaletteManageButton.OnEvent("Click",RecordPaletteClick)
+    PaletteManageButton.GetPos(&clickX,&clickY,&clickWidth,&clickHeight)
+    clickReady := "enabled=" PaletteManageButton.Enabled " visible=" PaletteManageButton.Visible
+        . " refreshing=" PaletteRefresh.Active " search_pending=" PaletteSearchPending
+        . " bounds=" clickX "," clickY "," clickWidth "," clickHeight
     ControlClick(PaletteManageButton.Hwnd)
     deadline := A_TickCount+2000
     while !ManagementWindow && A_TickCount<deadline
         Sleep(10)
+    if !ManagementWindow {
+        policy := OperationPolicy("edit")
+        FileAppend("Palette click diagnostic: " clickReady " events=" PaletteClickCount
+            . " active=" (!!WinActive("ahk_id " PaletteWindow.Hwnd)) " edit_allowed=" policy.Allowed
+            . " refreshing=" PaletteRefresh.Active " search_pending=" PaletteSearchPending "`n","*")
+    }
     Assert(!!ManagementWindow,"first palette click creates management")
     Assert(WinWaitActive("ahk_id " ManagementWindow.Hwnd,,2),"first palette click opens management")
     coldControls := [ManagementTitle,ManagementTarget,ManagementAddProfileButton,ManagementProfileMenu,ManagedList,ManagementUndo,ManagementScopeHint]
@@ -95,4 +107,9 @@ Invoke-AppFixture -Runtime $release -Body @'
     ManagementWindow.Hide()
 
 
+'@ -Helpers @'
+RecordPaletteClick(*) {
+    global PaletteClickCount
+    PaletteClickCount++
+}
 '@

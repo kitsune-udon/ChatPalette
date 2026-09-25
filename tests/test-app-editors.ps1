@@ -64,9 +64,9 @@ Invoke-AppFixture -Body @'
     UndoLibraryChange()
     OpenDanmakuEditor(true)
     WinActivate("ahk_id " DanmakuEditorWindow.Hwnd)
-    WinWaitActive("ahk_id " DanmakuEditorWindow.Hwnd,,2)
+    Assert(WinWaitActive("ahk_id " DanmakuEditorWindow.Hwnd,,2),"editor is active before cancellation")
     CloseDanmakuEditor()
-    Assert(WinActive("ahk_id " ManagementWindow.Hwnd) && SharedDanmakuItems.Length=beforeFocusSave,"cancel restores panel without saving")
+    Assert(WinWaitActive("ahk_id " ManagementWindow.Hwnd,,2) && SharedDanmakuItems.Length=beforeFocusSave,"cancel restores panel without saving")
     global DiscardCount := 0, DiscardAllowed := false
     RuntimePorts.ConfirmDiscard := ConfirmEditorTest
     OpenDanmakuEditor(true)

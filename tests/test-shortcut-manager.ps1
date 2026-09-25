@@ -2,7 +2,7 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'app-fixture.ps1')
 Invoke-AppFixture -Body @'
-    global BindingCalls := [], FailBinding := ""
+    global BindingCalls := [], FailBinding := "", FailCleanup := "", FailRestore := ""
     RuntimePorts.ShortcutKey := KeyAdapter
     InstallApplicationShortcuts()
     saved := CurrentShortcutMap()
@@ -22,10 +22,11 @@ Invoke-AppFixture -Body @'
     Assert(GetShortcutKey("chat_clear")=left,"two existing keys can be swapped atomically")
     baseline := CurrentShortcutMap(), keys := baseline.Clone(), keys["chat_focus"] := "^+f"
     savedPath := SettingsDatabasePath, SettingsDatabasePath := A_ScriptDir "\missing\keys.db"
-    rejected := false
+    rejected := false, persistenceFailure := ""
     try SaveShortcutMap(keys)
-    catch
-        rejected := true
+    catch as failure {
+        rejected := true, persistenceFailure := failure.Message
+    }
     SettingsDatabasePath := savedPath
     Assert(rejected && GetShortcutKey("chat_focus")=baseline["chat_focus"],"persistence failure restores active key")
     Assert(BindingCalls[-1].Key=baseline["chat_focus"] && BindingCalls[-1].Enabled,"previous binding restored after failure")
@@ -35,6 +36,26 @@ Invoke-AppFixture -Body @'
         rejected := true
     Assert(rejected && GetShortcutKey("chat_focus")=baseline["chat_focus"],"registration failure leaves preferences unchanged")
     FailBinding := ""
+    keys := baseline.Clone(), keys["chat_focus"] := "^+f", keys["chat_clear"] := "^+d", keys["reactions_show"] := "^+e"
+    FailCleanup := keys["chat_focus"], FailRestore := baseline["chat_focus"], BindingCalls := []
+    SettingsDatabasePath := A_ScriptDir "\missing\keys.db", rollbackMessage := ""
+    try SaveShortcutMap(keys)
+    catch as failure
+        rollbackMessage := failure.Message
+    SettingsDatabasePath := savedPath
+    cleanupAttempts := 0, restoreAttempts := 0
+    for call in BindingCalls {
+        if !call.Enabled && call.Key=keys[call.Action]
+            cleanupAttempts++
+        if call.Enabled && call.Key=baseline[call.Action]
+            restoreAttempts++
+    }
+    Assert(cleanupAttempts=3 && restoreAttempts=3,"rollback attempts every removal and restoration despite two failures")
+    Assert(InStr(rollbackMessage,persistenceFailure) && InStr(rollbackMessage,"synthetic cleanup failure")
+        && InStr(rollbackMessage,"synthetic restore failure") && InStr(rollbackMessage,"再起動"),"incomplete rollback reports original cause and every recovery failure")
+    persisted := LoadSettings(SettingsDatabasePath).ShortcutKeys
+    Assert(persisted["chat_focus"]==baseline["chat_focus"] && GetShortcutKey("chat_focus")==baseline["chat_focus"],"incomplete native rollback does not publish or persist the rejected draft")
+    FailCleanup := "", FailRestore := ""
     SaveShortcutMap(saved)
     shared := ExecuteDanmakuCommand("add","",0,{Name:"first",Text:"first",Slot:1})
     ExecuteDanmakuCommand("add","",0,{Name:"second",Text:"second",Slot:2})
@@ -104,6 +125,10 @@ ConfirmDraftDiscard(message) {
 }
 KeyAdapter(action,key,enabled) {
     BindingCalls.Push({Action:action,Key:key,Enabled:enabled})
+    if !enabled && key=FailCleanup
+        throw Error("synthetic cleanup failure")
+    if enabled && key=FailRestore
+        throw Error("synthetic restore failure")
     if enabled && key=FailBinding
         throw Error("synthetic registration failure")
 }

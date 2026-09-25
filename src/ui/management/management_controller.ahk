@@ -5,6 +5,20 @@ GetEditingProfileId() {
 GetEditingDanmakuItems() {
     return GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},GetEditingProfileId())
 }
+; Validate the displayed identity before interpreting the selected row as a library index.
+GetSelectedManagedIndex() {
+    index := ManagedList.GetNext()
+    if !index
+        return 0
+    items := GetEditingDanmakuItems()
+    if index <= items.Length && items[index].Id == ManagedList.GetText(index,4)
+        return index
+    RefreshManagement()
+    ManagedList.Modify(0,"-Select")
+    UpdateManagementActions()
+    SetManagementNotice("一覧を更新しました。操作する弾幕を選び直してください。")
+    return 0
+}
 RefreshManagementAfterCommand(editId) {
     global EditingProfileId := FindProfileById(Profiles,editId) ? editId : ""
     RefreshVisiblePalette()
@@ -13,7 +27,7 @@ RefreshManagementAfterCommand(editId) {
 HandleDanmakuCommand(action, *) {
     if !OperationAllowed("edit")
         return
-    index := ManagedList.GetNext()
+    index := GetSelectedManagedIndex()
     if !index
         return
     editId := GetEditingProfileId()
@@ -89,7 +103,13 @@ RunProfileDialog(action) {
 ChangeManagementTarget(*) {
     if !OperationAllowed("edit")
         return
-    global EditingProfileId := ManagementTarget.Value > 1 ? Profiles[ManagementTarget.Value-1].Id : ""
+    try id := GetSelectedProfileId(ManagementTarget)
+    catch as failure {
+        RefreshManagement()
+        SetManagementNotice(failure.Message)
+        return
+    }
+    global EditingProfileId := id
     RefreshManagement()
 }
 

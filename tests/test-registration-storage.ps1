@@ -81,7 +81,16 @@ try {
     SqlCheck(PrepareReactionRegistrations(0),"next operation recovers committed snapshot")
     SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="updated-after-failure","retry restores new data instead of stale registration")
     SqlCheck(SendWorkerRequest(0,"fixture_count").Detail="0","restarted worker has no disk video cache")
-    for bad in ["{", "{}", db.Scalar("SELECT json_set(?,'$.tokens[1]',json_extract(?,'$.tokens[0]'))",payload,payload), db.Scalar("SELECT json_remove(?,'$.tokens[4]')",payload), StrReplace(payload,'"type":50000','"type":1'),StrReplace(payload,'"browser":"fixture"','"browser":"invalid space"')] {
+    for bad in [
+        "{", "{}",
+        db.Scalar("SELECT json_set(?,'$.tokens[1]',json_extract(?,'$.tokens[0]'))",payload,payload),
+        db.Scalar("SELECT json_remove(?,'$.tokens[4]')",payload),
+        StrReplace(payload,'"type":50000','"type":1'),
+        StrReplace(payload,'"browser":"fixture"','"browser":"invalid space"'),
+        StrReplace(payload,'"browser":"fixture"','"browser":"fixture","browser":"other"'),
+        StrReplace(payload,'"type":50000','"type":50000,"type":1'),
+        StrReplace(payload,'"type":50000','"type":50000,"TYPE":1'),
+        StrReplace(payload,'"type":50000','"type":50000,"ty\u0070e":1')] {
         failed := false
         try SaveReactionRegistration(bad)
         catch
@@ -178,7 +187,7 @@ CommitCapturedReactionRegistration(hwnd,reply) {
     try {
         result := FinalizeReactionCapture(ActiveReactionJob,reply)
         if result.State = "registered" || result.State = "sync_failed"
-            SqlCheck(ActiveReactionJob.RegistrationCommitted && ActiveReactionJob.RegistrationSynced=(result.State="registered"),"save and sync are distinct job states")
+            SqlCheck(ActiveReactionJob.RegistrationCommitted && IsWorkerRegistrationCurrent()=(result.State="registered"),"committed capture reports actual worker readiness")
         return result
     }
     finally global ActiveReactionJob := 0

@@ -71,7 +71,7 @@ Invoke-AppFixture -Body @'
             linkSave := control
     WinActivate("ahk_id " linkDialog.Hwnd)
     Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
-    ControlClick(linkSave.Hwnd)
+    SendMessage(0xF5,0,0,linkSave.Hwnd)
     deadline := A_TickCount+2000
     while ActiveEditorDialog && A_TickCount<deadline
         Sleep(10)
@@ -95,7 +95,7 @@ Invoke-AppFixture -Body @'
     Assert(linkChoice && linkChoice.Text="managed target","management link opens shared chooser with managed profile selected")
     WinActivate("ahk_id " linkDialog.Hwnd)
     Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
-    ControlClick(linkSave.Hwnd)
+    SendMessage(0xF5,0,0,linkSave.Hwnd)
     deadline := A_TickCount+2000
     while ActiveEditorDialog && A_TickCount<deadline
         Sleep(10)
@@ -111,10 +111,11 @@ Invoke-AppFixture -Body @'
         if control.Type="Button" && control.Text="連携する"
             linkSave := control
     beforeMismatchHistory := LibraryHistory.Length
-    RuntimePorts.ResolveChannel := (hwnd) => {State:"ok",Author:"other",Channel:"/channel/A",Video:"bbbbbbbbbbb"}
+    global MismatchResolveCalls := 0
+    RuntimePorts.ResolveChannel := ResolveMismatchedChannel
     WinActivate("ahk_id " linkDialog.Hwnd)
     Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
-    ControlClick(linkSave.Hwnd)
+    SendMessage(0xF5,0,0,linkSave.Hwnd)
     deadline := A_TickCount+2000, rejectedMessage := false
     while ActiveEditorDialog && !rejectedMessage && A_TickCount<deadline {
         for control in linkDialog
@@ -122,6 +123,7 @@ Invoke-AppFixture -Body @'
                 rejectedMessage := true
         Sleep(10)
     }
+    Assert(MismatchResolveCalls=1,"link save invokes fresh channel verification exactly once")
     Assert(ActiveEditorDialog && rejectedMessage,"case-only channel change is rejected while retaining editor")
     Assert(LibraryHistory.Length=beforeMismatchHistory && FindProfileById(Profiles,targetProfile).Channel=="/channel/a","rejected channel change leaves saved binding and history untouched")
     RuntimePorts.ResolveChannel := FixtureResolveChannel
@@ -184,7 +186,15 @@ Invoke-AppFixture -Body @'
     anchor := Gui(,"Presentation test anchor")
     anchor.AddText(,"anchor")
     PresentWindow(anchor,"w240 h100")
-    Assert(WinWaitActive("ahk_id " anchor.Hwnd,,2),"normal presentation activates")
+    activated := WinWaitActive("ahk_id " anchor.Hwnd,,2)
+    if !activated {
+        foreground := DllCall("GetForegroundWindow","Ptr"), foregroundPid := 0
+        DllCall("GetWindowThreadProcessId","Ptr",foreground,"UInt*",&foregroundPid)
+        FileAppend("Presentation diagnostic: visible=" DllCall("IsWindowVisible","Ptr",anchor.Hwnd)
+            . " enabled=" DllCall("IsWindowEnabled","Ptr",anchor.Hwnd)
+            . " foreground_owned=" (foregroundPid=DllCall("GetCurrentProcessId")) "`n","*")
+    }
+    Assert(activated,"normal presentation activates")
     presentationProbe := Gui(,"Presentation test view")
     presentationProbe.AddText(,"prepared")
     global PresentationStates := []
@@ -242,6 +252,11 @@ Invoke-AppFixture -Body @'
     Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"editor unlocks palette")
 
 '@ -Helpers @'
+ResolveMismatchedChannel(hwnd) {
+    global MismatchResolveCalls
+    MismatchResolveCalls++
+    return {State:"ok",Author:"other",Channel:"/channel/A",Video:"bbbbbbbbbbb"}
+}
 ObserveHiddenLayout(view,w,h) {
     global observedHidden := !DllCall("IsWindowVisible","Ptr",view.Hwnd) && w>0 && h>0
 }

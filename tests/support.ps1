@@ -9,10 +9,11 @@ function New-TestRuntime {
     return $path
 }
 function Get-AutoHotkeyPath {
-    if ($env:AHK_EXE -and (Test-Path -LiteralPath $env:AHK_EXE)) { return $env:AHK_EXE }
-    $candidates = @((Join-Path $env:ProgramFiles 'AutoHotkey\v2\AutoHotkey64.exe'), (Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2\AutoHotkey64.exe'))
-    foreach ($path in $candidates) { if (Test-Path -LiteralPath $path) { return $path } }
-    throw 'AutoHotkey v2 is required. Set AHK_EXE to the full executable path.'
+    $candidates = if ($env:AHK_EXE) { @($env:AHK_EXE) } else {
+        @((Join-Path $env:ProgramFiles 'AutoHotkey\v2\AutoHotkey64.exe'), (Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2\AutoHotkey64.exe'))
+    }
+    foreach ($path in $candidates) { if (Test-Path -LiteralPath $path -PathType Leaf) { return $path } }
+    throw "AutoHotkey v2 executable not found. Checked: $($candidates -join ', '). Set AHK_EXE to the full executable path."
 }
 
 function Invoke-AppTest {

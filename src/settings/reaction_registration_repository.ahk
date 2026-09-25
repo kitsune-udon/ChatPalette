@@ -19,6 +19,9 @@ CreateReactionRegistrationSchema(db,path) {
 ValidateReactionRegistration(db,payload) {
     if StrPut(payload,"UTF-8")>8192 || db.Scalar("SELECT json_valid(?)",payload) != "1"
         throw Error("リアクション登録情報の形式が不正です。")
+    ; SQLite and PowerShell can resolve duplicate members differently. Reject ambiguity before saving.
+    if db.Scalar("SELECT EXISTS(SELECT 1 FROM json_tree(?) WHERE typeof(key)='text' GROUP BY parent,key COLLATE NOCASE HAVING COUNT(*)>1)",payload) = "1"
+        throw Error("リアクション登録情報に同じ項目が複数あります。")
     browser := StrLower(db.Scalar("SELECT json_extract(?,'$.browser')",payload))
     if !RegExMatch(browser,"^[a-z][a-z0-9_-]{0,63}$") || db.Scalar("SELECT json_type(?,'$.tokens')",payload) != "array"
         throw Error("リアクション登録情報のブラウザーまたはボタンが不正です。")

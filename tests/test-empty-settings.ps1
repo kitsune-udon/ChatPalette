@@ -3,10 +3,15 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
-$fixture = $release
-New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+# Fail one rollback move only in the isolated runtime.
+$lifecycle = Join-Path $release 'src\app\app_lifecycle.ahk'
+$source = [IO.File]::ReadAllText($lifecycle)
+$anchor = 'try FileMove(pair[2],pair[1],false)'
+if (!$source.Contains($anchor)) { throw 'Reset rollback injection point missing' }
+[IO.File]::WriteAllText($lifecycle,$source.Replace($anchor,'try ProbeResetRestore(pair)'),[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
+global ProbeRollbackFailure := false
 try {
     AssertEmpty(FileExist(SettingsDatabasePath), "fresh settings created")
     AssertEmpty(DefaultReactionIntervalMs = 200, "new settings default to 200ms start interval")
@@ -44,6 +49,49 @@ try {
     AssertEmpty(InStr(invalidMessage, "[General] Count"), "invalid settings identify exact key")
     backup := BackupSettingsForReset(brokenPath)
     AssertEmpty(FileExist(backup) && !FileExist(brokenPath) && InStr(FileRead(backup), "not-an-integer"), "reset preserves corrupt original")
+    resetDirectory := A_ScriptDir "\recovery-target"
+    DirCreate(resetDirectory)
+    resetPath := resetDirectory "\settings.db"
+    resetFiles := ["settings.db","settings.db-journal","settings.db-wal","settings.db-shm","settings.ini","reaction_selectors.json"]
+    FileAppend("current legacy",AppDataDirectory "\settings.ini")
+    FileAppend("current registration",AppDataDirectory "\reaction_selectors.json")
+    for name in resetFiles
+        FileAppend(name,resetDirectory "\" name)
+    for blockRollback in [false,true] {
+        ProbeRollbackFailure := blockRollback
+        ; Lock the last file so every preceding move must be rolled back.
+        locked := DllCall("CreateFileW","Str",resetDirectory "\reaction_selectors.json","UInt",0x80000000,"UInt",0,"Ptr",0,"UInt",3,"UInt",0,"Ptr",0,"Ptr")
+        AssertEmpty(locked != -1,"reset failure fixture holds the final file exclusively")
+        try {
+            resetError := ""
+            try BackupSettingsForReset(resetPath)
+            catch as failure
+                resetError := failure.Message
+            AssertEmpty(resetError != "","reset aborts when a source cannot be moved")
+        } finally DllCall("CloseHandle","Ptr",locked)
+        remainingBackups := []
+        Loop Files resetDirectory "\*.backup-*"
+            remainingBackups.Push(A_LoopFileFullPath)
+        if blockRollback {
+            AssertEmpty(remainingBackups.Length=1 && FileRead(remainingBackups[1])="settings.ini","rollback failure preserves the unmoved backup")
+            AssertEmpty(InStr(resetError,remainingBackups[1]) && InStr(resetError,resetDirectory "\settings.ini"),"rollback failure identifies saved file and original destination")
+            AssertEmpty(!FileExist(resetDirectory "\settings.ini"),"failed restoration is not reported as complete")
+            FileMove(remainingBackups[1],resetDirectory "\settings.ini",false)
+        } else
+            AssertEmpty(remainingBackups.Length=0,"successful rollback leaves no partial backup set")
+        for name in resetFiles
+            AssertEmpty(FileExist(resetDirectory "\" name) && FileRead(resetDirectory "\" name)=name,"reset preserves every original despite intermediate failures")
+    }
+    ProbeRollbackFailure := false
+    backup := BackupSettingsForReset(resetPath)
+    suffix := SubStr(backup,StrLen(resetPath)+1)
+    for name in resetFiles {
+        saved := name = "settings.ini" || name = "reaction_selectors.json" ? resetDirectory "\" name suffix : backup SubStr(name,StrLen("settings.db")+1)
+        AssertEmpty(!FileExist(resetDirectory "\" name) && FileExist(saved) && FileRead(saved)=name,"reset preserves target files and sidecar names")
+    }
+    AssertEmpty(FileExist(AppDataDirectory "\settings.ini") && FileExist(AppDataDirectory "\reaction_selectors.json"),"reset never moves legacy files from a different directory")
+    FileDelete(AppDataDirectory "\settings.ini")
+    FileDelete(AppDataDirectory "\reaction_selectors.json")
     FileAppend("[General]`nCount=1.5`n", brokenPath)
     rejectedFraction := false
     try ReadLegacySettings(brokenPath)
@@ -106,6 +154,12 @@ try {
 } catch as failure {
     FileAppend("FAIL: " failure.Message " at " failure.File ":" failure.Line "`n", "*")
     ExitApp(1)
+}
+ProbeResetRestore(pair) {
+    global ProbeRollbackFailure
+    if ProbeRollbackFailure && RegExMatch(pair[1],"\\settings\.ini$")
+        throw Error("Injected reset rollback failure")
+    FileMove(pair[2],pair[1],false)
 }
 CountRestart() {
     global RestartChecks

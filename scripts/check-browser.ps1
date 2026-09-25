@@ -7,7 +7,11 @@ param(
     [Parameter(Mandatory=$true,ParameterSetName="Inspect")][string]$OutputPath
 )
 $ErrorActionPreference='Stop'
-if (!$List -and (Test-Path -LiteralPath $OutputPath)) { throw 'Report already exists; choose a new path.' }
+if (!$List) {
+    $OutputPath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
+    if (Test-Path -LiteralPath $OutputPath) { throw 'Report already exists; choose a new path.' }
+    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($OutputPath)) | Out-Null
+}
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 . (Join-Path (Split-Path $PSScriptRoot -Parent) 'src\browser\browser_worker.ps1') -Library
@@ -49,7 +53,10 @@ try {
     }
 } catch { $report.Error='Inspection failed; verify target window, foreground and accessible live chat.' }
 # Never include titles, URLs, field values or exception text in a shareable report.
-[IO.File]::WriteAllText([IO.Path]::GetFullPath($OutputPath),($report | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+$bytes=[Text.UTF8Encoding]::new($false).GetBytes(($report | ConvertTo-Json))
+$stream=[IO.File]::Open($OutputPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+try { $stream.Write($bytes,0,$bytes.Length) }
+finally { $stream.Dispose() }
 [pscustomobject]$report
 if ($report.Error -or !$report.VideoDetected -or !$report.ChatDetected -or !$report.LauncherDetected -or
     ($Exercise -and ($report.Focus -ne 'focused' -or $report.Hover -ne 'hovered'))) { exit 1 }

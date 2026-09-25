@@ -12,7 +12,7 @@ Invoke-AppFixture -Body @'
     initial := CreateSettingsSnapshot()
     initial.Profiles.Push({Id:NewRecordId(),Name:"editing B",Channel:"/channel/b",Items:[]})
     CommitLibraryChange(initial,"test author")
-    SaveInputProfileSelection(1)
+    SaveInputProfileId(Profiles[1].Id)
     activeId := GetInputProfile().Id
     EditingProfileId := Profiles[-1].Id
     RefreshManagement()
@@ -49,7 +49,7 @@ Invoke-AppFixture -Body @'
     Assert(InputProfileId="","deleting active author never silently targets next author")
     UndoLibraryChange()
     Assert(Profiles.Length=beforeCount && InputProfileId="","undo restores author without selecting a different target")
-    SaveInputProfileSelection(1)
+    SaveInputProfileId(Profiles[1].Id)
     EditingProfileId := ""
     state := CreateSettingsSnapshot()
     state.SharedDanmakuItems := [{Name:"search target",Text:"unique body",Slot:1},{Name:"other",Text:"other",Slot:0}]
@@ -74,7 +74,7 @@ Invoke-AppFixture -Body @'
         failed := true
     Assert(failed && Profiles=priorProfiles && LibraryHistory.Length=priorHistory,"failed save preserves live data and history")
     SettingsDatabasePath := path
-    SaveInputProfileSelection(1)
+    SaveInputProfileId(Profiles[1].Id)
     RefreshProfiles()
     ; Commands are executable without controls or an editing selection.
     author := ExecuteProfileCommand("add","","service author")
@@ -88,6 +88,12 @@ Invoke-AppFixture -Body @'
     ExecuteDanmakuCommand("edit",id,2,{Name:"edited",Text:"ccc",Slot:2})
     serviceItems := GetLibraryItems(CreateLibrarySnapshot(),id)
     Assert(ItemSlot(serviceItems[1])=0 && serviceItems[2].Text="ccc","service edit assigns slot uniquely")
+    noOpItem := serviceItems[2], noOpHistory := LibraryHistory.Length, noOpProfiles := Profiles
+    Loop 35 {
+        ExecuteDanmakuCommand("edit",id,2,{Name:"  " noOpItem.Name "  ",Text:noOpItem.Text,Slot:ItemSlot(noOpItem)})
+        SaveShortcutItemAssignments(id,ItemSlot(noOpItem)=1 ? noOpItem.Id : "",ItemSlot(noOpItem)=2 ? noOpItem.Id : "")
+    }
+    Assert(LibraryHistory.Length=noOpHistory && Profiles=noOpProfiles,"unchanged item edits and assignments preserve real history and live objects")
     ExecuteDanmakuCommand("duplicate",id,2)
     Assert(ItemSlot(GetLibraryItems(CreateLibrarySnapshot(),id)[3])=0,"service duplicate is unassigned")
     sharedCount := SharedDanmakuItems.Length
@@ -102,10 +108,26 @@ Invoke-AppFixture -Body @'
     catch
         rejected := true
     Assert(rejected,"service enforces unique channel binding")
+    beforeProfiles := Profiles.Length, beforeHistory := LibraryHistory.Length
+    rejected := false
+    try ExecuteProfileCommand("add",id,"duplicate channel","/channel/service-only")
+    catch
+        rejected := true
+    Assert(rejected && Profiles.Length=beforeProfiles && LibraryHistory.Length=beforeHistory,"adding rejects another channel owner even with an existing ID argument")
+    beforeNoOpProfiles := Profiles
+    ExecuteProfileCommand("bind",id,"/channel/service-only")
+    Assert(LibraryHistory.Length=beforeHistory && Profiles=beforeNoOpProfiles,"unchanged binding preserves history and published library")
+    Assert(ChannelIndex["/channel/service-only"]==id,"binding the same channel to its owner remains valid")
     ExecuteProfileCommand("rename",id,"renamed author")
     Assert(Profiles[FindProfileIndexById(Profiles,id)].Name="renamed author","service rename")
     ExecuteProfileCommand("unbind",id)
     Assert(!ChannelIndex.Has("/channel/service-only"),"service unbind refreshes index")
+    beforeNoOpHistory := LibraryHistory.Length, lastRealChange := LibraryHistory[-1], beforeNoOpProfiles := Profiles
+    Loop 35 {
+        ExecuteProfileCommand("rename",id,"  renamed author  ")
+        ExecuteProfileCommand("unbind",id)
+    }
+    Assert(LibraryHistory.Length=beforeNoOpHistory && LibraryHistory[-1]=lastRealChange && Profiles=beforeNoOpProfiles,"repeated unchanged edits cannot evict real undo history")
     Assert((GetInputProfile() ? GetInputProfile().Id : "")=oldInputId,"service commands preserve input identity")
     stale := CreateSettingsSnapshot()
     SaveReactionDefaults(CreateReactionOptions(4,10,50,ShortcutKeys["reaction"]))

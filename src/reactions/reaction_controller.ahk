@@ -9,8 +9,7 @@ InitReactions() {
 CreateReactionJob(values) {
     job := {Mode:"reaction_send", Phase:"waiting", Window:0, Video:"", Choice:1,
         Remaining:0, Total:0, Completed:0, Cancelled:false, Interval:0,
-        StartedAt:-1, FirstStartedAt:-1, Measurement:"", Detail:"", Applied:"",
-        RegistrationCommitted:false, RegistrationSynced:false}
+        StartedAt:-1, FirstStartedAt:-1, Applied:"", RegistrationCommitted:false}
     for name, value in values.OwnProps()
         job.%name% := value
     if job.Mode = "queued"
@@ -75,7 +74,7 @@ ScheduleReaction(mode, delay, options := 0) {
     job := CreateReactionJob({Mode: mode, Window: hwnd, Video: context.Video,
         Applied:"適用：" (options ? "今回の設定" : "共通設定") " / " ReactionNames[choice],
         Choice: choice, Remaining: delay, Total: options ? options.Count : DefaultReactionCount,
-        Completed: 0, Cancelled: false, Interval: options ? options.Interval : DefaultReactionIntervalMs})
+        Interval: options ? options.Interval : DefaultReactionIntervalMs})
     ActiveReactionJob := job
     try {
         PaletteWindow.Hide()
@@ -128,7 +127,6 @@ ReactionCountdown() {
             SetReactionStatus("登録・確認を中止しました。", true,"","",job,"cancelled")
         } else if ShouldWaitForRegistration(job, reply) {
             SetReactionJobPhase(job,"waiting")
-            job.Detail := reply.HasOwnProp("Detail") ? reply.Detail : ""
             SetReactionStatus("登録待機中：♡のメニューを開き、マウスをその上に置いてください。" ShortcutKeyLabel(GetShortcutKey("stop")) "で中止。")
             SetTimer(ReactionCountdown, -1000)
             retryScheduled := true
@@ -162,7 +160,6 @@ FinalizeReactionCapture(job, reply) {
             job.RegistrationCommitted := true
         Critical(previousCritical)
         reply := SynchronizeCapturedReactionRegistration(job.Window,reply)
-        job.RegistrationSynced := reply.State = "registered"
         return reply
     } finally {
         Critical(previousCritical)
@@ -292,14 +289,11 @@ ApplyReactionResult(job, reply) {
         ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "", " 操作済み " job.Completed " / " job.Total " 回で停止。",job)
         return
     }
-    if job.FirstStartedAt < 0 {
+    if job.FirstStartedAt < 0
         job.FirstStartedAt := job.StartedAt
-        job.Measurement := ""
-    }
     job.Completed++
-    if job.Completed > 1
-        job.Measurement := "（平均開始間隔 " Round((job.StartedAt - job.FirstStartedAt) / (job.Completed - 1)) " ms）"
-    progress := job.Applied "`n操作済み " job.Completed " / " job.Total " 回" job.Measurement
+    measurement := job.Completed > 1 ? "（平均開始間隔 " Round((job.StartedAt - job.FirstStartedAt) / (job.Completed - 1)) " ms）" : ""
+    progress := job.Applied "`n操作済み " job.Completed " / " job.Total " 回" measurement
     if job.Cancelled || job.Completed >= job.Total {
         FinishReactionJob(job)
         SetReactionStatus(progress "。" (job.Cancelled ? "中止しました。" : "完了しました。") " YouTube側の受理回数は未確認です。", true,"","",job,job.Cancelled ? "cancelled" : "completed")
@@ -334,7 +328,7 @@ QuickReaction(*) {
             return
         ActiveReactionJob := CreateReactionJob({Mode: "reaction_send", Window: hwnd, Video: context.Video,
             Applied:"適用：共通設定 / " ReactionNames[choice],
-            Choice: choice, Total: DefaultReactionCount, Completed: 0, Cancelled: false, Interval: DefaultReactionIntervalMs})
+            Choice: choice, Total: DefaultReactionCount, Interval: DefaultReactionIntervalMs})
         batchStarted := true
         ReactionSendNext()
     } catch as operationError {

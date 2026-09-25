@@ -2,6 +2,11 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+$repositoryPath = Join-Path $release 'src\settings\settings_repository.ahk'
+$repositorySource = [IO.File]::ReadAllText($repositoryPath)
+$repositoryAnchor = 'this.Db := SqliteConnection(path,create)'
+if (!$repositorySource.Contains($repositoryAnchor)) { throw 'Repository connection injection point missing' }
+[IO.File]::WriteAllText($repositoryPath,$repositorySource.Replace($repositoryAnchor,$repositoryAnchor + "`r`n        global ProbeRepositoryConnection := this.Db"),[Text.UTF8Encoding]::new($true))
 $tests = @'
 OnExit(StopBrowserWorker)
 global SqliteChecks := 0
@@ -45,6 +50,30 @@ try {
     before := Integer(db.Scalar("SELECT total_changes()"))
     SaveAutoDetection(!AutoMode)
     SqlCheck(Integer(db.Scalar("SELECT total_changes()"))-before=1,"preference change updates one row")
+    before := Integer(db.Scalar("SELECT total_changes()"))
+    SaveSettingsPreferences(CreatePreferences(),SettingsDatabasePath)
+    SqlCheck(Integer(db.Scalar("SELECT total_changes()"))=before,"unchanged preferences do not update any row")
+    originalKeys := CurrentShortcutMap(), swappedKeys := originalKeys.Clone()
+    swappedKeys["chat_focus"] := originalKeys["chat_clear"], swappedKeys["chat_clear"] := originalKeys["chat_focus"]
+    rejectedPreferences := CreatePreferences(), previousValues := store.PreferenceValues, previousAuto := AutoMode
+    rejectedPreferences.AutoMode := !AutoMode, rejectedPreferences.ShortcutKeys := swappedKeys
+    db.Exec("CREATE TEMP TRIGGER reject_binding BEFORE UPDATE ON shortcut_bindings WHEN NEW.action='chat_clear' BEGIN SELECT RAISE(ABORT,'test failure'); END")
+    failed := false
+    try ApplyPreferences(rejectedPreferences)
+    catch
+        failed := true
+    db.Exec("DROP TRIGGER reject_binding")
+    SqlCheck(failed && AutoMode=previousAuto && ShortcutKeys["chat_focus"]==originalKeys["chat_focus"]
+        && ShortcutKeys["chat_clear"]==originalKeys["chat_clear"] && store.PreferenceValues=previousValues,"failed combined preference save preserves live values and repository snapshot")
+    SqlCheck(Integer(db.Scalar("SELECT auto_mode FROM preferences WHERE id=1"))=previousAuto
+        && db.Scalar("SELECT key FROM shortcut_bindings WHERE action='chat_focus'")==originalKeys["chat_focus"]
+        && db.Scalar("SELECT key FROM shortcut_bindings WHERE action='chat_clear'")==originalKeys["chat_clear"],"failed binding update rolls back base preferences and every binding")
+    before := Integer(db.Scalar("SELECT total_changes()"))
+    SaveShortcutMap(swappedKeys)
+    SqlCheck(Integer(db.Scalar("SELECT total_changes()"))-before=2,"shortcut swap updates only the two changed bindings")
+    SqlCheck(db.Scalar("SELECT key FROM shortcut_bindings WHERE action='chat_focus'")==swappedKeys["chat_focus"]
+        && db.Scalar("SELECT key FROM shortcut_bindings WHERE action='chat_clear'")==swappedKeys["chat_clear"],"shortcut swap persists both assignments")
+    SaveShortcutMap(originalKeys)
     before := Integer(db.Scalar("SELECT total_changes()"))
     ExecuteDanmakuCommand("duplicate","",2)
     SqlCheck(Integer(db.Scalar("SELECT total_changes()"))-before=1,"middle insertion preserves other ranks")
@@ -95,6 +124,27 @@ try {
     VerifySettingsMigration(CreateSettingsSnapshot(),copy.Load())
     copy.CheckIntegrity(), copy.Close()
     SqlCheck(true,"backup restores full logical state")
+    lockedBackup := A_ScriptDir "\locked-backup.db"
+    locker := SqliteConnection(SettingsDatabasePath)
+    try {
+        locker.Exec("BEGIN EXCLUSIVE")
+        failed := false
+        try BackupSettingsDatabase(lockedBackup)
+        catch
+            failed := true
+        SqlCheck(failed && !FileExist(lockedBackup),"locked source cannot publish an incomplete backup")
+        leftovers := 0
+        Loop Files lockedBackup ".creating-*"
+            leftovers++
+        SqlCheck(leftovers=0,"failed backup removes temporary database and journal")
+    } finally locker.Close()
+    BackupSettingsDatabase(lockedBackup)
+    copy := SettingsRepository(lockedBackup)
+    try {
+        VerifySettingsMigration(CreateSettingsSnapshot(),copy.Load())
+        copy.CheckIntegrity()
+        SqlCheck(true,"backup retries after source lock is released")
+    } finally copy.Close()
     other := SqliteConnection(SettingsDatabasePath)
     other.Exec("UPDATE preferences SET reaction_interval=250 WHERE id=1")
     failed := false
@@ -110,7 +160,7 @@ try {
     try SettingsRepository(backup)
     catch
         failed := true
-    SqlCheck(failed,"future schema rejected")
+    SqlCheck(failed && ProbeRepositoryConnection && !ProbeRepositoryConnection.Handle,"future schema rejection closes its connection before returning")
     ; Crash runner: raw process exit deliberately bypasses SQLite close/OnExit.
     crashSource := '#Requires AutoHotkey v2.0`n#Include ' A_ScriptDir '\src\storage\sqlite_connection.ahk`n'
         . 'db := SqliteConnection(A_Args[1])`ndb.ConfigureStorage()`ndb.Exec("BEGIN IMMEDIATE; UPDATE preferences SET reaction_interval=500 WHERE id=1")`n'

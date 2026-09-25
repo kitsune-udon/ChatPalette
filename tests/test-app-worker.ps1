@@ -2,6 +2,10 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'app-fixture.ps1')
 Invoke-AppFixture -Body @'
+    identityWindow := Gui(), identityHwnd := identityWindow.Hwnd
+    Assert(!NativeIsBrowser(identityHwnd),"native identity rejects an existing non-browser window")
+    identityWindow.Destroy()
+    Assert(!NativeIsBrowser(identityHwnd) && !NativeIsBrowser(0),"native identity rejects closed and absent windows without throwing")
     registrationTokens := "["
     Loop 5
         registrationTokens .= (A_Index>1 ? "," : "") '{"name":"reaction' A_Index '","id":"id' A_Index '","class":"button","type":50000}'
