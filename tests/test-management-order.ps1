@@ -10,7 +10,6 @@ Edit-TestSource $release 'src/ui/management/management_controller.ahk' $commitBo
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $tests = @'
-OnExit(StopBrowserWorker)
 global ReorderChecks := 0, PartialArmed := false, PartialFailure := false, PartialProbes := 0, PartialGuarded := false
 global CommitProbeArmed := false, QueuedEdits := 0, QueuedTarget := "", CommittedCopy := ""
 BuildManagement()

@@ -7,19 +7,15 @@ ResolveInputContext(scope, hwnd) {
     if scope = "profile" && AutoMode {
         selected := SelectProfileFromBrowser(hwnd)
         RefreshVisiblePalette()
-        if !selected
-            return 0
-        video := DetectedChannel.Video
-    } else {
-        context := RequestBrowserOperation(hwnd,"browser_context")
-        if context.State != "ok"
-            throw Error("YouTubeの動画を確認できませんでした。")
-        video := context.Video
+        return selected
     }
+    context := RequestBrowserOperation(hwnd,"browser_context")
+    if context.State != "ok"
+        throw Error("YouTubeの動画を確認できませんでした。")
     profile := scope = "profile" ? GetInputProfile() : 0
     if scope = "profile" && !profile
         throw Error("配信者が変わりました。弾幕を選び直してください。")
-    return {ProfileId:profile ? profile.Id : "", Window:hwnd, Video:video}
+    return {ProfileId:profile ? profile.Id : "", Window:hwnd, Video:context.Video}
 }
 ResolveDanmakuInput(request) {
     context := ResolveInputContext(request.ProfileId = "" ? "shared" : "profile",request.Window)

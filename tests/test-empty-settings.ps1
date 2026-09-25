@@ -6,7 +6,6 @@ $release = New-TestRuntime
 # Fail one rollback move only in the isolated runtime.
 Edit-TestSource $release 'src/app/app_lifecycle.ahk' 'try FileMove(pair[2],pair[1],false)' 'try ProbeResetRestore(pair)'
 $tests = @'
-OnExit(StopBrowserWorker)
 global ProbeRollbackFailure := false
 AssertEmpty(FileExist(SettingsDatabasePath), "fresh settings created")
 AssertEmpty(DefaultReactionIntervalMs = 200, "new settings default to 200ms start interval")

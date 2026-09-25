@@ -8,7 +8,6 @@ Edit-TestSource $release 'src/reactions/reaction_controller.ahk' $retry ("      
 $queue='        SetTimer(callback, period)'
 Edit-TestSource $release 'src/reactions/reaction_controller.ahk' $queue ("        if callback = QuickReaction`r`n            ReviewBeforeQuickStart()`r`n"+$queue)
 $tests = @'
-OnExit(StopBrowserWorker)
 global ReviewChecks := 0, ReviewFocusCalls := 0, ReviewUnexpectedRequests := 0, ReviewContextCalls := 0, ReviewCaptureRetryFailure := false, ReviewQuickStartFailure := false, ReviewTargetChange := false, ReviewReplacementJob := 0
 BuildManagement()
 initialReactionStatus := ReactionExecutionStatus, initialReactionResult := LastReactionResult
@@ -45,11 +44,11 @@ RecordBrowserOperation({Mode:"reaction_send",State:"menu_closed",Duration:100})
 RefreshReactionRegistration()
 AssertReview(ReviewUnexpectedRequests=0,"displaying registration never requests a worker operation")
 AssertReview(LastBrowserOperation.Mode="reaction_send" && LastBrowserOperation.State="menu_closed","display query preserves failure")
-for topic in [Help,ShowReactionDetails,ShowDiagnostics] {
-    topic.Call()
-    Sleep(30)
-    active := WinExist("A")
-    AssertReview(IsAppWindow(active),"owned auxiliary view belongs to application")
+for topic in [{Show:Help,Title:"使い方"},{Show:ShowReactionDetails,Title:"リアクションの実行結果"},{Show:ShowDiagnostics,Title:"診断情報"}] {
+    topic.Show.Call()
+    active := WinExist(topic.Title " ahk_pid " DllCall("GetCurrentProcessId"))
+    AssertReview(IsAppWindow(active),"owned auxiliary view belongs to application: " topic.Title)
+    RequireTestWindowActive(active)
     TargetBrowserHwnd := 123
     ShowPalette()
     AssertReview(TargetBrowserHwnd=123,"palette preserves target from auxiliary view")
@@ -112,13 +111,15 @@ ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Complete
 RunReactionSendLoop(ActiveReactionJob)
 AssertReview(!ActiveReactionJob && LastReactionResult.Completed=5 && LastReactionResult.Total=10,"focus stop preserves structured counts")
 AssertReview(InStr(LastReactionResult.Message,"5 / 10") && LastReactionResult.Reason="wrong_window","focus stop preserves visible count and reason")
-firstJob := CreateReactionJob({Applied:"first settings",StartedAt:0,Total:1})
-secondJob := CreateReactionJob({Applied:"second settings",StartedAt:0,Total:1})
+RuntimePorts.Foreground := (hwnd) => hwnd=123
+RuntimePorts.BrowserRequest := (*) => {State:"operated"}
+firstJob := CreateReactionJob({Window:123,Applied:"first settings",Total:1})
+secondJob := CreateReactionJob({Window:123,Applied:"second settings",Total:1})
 ActiveReactionJob := firstJob
-ApplyReactionResult(firstJob,{State:"operated"})
+RunReactionSendLoop(firstJob)
 AssertReview(InStr(LastReactionResult.Message,"first settings") && !InStr(LastReactionResult.Message,"second settings"),"completion describes its own settings after another job was created")
 ActiveReactionJob := secondJob
-ApplyReactionResult(secondJob,{State:"operated"})
+RunReactionSendLoop(secondJob)
 AssertReview(InStr(LastReactionResult.Message,"second settings"),"next completion describes its own settings")
 previous := LastReactionResult
 ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Completed:0,Total:10,Interval:0,Cancelled:false})
@@ -126,7 +127,9 @@ CancelReaction()
 AssertReview(LastReactionResult != previous && LastReactionResult.Detail="" && LastReactionResult.Completed=0,"cancellation publishes fresh result")
 failedJob := CreateReactionJob({Mode:"reaction_send",Window:123,Completed:3,Total:10,Interval:0,Cancelled:false})
 ActiveReactionJob := failedJob
-ApplyReactionResult(failedJob,{State:"unknown",Detail:"current attempt detail"})
+RuntimePorts.BrowserRequest := (*) => {State:"unknown",Detail:"current attempt detail"}
+RunReactionSendLoop(failedJob)
+RuntimePorts.BrowserRequest := 0
 AssertReview(LastReactionResult.Detail="current attempt detail" && LastReactionResult.Completed=3 && LastReactionResult.Reason="unknown"
     && InStr(LastReactionResult.Message,"操作済み 3 / 10 回で停止。"),"failure detail and visible count are from same attempt")
 snapshot := LastReactionResult

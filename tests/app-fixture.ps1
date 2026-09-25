@@ -31,7 +31,6 @@ function Find-RegisteredReactions([long]$WindowHandle, $Plan) { return @{ Elemen
 '@
 Write-TestWorker -Runtime $release -Definitions $mock
     $frame = @'
-OnExit(StopBrowserWorker)
 InstallApplicationShortcuts()
 global Checks := 0
 '@ + "`r`n" + $Body + "`r`n" + @'

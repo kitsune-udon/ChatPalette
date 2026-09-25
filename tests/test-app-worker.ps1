@@ -147,7 +147,9 @@ Invoke-AppFixture -Runtime $release -Body @'
         "in-flight crash preserves the observed process or pipe failure")
     diagnosticJob := CreateReactionJob({Mode:"reaction_send",Window:123,Total:1})
     ActiveReactionJob := diagnosticJob
-    ApplyReactionResult(diagnosticJob,crashed)
+    RuntimePorts.BrowserRequest := (*) => crashed
+    RunReactionSendLoop(diagnosticJob)
+    RuntimePorts.BrowserRequest := 0
     Assert(LastReactionResult.Reason="unknown" && LastReactionResult.Detail==crashed.Detail && !ActiveReactionJob,
         "transport failure detail reaches the reaction result without changing outcome certainty")
     Assert(RequestBrowserOperation(123,"browser_context").State = "ok", "notification resources recover after in-flight crash")

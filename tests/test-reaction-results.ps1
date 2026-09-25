@@ -6,7 +6,6 @@ $resultRuntime=New-TestRuntime
 $needle="RefreshOperationControls() {"
 Edit-TestSource $resultRuntime 'src/ui/ui_runtime.ahk' $needle ($needle+"`r`n    ProbeResultPublication()")
 $resultTests=@'
-OnExit(StopBrowserWorker)
 BuildManagement()
 global ResultChecks := 0, ResultArmed := false, ResultPoint := "", ResultCase := ""
 global ResultReplacement := 0, ResultPreserved := 0
@@ -41,6 +40,24 @@ for point in ["release","render","release-finished","render-finished"] {
         ShowStatusTip()
     }
 }
+; A final rendering failure cannot reclassify a completed send or retain its timing request.
+global ResultRenderFailure := true, ResultPrecision := ""
+RuntimePorts.Foreground := (hwnd) => hwnd=123
+RuntimePorts.BrowserRequest := (*) => {State:"operated"}
+RuntimePorts.Clock := ResultRenderClock
+RuntimePorts.TimingPrecision := ResultTiming
+job := CreateReactionJob({Window:123,Total:1,Interval:100})
+ActiveReactionJob := job
+SetReactionStatus("before final rendering")
+escaped := false
+try RunReactionSendLoop(job)
+catch
+    escaped := true
+RuntimePorts.Clock := 0
+CheckResult(escaped && !ResultRenderFailure && ResultPrecision=="BE" && !ActiveReactionJob && job.Phase="finished",
+    "final rendering failure releases this job and its timing request")
+CheckResult(LastReactionResult.Reason="completed" && LastReactionResult.Completed=1 && LastReactionResult.Detail="",
+    "display failure cannot replace the completed operation with an unknown outcome")
 FileAppend("PASS: " ResultChecks " result publication ownership checks; no real browser operations`n","*")
 ExitApp()
 CheckResult(value,label) {
@@ -66,6 +83,19 @@ ProbeResultPublication() {
         ResultPreserved := LastReactionResult
     }
     ShowStatusTip("successor tip")
+}
+ResultRenderClock() {
+    global ResultRenderFailure
+    if ResultRenderFailure && ReactionExecutionStatus.Phase="finished" {
+        ResultRenderFailure := false
+        throw Error("final rendering failed")
+    }
+    return NativeAppClockMs()
+}
+ResultTiming(enabled) {
+    global ResultPrecision
+    ResultPrecision .= enabled ? "B" : "E"
+    return enabled
 }
 ResultRequest(hwnd,mode,video,extra) {
     return {State:ResultCase="completed" ? "operated" : "unknown",Detail:"fixture failure"}

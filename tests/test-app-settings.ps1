@@ -69,13 +69,15 @@ Invoke-AppFixture -Body @'
         SaveReactionDefaults(CreateReactionOptions(1,1,interval))
         Assert(LoadSettings(SettingsDatabasePath).DefaultReactionIntervalMs=interval,"interval persisted " interval)
     }
+    RuntimePorts.BrowserRequest := (*) => {State:"operated"}
     for count in ReactionCounts {
-        job := CreateReactionJob({StartedAt:0,Total:count,Completed:count-1,Cancelled:false,Interval:100})
+        job := CreateReactionJob({Window:123,Total:count,Completed:count-1,Interval:0})
         ActiveReactionJob := job
-        ApplyReactionResult(job,{State:"operated"})
+        RunReactionSendLoop(job)
         Assert(job.Completed=count && !ActiveReactionJob,"exact completion " count)
     }
 
+    RuntimePorts.BrowserRequest := 0
     schemaPath := A_ScriptDir "\schema-check.db"
     schemaState := CreateTestSettingsSnapshot()
     schemaState.SharedDanmakuItems := [
@@ -101,9 +103,11 @@ Invoke-AppFixture -Body @'
         Assert(actual.Profiles[1].Items[1].Text == expected, "long profile text round-trip " length)
     }
     LastReactionResult.Detail := "previous failure"
-    completedJob := CreateReactionJob({StartedAt:0,Completed:0, Total:1, Cancelled:false})
+    completedJob := CreateReactionJob({Window:123,Total:1})
     ActiveReactionJob := completedJob
-    ApplyReactionResult(completedJob, {State:"operated"})
+    RuntimePorts.BrowserRequest := (*) => {State:"operated"}
+    RunReactionSendLoop(completedJob)
+    RuntimePorts.BrowserRequest := 0
     Assert(LastReactionResult.Detail = "" && InStr(LastReactionResult.Message, "完了"), "success clears previous failure detail")
     savedRoundTrip := FileRead(schemaPath,"RAW")
     schemaState.SharedDanmakuItems[1].Text := "first`nsecond"

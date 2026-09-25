@@ -7,7 +7,6 @@ $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'fixtures\ui-message-probe.ahk') (Join-Path $release 'ui-message-probe.ahk')
 $tests = @'
-OnExit(StopBrowserWorker)
 #Include %A_ScriptDir%\ui-message-probe.ahk
 UiMessageProbe.Start()
 global ChoiceChecks := 0

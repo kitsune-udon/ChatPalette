@@ -34,7 +34,6 @@ function Invoke-FixtureRequest($Request) {
 '@
 Write-TestWorker -Runtime $release -Definitions $mock
 $tests = @'
-OnExit(StopBrowserWorker)
 global SqliteChecks := 0, RegistrationSyncFault := "", CancelOnCapture := true
 db := OpenSettingsRepository(SettingsDatabasePath).Db
 tokens := "["

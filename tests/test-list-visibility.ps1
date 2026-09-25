@@ -3,7 +3,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 $tests = @'
-OnExit(StopBrowserWorker)
 AutoMode := false
 ExecuteDanmakuCommand("add","","",{Name:"Visible",Text:"visible test",Slot:0})
 ShowManagement(1)

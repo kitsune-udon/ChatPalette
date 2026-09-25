@@ -37,20 +37,20 @@ HidePalette(*) {
 }
 
 SelectProfileFromBrowser(hwnd) {
-    global DetectedChannel
-    try DetectedChannel := ResolveBrowserChannel(hwnd)
+    try detected := ResolveBrowserChannel(hwnd)
     catch as failure
-        DetectedChannel := {State:"unavailable",Channel:"",Author:"",Video:"",Detail:failure.Message}
-    if DetectedChannel.State != "ok" {
+        detected := {State:"unavailable",Channel:"",Author:"",Video:"",Detail:failure.Message}
+    global DetectedChannel := detected
+    if detected.State != "ok" {
         message := "動画を確認できません。YouTubeの入力欄から開き直してください。"
-        if DetectedChannel.HasOwnProp("Detail") && DetectedChannel.Detail != ""
-            message .= " " DetectedChannel.Detail
+        if detected.HasOwnProp("Detail") && detected.Detail != ""
+            message .= " " detected.Detail
         SetDetectionStatus(message)
         return false
     }
-    profile := FindProfileByChannel(Profiles,DetectedChannel.Channel)
+    profile := FindProfileByChannel(Profiles,detected.Channel)
     if !profile {
-        SetDetectionStatus("チャンネル未連携：" DetectedChannel.Author "。「チャンネル連携」から登録できます。")
+        SetDetectionStatus("チャンネル未連携：" detected.Author "。「チャンネル連携」から登録できます。")
         return false
     }
     try SaveInputProfileId(profile.Id)
@@ -58,8 +58,8 @@ SelectProfileFromBrowser(hwnd) {
         SetDetectionStatus("配信者を選択できませんでした。" failure.Message)
         return false
     }
-    SetDetectionStatus("自動：" DetectedChannel.Author " → " profile.Name)
-    return true
+    SetDetectionStatus("自動：" detected.Author " → " profile.Name)
+    return {ProfileId:profile.Id, Window:hwnd, Video:detected.Video}
 }
 
 UpdateTray() {

@@ -228,12 +228,11 @@ CancelReaction(*) {
 RunReactionSendLoop(job) {
     if !job || !SetReactionJobPhase(job,"running")
         return
-    precisionEnabled := false
+    precisionEnabled := false, reply := 0
     releasePrecision := (*) => SetReactionTimingPrecision(false)
     try {
         if !IsTargetForeground(job.Window) {
-            if FinishReactionJob(job)
-                ReactionNotice({State:"wrong_window"},job)
+            reply := {State:"wrong_window"}
             return
         }
         if job.Interval > 0 {
@@ -245,23 +244,37 @@ RunReactionSendLoop(job) {
             if !WaitReactionInterval(job)
                 return
             if !IsTargetForeground(job.Window) {
-                if FinishReactionJob(job)
-                    ReactionNotice({State:"wrong_window"},job)
+                reply := {State:"wrong_window"}
                 return
             }
             job.StartedAt := AppClockMs()
             reply := RequestBrowserOperation(job.Window, "reaction_send", job.Video, "Reaction=" ResolveReactionKind(job.Choice) "`n")
-            if ActiveReactionJob != job
+            if ActiveReactionJob != job || reply.State != "operated"
                 return
-            ApplyReactionResult(job, reply)
+            if job.FirstStartedAt < 0
+                job.FirstStartedAt := job.StartedAt
+            job.Completed++
+            if job.Cancelled || job.Completed >= job.Total
+                return
+            SetReactionStatus(ReactionSendProgress(job) "。実行中：" ShortcutKeyLabel(GetShortcutKey("stop")) "で停止。",false,"",job)
         }
     } catch as operationError {
-        if FinishReactionJob(job)
-            ReactionNotice({State:"unknown",Detail:operationError.Message},job)
+        reply := {State:"unknown",Detail:operationError.Message}
     } finally {
-        if precisionEnabled {
-            OnExit(releasePrecision, 0)
-            SetReactionTimingPrecision(false)
+        try {
+            if precisionEnabled {
+                OnExit(releasePrecision, 0)
+                SetReactionTimingPrecision(false)
+            }
+        } finally {
+            ; Every exit retires this attempt; only its owner may publish a terminal result.
+            if FinishReactionJob(job) {
+                if reply && reply.State != "operated"
+                    ReactionNotice(reply,job)
+                else
+                    SetReactionStatus(ReactionSendProgress(job) "。" (job.Cancelled ? "中止しました。" : "完了しました。")
+                        " YouTube側の受理回数は未確認です。",true,"",job,job.Cancelled ? "cancelled" : "completed")
+            }
         }
     }
 }
@@ -302,25 +315,10 @@ WaitReactionInterval(job) {
     return false
 }
 
-ApplyReactionResult(job, reply) {
-    global ActiveReactionJob
-    if reply.State != "operated" {
-        FinishReactionJob(job)
-        ReactionNotice(reply,job)
-        return
-    }
-    if job.FirstStartedAt < 0
-        job.FirstStartedAt := job.StartedAt
-    job.Completed++
+; Progress text is derived from the same counters for intermediate and final presentation.
+ReactionSendProgress(job) {
     measurement := job.Completed > 1 ? "（平均開始間隔 " Round((job.StartedAt - job.FirstStartedAt) / (job.Completed - 1)) " ms）" : ""
-    progress := job.Applied "`n操作済み " job.Completed " / " job.Total " 回" measurement
-    if job.Cancelled || job.Completed >= job.Total {
-        FinishReactionJob(job)
-        SetReactionStatus(progress "。" (job.Cancelled ? "中止しました。" : "完了しました。") " YouTube側の受理回数は未確認です。", true,"",job,job.Cancelled ? "cancelled" : "completed")
-        return
-    }
-    SetReactionStatus(progress "。実行中：" ShortcutKeyLabel(GetShortcutKey("stop")) "で停止。",false,"",job)
-    ; The serial loop schedules against this operation's start, not its completion.
+    return job.Applied "`n操作済み " job.Completed " / " job.Total " 回" measurement
 }
 
 QuickReaction(*) {

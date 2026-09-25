@@ -4,7 +4,6 @@ $ErrorActionPreference = 'Stop'
 # A suspended start must never schedule or report on behalf of its successor.
 $startRuntime=New-TestRuntime
 $startTests=@'
-OnExit(StopBrowserWorker)
 BuildManagement()
 global StartChecks := 0, StartCase := 0, StartPoint := "", StartProbeArmed := false, StartProbeReached := false
 global StartOriginal := 0, StartReplacement := 0, StartPreservedResult := 0, StartRequests := 0

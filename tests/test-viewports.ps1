@@ -3,7 +3,6 @@ $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release=New-TestRuntime
 $tests=@'
-OnExit(StopBrowserWorker)
 global ViewChecks := 0
 global DeletedViewports := 0
 for useLayout in [false,true] {

@@ -3,7 +3,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $countdownRuntime=New-TestRuntime
 $countdownTests=@'
-OnExit(StopBrowserWorker)
 BuildManagement()
 global CountdownChecks := 0, CountdownCase := 0, CountdownReplacement := 0, CountdownRequests := 0
 for scenario in [

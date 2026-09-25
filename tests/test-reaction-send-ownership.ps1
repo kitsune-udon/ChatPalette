@@ -3,7 +3,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $ownershipRuntime=New-TestRuntime
 $ownershipTests=@'
-OnExit(StopBrowserWorker)
 BuildManagement()
 global OwnershipChecks := 0, OwnershipCase := 0, OwnershipReplacement := 0
 global OwnershipForegroundCalls := 0, OwnershipRequests := 0, OwnershipPrecision := ""
@@ -11,7 +10,8 @@ for scenario in [{Point:1,Throws:false,Requests:0,Precision:""},
     {Point:1,Throws:true,Requests:0,Precision:""},
     {Point:2,Throws:false,Requests:0,Precision:"BE"},
     {Point:2,Throws:true,Requests:0,Precision:"BE"},
-    {Point:0,Throws:true,Requests:1,Precision:"BE"}] {
+    {Point:0,Throws:true,Requests:1,Precision:"BE"},
+    {Point:0,Throws:false,Requests:1,Precision:"BE"}] {
     OwnershipCase := scenario, OwnershipForegroundCalls := 0, OwnershipRequests := 0, OwnershipPrecision := ""
     job := CreateReactionJob({Window:123,Video:"abcdefghijk",Total:2,Interval:100})
     ActiveReactionJob := job

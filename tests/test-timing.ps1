@@ -3,7 +3,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 $tests = @'
-OnExit(StopBrowserWorker)
 global TimingChecks := 0, TimingMode := "", PrecisionEvents := "", TimingRequests := 0
 AssertTiming(ReactionIntervalLabels()[5]="150 ms" && ReactionIntervalLabels()[7]="250 ms", "new choices and labels")
 for mode in ["normal","foreground-error","foreground-false","error","cancel","unavailable","nowait","sync_failed","unknown"] {
@@ -37,15 +36,14 @@ for choice in RandomChoices
     AssertTiming(choice>=1 && choice<=5,"worker receives concrete kind")
 Loop 5
     AssertTiming(ResolveReactionKind(A_Index)=A_Index,"fixed kind unchanged")
-measured := CreateReactionJob({StartedAt:1000,Completed:0,Total:3,Cancelled:false})
+TimingMode := "measured", TimingRequests := 0
+global MeasurementTime := 1000
+RuntimePorts.Clock := (*) => MeasurementTime
+measured := CreateReactionJob({Window:123,Total:3})
 ActiveReactionJob := measured
-ApplyReactionResult(measured,{State:"operated"})
-AssertTiming(!InStr(ReactionExecutionStatus.Message,"平均開始間隔"),"single operation does not display an average interval")
-measured.StartedAt := 1200
-ApplyReactionResult(measured,{State:"operated"})
-measured.StartedAt := 1400
-ApplyReactionResult(measured,{State:"operated"})
-AssertTiming(InStr(LastReactionResult.Message,"平均開始間隔 200 ms"),"start timestamps determine mean independently of response time")
+RunReactionSendLoop(measured)
+AssertTiming(measured.Completed=3 && InStr(LastReactionResult.Message,"平均開始間隔 200 ms"),"start timestamps determine mean independently of response time")
+RuntimePorts.Clock := 0
 TimingMode := "normal"
 for interval in [150,250] {
     PrecisionEvents := ""
@@ -150,6 +148,12 @@ FixtureTimingPrecision(enabled) {
 FixtureBrowserOperation(hwnd,mode:="resolve",video:="",extra:="") {
     global TimingRequests
     TimingRequests++
+    if TimingMode="measured" {
+        global MeasurementTime
+        if TimingRequests=2
+            AssertTiming(!InStr(ReactionExecutionStatus.Message,"平均開始間隔"),"single operation does not display an average interval")
+        MeasurementTime += 200
+    }
     if TimingMode="random" {
         if !RegExMatch(extra,"^Reaction=([1-5])\n$",&match)
             throw Error("Invalid random worker payload")

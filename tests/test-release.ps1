@@ -4,6 +4,8 @@ $ErrorActionPreference='Stop'
 $release=New-TestRuntime
 . (Join-Path $ProjectRoot 'scripts\release-files.ps1')
 Copy-ReleaseFiles $ProjectRoot $release
+# A version change needs no README rewrite; validation and both outputs use VERSION.
+[IO.File]::WriteAllText((Join-Path $release 'VERSION'),"99.99.99-test`n",[Text.UTF8Encoding]::new($false))
 foreach ($relative in @('data\settings.db','data\private-registration.txt','tests\.tmp\private.txt','private.txt')) {
     $path=Join-Path $release $relative
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($path)) -Force | Out-Null
@@ -21,7 +23,7 @@ foreach($invalid in @('version','encoding','link')) {
     $target=Join-Path $release $(if($invalid -eq 'version') {'VERSION'} elseif($invalid -eq 'encoding') {'main.ahk'} else {'README.md'})
     $original=[IO.File]::ReadAllBytes($target)
     try {
-        if($invalid -eq 'version') { [IO.File]::WriteAllText($target,'99.99.99') }
+        if($invalid -eq 'version') { [IO.File]::WriteAllText($target,'invalid-version') }
         elseif($invalid -eq 'encoding') { [IO.File]::WriteAllText($target,"#Requires AutoHotkey v2.0`n",[Text.UTF8Encoding]::new($false)) }
         else { [IO.File]::AppendAllText($target,"`n[missing](not-a-real-file.md)`n",[Text.UTF8Encoding]::new($false)) }
         $rejected=$false

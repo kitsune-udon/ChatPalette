@@ -3,7 +3,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 $tests = @'
-OnExit(StopBrowserWorker)
 global ReturnChecks := 0, ResolveCalls := 0
 global TestChannel := {State:"ok",Channel:"/channel/return",Author:"Return",Video:"abcdefghijk"}
 BuildManagement()
@@ -197,7 +196,6 @@ RuntimePorts.ResolveChannel := FixtureResolveChannel
 
 $navigationRuntime=New-TestRuntime
 $navigationTests=@'
-OnExit(StopBrowserWorker)
 BuildManagement()
 global NavigationChecks := 0, NavigationRequests := 0, NavigationRestarts := 0, NavigationFailure := false
 browser := Gui(,"isolated page operation target")

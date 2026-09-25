@@ -29,7 +29,6 @@ Edit-TestSource $release 'src/ui/window_presenter.ahk' 'PresentWindow(view, opti
 Edit-TestSource $release 'src/ui/shortcut_manager.ahk' '        try SaveShortcutMap(draft)' ("        try {`r`n            SaveShortcutMap(draft)`r`n            ProbeShortcutSaved(""keys"")`r`n        }")
 Edit-TestSource $release 'src/ui/shortcut_manager.ahk' '            SaveShortcutItemAssignments(itemState.ProfileId,itemState.Ids[first.Value],itemState.Ids[second.Value])' ('            SaveShortcutItemAssignments(itemState.ProfileId,itemState.Ids[first.Value],itemState.Ids[second.Value])' + "`r`n            ProbeShortcutSaved(""items"")")
 $tests=@'
-OnExit(StopBrowserWorker)
 global UiChecks := 0, ProbeListArmed := false, ProbeViewportArmed := false, InputCalls := 0
 global ProbeViewportRegistrationFailure := true, ProbeRegisteredViewport := 0, DeletedRegisteredViewports := 0
 registrationView := Gui(,"viewport registration fixture")
