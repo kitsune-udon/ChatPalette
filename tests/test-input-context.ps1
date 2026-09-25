@@ -7,7 +7,7 @@ $source = @'
 #Include %A_ScriptDir%\src\app\app_modules.ahk
 OnExit(CloseSettingsStore)
 global SettingsDatabasePath := A_ScriptDir "\settings.db", ApplicationShortcutsInstalled := false, LibraryHistory := []
-global ContextChecks := 0, ContextCalls := 0, ContextReentry := false
+global ContextCalls := 0, ContextReentry := false
 state := CreateDefaultSettings()
 state.Profiles := [
     {Id:"context-a",Name:"A",Channel:"/channel/a",Items:[{Id:"item-a",Name:"A",Text:"first",Slot:1}]},
@@ -29,11 +29,11 @@ for route in ["shortcut","palette"] {
         ContextCalls := 0, ContextReentry := reentry
         plan := route="shortcut" ? ResolveShortcutInput("profile",1,123)
             : ResolveDanmakuInput({ProfileId:"context-a",ItemId:"item-a",ExpectedText:"first",Window:123})
-        CheckContext(ContextCalls=1 && !ContextReentry,"automatic input resolves once before presentation")
-        CheckContext(plan.ProfileId=="context-a" && plan.Video=="aaaaaaaaaaa" && plan.Window=123
+        Assert(ContextCalls=1 && !ContextReentry,"automatic input resolves once before presentation")
+        Assert(plan.ProfileId=="context-a" && plan.Video=="aaaaaaaaaaa" && plan.Window=123
             && plan.ItemId=="item-a" && plan.Text=="first","input retains the resolved profile, video and item across presentation")
         if reentry
-            CheckContext(InputProfileId=="context-b" && DetectedChannel.Video=="bbbbbbbbbbb",
+            Assert(InputProfileId=="context-b" && DetectedChannel.Video=="bbbbbbbbbbb",
                 "presentation actually replaces both shared selection and detection state")
     }
 }
@@ -42,10 +42,10 @@ for reply in [{State:"unavailable",Channel:"",Author:"",Video:""},
     Error("lookup failed")] {
     ContextReply := reply, ContextCalls := 0
     SaveInputProfileId("context-a")
-    CheckContext(!ResolveShortcutInput("profile",1,123) && ContextCalls=1 && InputProfileId=="context-a",
+    Assert(!ResolveShortcutInput("profile",1,123) && ContextCalls=1 && InputProfileId=="context-a",
         "failed or unmatched automatic detection never creates a plan or changes saved selection")
     if reply is Error
-        CheckContext(DetectedChannel.State="unavailable" && InStr(DetectionMessage,"lookup failed"),
+        Assert(DetectedChannel.State="unavailable" && InStr(DetectionMessage,"lookup failed"),
             "lookup exception retains an unavailable display state and its cause")
 }
 ContextReply := {State:"ok",Channel:"/channel/b",Author:"B",Video:"bbbbbbbbbbb"}
@@ -53,27 +53,21 @@ SaveInputProfileId("context-a")
 originalPath := SettingsDatabasePath
 SettingsDatabasePath := A_ScriptDir "\missing\settings.db"
 ; Force a selection write to fail; an unsaved selection cannot become an input plan.
-CheckContext(!ResolveShortcutInput("profile",1,123) && InputProfileId=="context-a"
+Assert(!ResolveShortcutInput("profile",1,123) && InputProfileId=="context-a"
     && InStr(DetectionMessage,"配信者を選択できません"),"failed selection save prevents an automatic input plan")
 SettingsDatabasePath := originalPath
-CheckContext(LoadSettings(SettingsDatabasePath).InputProfileId=="context-a","failed selection save preserves the stored selection")
+Assert(LoadSettings(SettingsDatabasePath).InputProfileId=="context-a","failed selection save preserves the stored selection")
 ContextReply := {State:"ok",Video:"aaaaaaaaaaa"}
 AutoMode := false, ContextCalls := 0
 plan := ResolveShortcutInput("profile",1,123)
-CheckContext(plan.ProfileId=="context-a" && plan.ItemId=="item-a" && plan.Video=="aaaaaaaaaaa" && ContextCalls=1,
+Assert(plan.ProfileId=="context-a" && plan.ItemId=="item-a" && plan.Video=="aaaaaaaaaaa" && ContextCalls=1,
     "manual selection resolves its video without requiring channel metadata")
 AutoMode := true, ContextCalls := 0
 plan := ResolveShortcutInput("shared",1,123)
-CheckContext(plan.ProfileId=="" && plan.ItemId=="item-shared" && plan.Text=="shared" && ContextCalls=1,
+Assert(plan.ProfileId=="" && plan.ItemId=="item-shared" && plan.Text=="shared" && ContextCalls=1,
     "shared input does not depend on an automatic profile match")
-FileAppend("PASS: " ContextChecks " input context checks; no windows, browser or input operations`n","*")
+FileAppend("PASS: " Checks " input context checks; no windows, browser or input operations`n","*")
 ExitApp()
-CheckContext(value,label) {
-    global ContextChecks
-    if !value
-        throw Error(label)
-    ContextChecks++
-}
 ResolveContextFixture(hwnd) {
     global ContextCalls
     ContextCalls++
@@ -82,7 +76,7 @@ ResolveContextFixture(hwnd) {
     return ContextReply
 }
 ReadContextFixture(hwnd,mode,video,extra) {
-    CheckContext(mode="browser_context","manual and shared inputs request only the current video")
+    Assert(mode="browser_context","manual and shared inputs request only the current video")
     return ResolveContextFixture(hwnd)
 }
 ContextPresentationBoundary(*) {

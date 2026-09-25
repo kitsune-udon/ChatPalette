@@ -95,7 +95,7 @@ foreach ($mode in @('success','failure','timeout','invalid-timeout')) {
     }
 }
 # Unhandled AHK failures must reach stderr and the process exit code, even from timers.
-foreach ($kind in @('synchronous','timer','caught')) {
+foreach ($kind in @('synchronous','timer','assertion','caught')) {
     $ahkRuntime=Join-Path $runtime ('ahk-'+$kind)
     New-Item -ItemType Directory -Path $ahkRuntime | Out-Null
     $source=@'
@@ -107,6 +107,23 @@ TriggerFixtureFailure(*) {
 '@
     $source += "`r`n" + $(if ($kind -eq 'timer') {
         "SetTimer(TriggerFixtureFailure,-10)`r`nSleep(1000)`r`nExitApp(0)`r`n"
+    } elseif ($kind -eq 'assertion') {
+@'
+if Checks != 0
+    throw Error("Assertion count leaked across runtimes")
+Assert(true,"first check")
+if Checks != 1
+    throw Error("Successful assertion was not counted")
+expectedLine := A_LineNumber+2
+caught := 0
+try Assert(false,"caught assertion")
+catch as failure
+    caught := failure
+if !caught || caught.Line != expectedLine || caught.Message != "caught assertion" || Checks != 1
+    throw Error("Failed assertion lost its caller or changed the success count")
+Assert(false,"AHK fixture failure")
+ExitApp(0)
+'@
     } elseif ($kind -eq 'caught') {
         "try TriggerFixtureFailure()`r`ncatch {`r`n    FileAppend('caught fixture failure', '*')`r`n}`r`nExitApp(0)`r`n"
     } else { "TriggerFixtureFailure()`r`nExitApp(0)`r`n" })

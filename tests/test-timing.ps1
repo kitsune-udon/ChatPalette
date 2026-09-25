@@ -3,46 +3,46 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 $tests = @'
-global TimingChecks := 0, TimingMode := "", PrecisionEvents := "", TimingRequests := 0
-AssertTiming(ReactionIntervalLabels()[5]="150 ms" && ReactionIntervalLabels()[7]="250 ms", "new choices and labels")
+global TimingMode := "", PrecisionEvents := "", TimingRequests := 0
+Assert(ReactionIntervalLabels()[5]="150 ms" && ReactionIntervalLabels()[7]="250 ms", "new choices and labels")
 for mode in ["normal","foreground-error","foreground-false","error","cancel","unavailable","nowait","sync_failed","unknown"] {
     TimingMode := mode, PrecisionEvents := "", TimingRequests := 0
     job := CreateReactionJob({Mode:"reaction_send",Window:123,Video:"abcdefghijk",Choice:1,Completed:0,Total:2,Cancelled:false,Interval:mode="nowait" ? 0 : 100})
     ActiveReactionJob := job
     RunReactionSendLoop(ActiveReactionJob)
     expected := (mode="nowait" || mode="foreground-error" || mode="foreground-false") ? "" : (mode="unavailable" ? "B" : "BE")
-    AssertTiming(PrecisionEvents=expected,"balanced precision: " mode)
-    AssertTiming(!ActiveReactionJob && OperationAllowed("reaction"),"job finished and next operation allowed: " mode)
+    Assert(PrecisionEvents=expected,"balanced precision: " mode)
+    Assert(!ActiveReactionJob && OperationAllowed("reaction"),"job finished and next operation allowed: " mode)
     expectedCount := (mode="error" || mode="sync_failed" || mode="unknown" || mode="foreground-error" || mode="foreground-false") ? 0 : (mode="cancel" ? 1 : 2)
-    AssertTiming(job.Completed=expectedCount,"exact completed count on exit: " mode)
+    Assert(job.Completed=expectedCount,"exact completed count on exit: " mode)
     if mode="foreground-error" || mode="foreground-false" {
-        AssertTiming(TimingRequests=0,"failed preflight sends no request: " mode)
-        AssertTiming(LastReactionResult.Reason=(mode="foreground-error" ? "unknown" : "wrong_window")
+        Assert(TimingRequests=0,"failed preflight sends no request: " mode)
+        Assert(LastReactionResult.Reason=(mode="foreground-error" ? "unknown" : "wrong_window")
             && LastReactionResult.Detail=(mode="foreground-error" ? "fixture foreground failure" : ""),"failed preflight preserves reason and detail: " mode)
     }
     if mode="sync_failed" || mode="unknown"
-        AssertTiming(LastReactionResult.Reason=mode,"failure reason preserved: " mode)
+        Assert(LastReactionResult.Reason=mode,"failure reason preserved: " mode)
 }
 TimingMode := "random"
 SaveReactionDefaults(CreateReactionOptions(RandomReactionKind,10,200))
 restored := LoadSettings(SettingsDatabasePath)
-AssertTiming(restored.DefaultReactionKind=RandomReactionKind && restored.DefaultReactionIntervalMs=200,"random persistence")
+Assert(restored.DefaultReactionKind=RandomReactionKind && restored.DefaultReactionIntervalMs=200,"random persistence")
 global RandomChoices := []
 ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Video:"abcdefghijk",Choice:RandomReactionKind,Completed:0,Total:10,Cancelled:false,Interval:0})
 randomJob := ActiveReactionJob
 RunReactionSendLoop(ActiveReactionJob)
-AssertTiming(randomJob.Completed=10 && randomJob.Choice=RandomReactionKind && RandomChoices.Length=10,"random resolves per operation")
+Assert(randomJob.Completed=10 && randomJob.Choice=RandomReactionKind && RandomChoices.Length=10,"random resolves per operation")
 for choice in RandomChoices
-    AssertTiming(choice>=1 && choice<=5,"worker receives concrete kind")
+    Assert(choice>=1 && choice<=5,"worker receives concrete kind")
 Loop 5
-    AssertTiming(ResolveReactionKind(A_Index)=A_Index,"fixed kind unchanged")
+    Assert(ResolveReactionKind(A_Index)=A_Index,"fixed kind unchanged")
 TimingMode := "measured", TimingRequests := 0
 global MeasurementTime := 1000
 RuntimePorts.Clock := (*) => MeasurementTime
 measured := CreateReactionJob({Window:123,Total:3})
 ActiveReactionJob := measured
 RunReactionSendLoop(measured)
-AssertTiming(measured.Completed=3 && InStr(LastReactionResult.Message,"平均開始間隔 200 ms"),"start timestamps determine mean independently of response time")
+Assert(measured.Completed=3 && InStr(LastReactionResult.Message,"平均開始間隔 200 ms"),"start timestamps determine mean independently of response time")
 RuntimePorts.Clock := 0
 TimingMode := "normal"
 for interval in [150,250] {
@@ -50,39 +50,39 @@ for interval in [150,250] {
     ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Video:"abcdefghijk",Choice:1,Completed:0,Total:2,Cancelled:false,Interval:interval})
     job := ActiveReactionJob
     RunReactionSendLoop(ActiveReactionJob)
-    AssertTiming(job.Completed=2 && PrecisionEvents="BE","new interval runs: " interval)
+    Assert(job.Completed=2 && PrecisionEvents="BE","new interval runs: " interval)
 }
 TimingMode := "normal", PrecisionEvents := "", TimingRequests := 0
 stale := CreateReactionJob({Cancelled:true,Phase:"finished",Window:123,Total:2,Interval:100})
 replacement := CreateReactionJob({Window:123,Video:"abcdefghijk",Total:2,Interval:100})
 ActiveReactionJob := replacement
 RunReactionSendLoop(stale)
-AssertTiming(ActiveReactionJob=replacement && replacement.Completed=0 && replacement.Phase="waiting","stale send loop cannot run or cancel a replacement job")
-AssertTiming(TimingRequests=0 && PrecisionEvents="","stale send loop acquires no timing resources and sends no request")
+Assert(ActiveReactionJob=replacement && replacement.Completed=0 && replacement.Phase="waiting","stale send loop cannot run or cancel a replacement job")
+Assert(TimingRequests=0 && PrecisionEvents="","stale send loop acquires no timing resources and sends no request")
 RunReactionSendLoop(replacement)
-AssertTiming(!ActiveReactionJob && replacement.Completed=2 && TimingRequests=2 && PrecisionEvents="BE","explicit current job runs serially and releases precision")
+Assert(!ActiveReactionJob && replacement.Completed=2 && TimingRequests=2 && PrecisionEvents="BE","explicit current job runs serially and releases precision")
 RunReactionSendLoop(stale)
-AssertTiming(!ActiveReactionJob && TimingRequests=2 && PrecisionEvents="BE","released job cannot restart the send loop")
+Assert(!ActiveReactionJob && TimingRequests=2 && PrecisionEvents="BE","released job cannot restart the send loop")
 cancelled := CreateReactionJob({Cancelled:true,Phase:"stopping",Window:123,Total:2,Interval:100})
 ActiveReactionJob := cancelled
 RunReactionSendLoop(cancelled)
-AssertTiming(ActiveReactionJob=cancelled && cancelled.Phase="stopping" && TimingRequests=2 && PrecisionEvents="BE","cancelled job cannot reenter sending while its cleanup is pending")
+Assert(ActiveReactionJob=cancelled && cancelled.Phase="stopping" && TimingRequests=2 && PrecisionEvents="BE","cancelled job cannot reenter sending while its cleanup is pending")
 FinishReactionJob(cancelled)
 global DisplayClock := 4294967290.0
 RuntimePorts.Clock := (*) => DisplayClock
 SetReactionStatus("clock first")
-AssertTiming(PaletteStatusControl.Text="clock first","progress initially renders before 32-bit uptime boundary")
+Assert(PaletteStatusControl.Text="clock first","progress initially renders before 32-bit uptime boundary")
 DisplayClock += 100.5
 SetReactionStatus("clock after boundary")
-AssertTiming(PaletteStatusControl.Text="clock after boundary","progress renders after throttle interval across uptime boundary")
+Assert(PaletteStatusControl.Text="clock after boundary","progress renders after throttle interval across uptime boundary")
 DisplayClock += 0.25
 SetReactionStatus("clock pending")
-AssertTiming(PaletteStatusControl.Text="clock after boundary","fractional remaining time schedules throttled rendering without a type error")
+Assert(PaletteStatusControl.Text="clock after boundary","fractional remaining time schedules throttled rendering without a type error")
 DisplayClock += 100
 RenderReactionStatus()
-AssertTiming(PaletteStatusControl.Text="clock pending","throttled progress publishes its latest message")
+Assert(PaletteStatusControl.Text="clock pending","throttled progress publishes its latest message")
 SetReactionStatus("clock complete",true)
-AssertTiming(PaletteStatusControl.Text="clock complete","completion bypasses the progress throttle")
+Assert(PaletteStatusControl.Text="clock complete","completion bypasses the progress throttle")
 ; Publish a new result while the previous snapshot is being rendered.
 global DisplayReentry := true, DisplayFailure := false, DisplayClockReads := 0
 RuntimePorts.Clock := ReentrantDisplayClock
@@ -90,7 +90,7 @@ SetReactionStatus("superseded progress")
 deadline := A_TickCount+1000
 while PaletteStatusControl.Text!="reentrant complete" && A_TickCount<deadline
     Sleep(10)
-AssertTiming(PaletteStatusControl.Text="reentrant complete" && !PaletteStop.Enabled
+Assert(PaletteStatusControl.Text="reentrant complete" && !PaletteStop.Enabled
     && LastReactionResult.Message="reentrant complete","reentrant completion replaces the stale progress and releases stop")
 ; An explicit refresh fulfills the reservation before its timer is delivered.
 Critical("On")
@@ -101,25 +101,19 @@ try {
     reads := DisplayClockReads
 } finally Critical("Off")
 Sleep(40)
-AssertTiming(DisplayClockReads=reads,"an explicit completed render consumes its pending reservation")
+Assert(DisplayClockReads=reads,"an explicit completed render consumes its pending reservation")
 DisplayFailure := true, failed := false
 try SetReactionStatus("failed render",true)
 catch
     failed := true
 SetReactionStatus("recovered render",true)
-AssertTiming(failed && PaletteStatusControl.Text="recovered render","render failure releases ownership for the next result")
+Assert(failed && PaletteStatusControl.Text="recovered render","render failure releases ownership for the next result")
 RuntimePorts.Clock := 0
-FileAppend("PASS: " TimingChecks " timing lifecycle checks`n", "*")
+FileAppend("PASS: " Checks " timing lifecycle checks`n", "*")
 TimingMode := "exit", PrecisionEvents := ""
 ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Video:"abcdefghijk",Choice:1,Completed:0,Total:2,Cancelled:false,Interval:100})
 RunReactionSendLoop(ActiveReactionJob)
 throw Error("Exit did not terminate")
-AssertTiming(value,label) {
-    global TimingChecks
-    TimingChecks++
-    if !value
-        throw Error(label)
-}
 ReentrantDisplayClock() {
     global DisplayReentry, DisplayFailure, DisplayClockReads
     DisplayClockReads++
@@ -151,7 +145,7 @@ FixtureBrowserOperation(hwnd,mode:="resolve",video:="",extra:="") {
     if TimingMode="measured" {
         global MeasurementTime
         if TimingRequests=2
-            AssertTiming(!InStr(ReactionExecutionStatus.Message,"平均開始間隔"),"single operation does not display an average interval")
+            Assert(!InStr(ReactionExecutionStatus.Message,"平均開始間隔"),"single operation does not display an average interval")
         MeasurementTime += 200
     }
     if TimingMode="random" {

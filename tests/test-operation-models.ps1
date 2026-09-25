@@ -5,7 +5,6 @@ $release = New-TestRuntime
 $source = @'
 #Requires AutoHotkey v2.0
 #Include %A_ScriptDir%\src\app\app_modules.ahk
-global Checks := 0
 modelKeys := DefaultShortcutKeys(), modelKeys["profile1"] := "^+F11", modelKeys["shared1"] := "^+F12"
 bulk := []
 Loop 501
@@ -88,12 +87,6 @@ for reenterLatest in [false,true] {
 
 FileAppend("PASS: " Checks " operation model checks; no application startup`n","*")
 ExitApp()
-Assert(condition, label) {
-    global Checks
-    if !condition
-        throw Error(label)
-    Checks++
-}
 CountRefresh() {
     global RefreshCount
     RefreshCount++

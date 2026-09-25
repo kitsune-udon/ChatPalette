@@ -55,7 +55,14 @@ function Invoke-AhkTest {
     $entry = Join-Path $Runtime 'test.ahk'
     $preamble = @'
 #Warn VarUnset, StdOut
+global Checks := 0
 OnError(ReportUnhandledTestError)
+Assert(condition, label) {
+    global Checks
+    if !condition
+        throw Error(label,-1)
+    Checks++
+}
 ReportUnhandledTestError(failure, *) {
     try {
         detail := failure is Error ? failure.Message " at " failure.File ":" failure.Line " " failure.Extra "`n" failure.Stack

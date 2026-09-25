@@ -7,42 +7,42 @@ Invoke-AhkTest -Runtime $startup -Source @'
 #Include %A_ScriptDir%\src\app\app_modules.ahk
 global ApplicationShortcutsInstalled := false, ShortcutKeys := DefaultShortcutKeys()
 global StartupBindings := Map(), StartupCalls := [], StartupFailure := "shared1", CleanupFailure := ""
-global StartupChecks := 0, PublishedDuringInstall := false
+global PublishedDuringInstall := false
 RuntimePorts.ShortcutKey := StartupBindingAdapter
 ApplyPreferences(CreateDefaultSettings(),false)
-StartupAssert(!ApplicationShortcutsInstalled && StartupCalls.Length=0,"loading preferences before startup does not register hotkeys")
+Assert(!ApplicationShortcutsInstalled && StartupCalls.Length=0,"loading preferences before startup does not register hotkeys")
 ShortcutKeys["chat_clear"] := "", ShortcutKeys["palette"] := "^+q"
 beforeCritical := A_IsCritical, message := ""
 try InstallApplicationShortcuts()
 catch as failure
     message := failure.Message
-StartupAssert(InStr(message,"startup registration failure"),"initial registration reports its failure")
-StartupAssert(!ApplicationShortcutsInstalled,"failed initial registration is not published as installed")
-StartupAssert(!PublishedDuringInstall,"initial registration remains unpublished while bindings are being installed")
-StartupAssert(StartupBindings.Count=0,"failed initial registration removes every installed binding")
-StartupAssert(A_IsCritical=beforeCritical,"failed initial registration restores caller interruption state")
+Assert(InStr(message,"startup registration failure"),"initial registration reports its failure")
+Assert(!ApplicationShortcutsInstalled,"failed initial registration is not published as installed")
+Assert(!PublishedDuringInstall,"initial registration remains unpublished while bindings are being installed")
+Assert(StartupBindings.Count=0,"failed initial registration removes every installed binding")
+Assert(A_IsCritical=beforeCritical,"failed initial registration restores caller interruption state")
 StartupFailure := ""
 Critical(23)
 InstallApplicationShortcuts()
-StartupAssert(A_IsCritical=23,"successful installation preserves caller interruption state")
+Assert(A_IsCritical=23,"successful installation preserves caller interruption state")
 Critical(beforeCritical)
-StartupAssert(ApplicationShortcutsInstalled && StartupBindings.Count=9,"retry installs all assigned keys")
+Assert(ApplicationShortcutsInstalled && StartupBindings.Count=9,"retry installs all assigned keys")
 for action,key in ShortcutKeys
-    StartupAssert(key="" ? !StartupBindings.Has(action) : StartupBindings[action]==key,"retry respects the configured assignment for " action)
+    Assert(key="" ? !StartupBindings.Has(action) : StartupBindings[action]==key,"retry respects the configured assignment for " action)
 callCount := StartupCalls.Length
 InstallApplicationShortcuts()
-StartupAssert(StartupCalls.Length=callCount,"repeated installation does not register the same bindings again")
+Assert(StartupCalls.Length=callCount,"repeated installation does not register the same bindings again")
 ; Simulate a new startup whose rollback has one failure; other cleanup must continue.
 ApplicationShortcutsInstalled := false, StartupBindings := Map(), StartupCalls := []
 StartupFailure := "shared1", CleanupFailure := "palette", message := ""
 try InstallApplicationShortcuts()
 catch as failure
     message := failure.Message
-StartupAssert(InStr(message,"startup registration failure") && InStr(message,"startup cleanup failure")
+Assert(InStr(message,"startup registration failure") && InStr(message,"startup cleanup failure")
     && InStr(message,"再起動"),"incomplete startup rollback reports original and cleanup failures")
-StartupAssert(!ApplicationShortcutsInstalled && StartupBindings.Count=1 && StartupBindings.Has("palette"),"failed cleanup does not prevent remaining bindings from being removed")
-StartupAssert(A_IsCritical=beforeCritical,"cleanup failure restores caller interruption state")
-FileAppend("PASS: " StartupChecks " shortcut installation checks`n","*")
+Assert(!ApplicationShortcutsInstalled && StartupBindings.Count=1 && StartupBindings.Has("palette"),"failed cleanup does not prevent remaining bindings from being removed")
+Assert(A_IsCritical=beforeCritical,"cleanup failure restores caller interruption state")
+FileAppend("PASS: " Checks " shortcut installation checks`n","*")
 ExitApp()
 StartupBindingAdapter(action,key,enabled) {
     global PublishedDuringInstall
@@ -56,12 +56,6 @@ StartupBindingAdapter(action,key,enabled) {
         StartupBindings[action] := key
     else if StartupBindings.Has(action)
         StartupBindings.Delete(action)
-}
-StartupAssert(condition,message) {
-    global StartupChecks
-    StartupChecks++
-    if !condition
-        throw Error(message)
 }
 '@
 Invoke-AppFixture -Body @'

@@ -7,7 +7,7 @@ $needle="RefreshOperationControls() {"
 Edit-TestSource $resultRuntime 'src/ui/ui_runtime.ahk' $needle ($needle+"`r`n    ProbeResultPublication()")
 $resultTests=@'
 BuildManagement()
-global ResultChecks := 0, ResultArmed := false, ResultPoint := "", ResultCase := ""
+global ResultArmed := false, ResultPoint := "", ResultCase := ""
 global ResultReplacement := 0, ResultPreserved := 0
 for point in ["release","render","release-finished","render-finished"] {
     for scenario in ["completed","unknown","cancelled","countdown","quick"] {
@@ -27,14 +27,14 @@ for point in ["release","render","release-finished","render-finished"] {
             RunReactionSendLoop(job)
         label := point "/" scenario, finished := !!InStr(point,"finished")
         expectedMessage := finished ? "successor finished" : "successor pending"
-        CheckResult(!ResultArmed && ResultReplacement && (finished ? !ActiveReactionJob : ActiveReactionJob=ResultReplacement),"successor owns execution: " label)
-        CheckResult(job.Phase="finished" && ResultReplacement.Phase=(finished ? "finished" : "queued") && ResultReplacement.Completed=0,"finished attempt does not mutate successor: " label)
-        CheckResult((ReactionExecutionStatus.Phase="finished")=finished && ReactionExecutionStatus.Message==expectedMessage && LastReactionResult=ResultPreserved,"successor progress and saved result survive: " label)
-        CheckResult(PaletteStart.Enabled=finished && ManagementItemButtons[1].Enabled=finished,"controls follow successor lifetime: " label)
+        Assert(!ResultArmed && ResultReplacement && (finished ? !ActiveReactionJob : ActiveReactionJob=ResultReplacement),"successor owns execution: " label)
+        Assert(job.Phase="finished" && ResultReplacement.Phase=(finished ? "finished" : "queued") && ResultReplacement.Completed=0,"finished attempt does not mutate successor: " label)
+        Assert((ReactionExecutionStatus.Phase="finished")=finished && ReactionExecutionStatus.Message==expectedMessage && LastReactionResult=ResultPreserved,"successor progress and saved result survive: " label)
+        Assert(PaletteStart.Enabled=finished && ManagementItemButtons[1].Enabled=finished,"controls follow successor lifetime: " label)
         tip := "ahk_class tooltips_class32 ahk_pid " DllCall("GetCurrentProcessId")
-        CheckResult(WinExist(tip) && WinGetTitle(tip)=="successor tip","old result does not clear or replace successor notification: " label)
-        CheckResult(!SetReactionStatus("late progress",false,"",job) && ReactionExecutionStatus.Message==expectedMessage,"late progress is rejected at publication boundary: " label)
-        CheckResult(!SetReactionStatus("late final result",true,"old detail",job,"unknown")
+        Assert(WinExist(tip) && WinGetTitle(tip)=="successor tip","old result does not clear or replace successor notification: " label)
+        Assert(!SetReactionStatus("late progress",false,"",job) && ReactionExecutionStatus.Message==expectedMessage,"late progress is rejected at publication boundary: " label)
+        Assert(!SetReactionStatus("late final result",true,"old detail",job,"unknown")
             && ReactionExecutionStatus.Message==expectedMessage && LastReactionResult=ResultPreserved,"late final result is rejected after successor progress or completion: " label)
         FinishReactionJob(ResultReplacement)
         ShowStatusTip()
@@ -54,18 +54,12 @@ try RunReactionSendLoop(job)
 catch
     escaped := true
 RuntimePorts.Clock := 0
-CheckResult(escaped && !ResultRenderFailure && ResultPrecision=="BE" && !ActiveReactionJob && job.Phase="finished",
+Assert(escaped && !ResultRenderFailure && ResultPrecision=="BE" && !ActiveReactionJob && job.Phase="finished",
     "final rendering failure releases this job and its timing request")
-CheckResult(LastReactionResult.Reason="completed" && LastReactionResult.Completed=1 && LastReactionResult.Detail="",
+Assert(LastReactionResult.Reason="completed" && LastReactionResult.Completed=1 && LastReactionResult.Detail="",
     "display failure cannot replace the completed operation with an unknown outcome")
-FileAppend("PASS: " ResultChecks " result publication ownership checks; no real browser operations`n","*")
+FileAppend("PASS: " Checks " result publication ownership checks; no real browser operations`n","*")
 ExitApp()
-CheckResult(value,label) {
-    global ResultChecks
-    if !value
-        throw Error(label)
-    ResultChecks++
-}
 ProbeResultPublication() {
     global ResultArmed, ResultReplacement, ResultPreserved, ActiveReactionJob
     if !IsSet(ResultArmed) || !ResultArmed || ActiveReactionJob

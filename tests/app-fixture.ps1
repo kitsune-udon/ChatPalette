@@ -32,17 +32,10 @@ function Find-RegisteredReactions([long]$WindowHandle, $Plan) { return @{ Elemen
 Write-TestWorker -Runtime $release -Definitions $mock
     $frame = @'
 InstallApplicationShortcuts()
-global Checks := 0
 '@ + "`r`n" + $Body + "`r`n" + @'
 StopBrowserWorker()
 FileAppend("PASS: " Checks " scenario checks; no real messages or reactions sent`n", "*")
 ExitApp(0)
-Assert(condition, label) {
-    global Checks
-    if !condition
-        throw Error(label)
-    Checks++
-}
 RejectFixtureInput(text) {
     throw Error("Unexpected input outside fixture")
 }

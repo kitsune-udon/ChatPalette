@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $ownershipRuntime=New-TestRuntime
 $ownershipTests=@'
 BuildManagement()
-global OwnershipChecks := 0, OwnershipCase := 0, OwnershipReplacement := 0
+global OwnershipCase := 0, OwnershipReplacement := 0
 global OwnershipForegroundCalls := 0, OwnershipRequests := 0, OwnershipPrecision := ""
 for scenario in [{Point:1,Throws:false,Requests:0,Precision:""},
     {Point:1,Throws:true,Requests:0,Precision:""},
@@ -19,20 +19,14 @@ for scenario in [{Point:1,Throws:false,Requests:0,Precision:""},
     previousResult := LastReactionResult
     RunReactionSendLoop(job)
     label := scenario.Point "/" scenario.Throws
-    CheckOwnership(ActiveReactionJob=OwnershipReplacement && OwnershipReplacement.Phase="queued" && !OwnershipReplacement.Cancelled,"old failure cannot stop replacement: " label)
-    CheckOwnership(job.Phase="finished" && OwnershipPrecision==scenario.Precision && OwnershipRequests=scenario.Requests,"old loop finishes and releases only its resources: " label)
-    CheckOwnership(ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message=="replacement pending" && LastReactionResult=previousResult,"old result cannot overwrite replacement progress or previous result: " label)
-    CheckOwnership(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"replacement keeps operation controls locked: " label)
+    Assert(ActiveReactionJob=OwnershipReplacement && OwnershipReplacement.Phase="queued" && !OwnershipReplacement.Cancelled,"old failure cannot stop replacement: " label)
+    Assert(job.Phase="finished" && OwnershipPrecision==scenario.Precision && OwnershipRequests=scenario.Requests,"old loop finishes and releases only its resources: " label)
+    Assert(ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message=="replacement pending" && LastReactionResult=previousResult,"old result cannot overwrite replacement progress or previous result: " label)
+    Assert(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"replacement keeps operation controls locked: " label)
     FinishReactionJob(OwnershipReplacement)
 }
-FileAppend("PASS: " OwnershipChecks " send-loop ownership checks; no real browser operations`n","*")
+FileAppend("PASS: " Checks " send-loop ownership checks; no real browser operations`n","*")
 ExitApp()
-CheckOwnership(value,label) {
-    global OwnershipChecks
-    if !value
-        throw Error(label)
-    OwnershipChecks++
-}
 ReplaceOwnershipJob() {
     global ActiveReactionJob, OwnershipReplacement
     OwnershipReplacement := CreateReactionJob({Mode:"queued",Window:123})

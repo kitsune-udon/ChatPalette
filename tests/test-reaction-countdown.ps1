@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $countdownRuntime=New-TestRuntime
 $countdownTests=@'
 BuildManagement()
-global CountdownChecks := 0, CountdownCase := 0, CountdownReplacement := 0, CountdownRequests := 0
+global CountdownCase := 0, CountdownReplacement := 0, CountdownRequests := 0
 for scenario in [
     {Point:"foreground",Replace:false,Throws:true,Result:false,Mode:"reaction_check",Remaining:0,Reason:"unavailable"},
     {Point:"foreground",Replace:false,Throws:false,Result:false,Mode:"reaction_check",Remaining:0,Reason:"wrong_window"},
@@ -31,20 +31,20 @@ for scenario in [
         ReactionCountdown()
         label := scenario.Point "/" scenario.Replace "/" scenario.Throws "/" scenario.Result "/" scenario.Mode "/" scenario.Remaining
         expectedRequests := scenario.Point="foreground" || scenario.Remaining>0 ? 0 : 1
-        CheckCountdown(CountdownRequests=expectedRequests,"only the original due job may query the browser: " label)
+        Assert(CountdownRequests=expectedRequests,"only the original due job may query the browser: " label)
         if scenario.Replace {
-            CheckCountdown(ActiveReactionJob=CountdownReplacement && CountdownReplacement.Phase="queued" && !CountdownReplacement.Cancelled && CountdownReplacement.Remaining=7,"replacement ownership and countdown are unchanged: " label)
-            CheckCountdown(job.Phase="finished" && ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message=="replacement pending" && LastReactionResult=previousResult,"stale result cannot overwrite current progress: " label)
-            CheckCountdown(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"replacement retains control locks: " label)
+            Assert(ActiveReactionJob=CountdownReplacement && CountdownReplacement.Phase="queued" && !CountdownReplacement.Cancelled && CountdownReplacement.Remaining=7,"replacement ownership and countdown are unchanged: " label)
+            Assert(job.Phase="finished" && ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message=="replacement pending" && LastReactionResult=previousResult,"stale result cannot overwrite current progress: " label)
+            Assert(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"replacement retains control locks: " label)
             FinishReactionJob(CountdownReplacement)
         } else if scenario.Reason!="" {
-            CheckCountdown(!ActiveReactionJob && job.Phase="finished","terminal tick releases its owner: " label)
-            CheckCountdown(LastReactionResult.Reason==scenario.Reason && LastReactionResult.Mode==scenario.Mode && LastReactionResult.Detail==(scenario.Throws ? "countdown failure" : ""),"terminal result preserves its own reason and details: " label)
-            CheckCountdown(PaletteStart.Enabled && ManagementItemButtons[1].Enabled,"terminal tick restores controls: " label)
+            Assert(!ActiveReactionJob && job.Phase="finished","terminal tick releases its owner: " label)
+            Assert(LastReactionResult.Reason==scenario.Reason && LastReactionResult.Mode==scenario.Mode && LastReactionResult.Detail==(scenario.Throws ? "countdown failure" : ""),"terminal result preserves its own reason and details: " label)
+            Assert(PaletteStart.Enabled && ManagementItemButtons[1].Enabled,"terminal tick restores controls: " label)
         } else {
-            CheckCountdown(ActiveReactionJob=job && job.Phase="waiting" && job.Remaining=scenario.Remaining-1,"ordinary countdown and capture retry retain their owner: " label)
-            CheckCountdown(ReactionExecutionStatus.Phase!="finished" && LastReactionResult=previousResult,"waiting does not publish a terminal result: " label)
-            CheckCountdown(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"waiting retains control locks: " label)
+            Assert(ActiveReactionJob=job && job.Phase="waiting" && job.Remaining=scenario.Remaining-1,"ordinary countdown and capture retry retain their owner: " label)
+            Assert(ReactionExecutionStatus.Phase!="finished" && LastReactionResult=previousResult,"waiting does not publish a terminal result: " label)
+            Assert(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"waiting retains control locks: " label)
             CancelReaction()
         }
     } finally Critical("Off")
@@ -55,7 +55,7 @@ CountdownRequests := 0
 ActiveReactionJob := CreateReactionJob({Mode:"reaction_capture",Window:123})
 ReactionCountdown()
 Sleep(1150)
-CheckCountdown(CountdownRequests=1 && ActiveReactionJob=CountdownReplacement && CountdownReplacement.Remaining=7,"superseded capture never schedules another tick")
+Assert(CountdownRequests=1 && ActiveReactionJob=CountdownReplacement && CountdownReplacement.Remaining=7,"superseded capture never schedules another tick")
 FinishReactionJob(CountdownReplacement)
 ; Re-entry during retry status rendering must not arm the shared timer for a successor.
 global RetryScenario := "", RetryArmed := false
@@ -72,33 +72,27 @@ for retryCase in ["replacement","cancelled"] {
     Critical("On")
     try {
         ReactionCountdown()
-        CheckCountdown(!RetryArmed,"retry reaches its status-rendering boundary: " retryCase)
+        Assert(!RetryArmed,"retry reaches its status-rendering boundary: " retryCase)
         if retryCase="cancelled" {
-            CheckCountdown(!ActiveReactionJob && LastReactionResult.Reason="cancelled","retry rendering preserves cancellation: " retryCase)
+            Assert(!ActiveReactionJob && LastReactionResult.Reason="cancelled","retry rendering preserves cancellation: " retryCase)
             previousResult := LastReactionResult
             ReplaceCountdownRetry()
         }
-        CheckCountdown(ActiveReactionJob=CountdownReplacement && LastReactionResult=previousResult
+        Assert(ActiveReactionJob=CountdownReplacement && LastReactionResult=previousResult
             && ReactionExecutionStatus.Message=="retry successor pending","retry preserves successor progress and the last result: " retryCase)
     } finally Critical(beforeCritical)
     try {
         Sleep(1150)
-        CheckCountdown(CountdownRequests=1 && ActiveReactionJob=CountdownReplacement && CountdownReplacement.Remaining=7,"superseded retry leaves no timer that can advance its successor: " retryCase)
-        CheckCountdown(job.Phase="finished" && !PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"superseded retry is terminal while successor keeps its controls: " retryCase)
+        Assert(CountdownRequests=1 && ActiveReactionJob=CountdownReplacement && CountdownReplacement.Remaining=7,"superseded retry leaves no timer that can advance its successor: " retryCase)
+        Assert(job.Phase="finished" && !PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"superseded retry is terminal while successor keeps its controls: " retryCase)
     } finally {
         RetryArmed := false
         if ActiveReactionJob
             FinishReactionJob(ActiveReactionJob)
     }
 }
-FileAppend("PASS: " CountdownChecks " countdown ownership checks; no real browser operations`n","*")
+FileAppend("PASS: " Checks " countdown ownership checks; no real browser operations`n","*")
 ExitApp()
-CheckCountdown(value,label) {
-    global CountdownChecks
-    if !value
-        throw Error(label)
-    CountdownChecks++
-}
 CountdownBoundary(point) {
     global ActiveReactionJob, CountdownReplacement, IsBrowserOperationBusy
     if CountdownCase.Point="cancel" && point="request" {

@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 # Independent lifecycle scenario: the final result must describe the queued attempt.
 $release = New-TestRuntime
 $quickTests = @'
-global QuickScenario := "", QuickRequests := 0, QuickChecks := 0, QuickReplacement := 0
+global QuickScenario := "", QuickRequests := 0, QuickReplacement := 0
 DefaultReactionCount := 1, DefaultReactionIntervalMs := 0
 for entry in [["changed","changed","lookup detail"], ["unavailable","unavailable","lookup detail"],
     ["request_error","unknown","context exception"], ["release_error","unknown","key exception"],
@@ -15,33 +15,27 @@ for entry in [["changed","changed","lookup detail"], ["unavailable","unavailable
     ActiveReactionJob := queued
     SetReactionStatus("waiting for quick fixture")
     QuickReaction()
-    CheckQuick(!ActiveReactionJob && queued.Phase="finished" && OperationAllowed("reaction"),"ownership released: " QuickScenario)
-    CheckQuick(LastReactionResult.Reason==entry[2] && LastReactionResult.Detail==entry[3],"final cause retained: " QuickScenario)
-    CheckQuick(LastReactionResult.Mode="queued" && LastReactionResult.Completed=0 && ReactionExecutionStatus.Phase="finished"
+    Assert(!ActiveReactionJob && queued.Phase="finished" && OperationAllowed("reaction"),"ownership released: " QuickScenario)
+    Assert(LastReactionResult.Reason==entry[2] && LastReactionResult.Detail==entry[3],"final cause retained: " QuickScenario)
+    Assert(LastReactionResult.Mode="queued" && LastReactionResult.Completed=0 && ReactionExecutionStatus.Phase="finished"
         && ReactionExecutionStatus.Message==LastReactionResult.Message && PaletteStatusControl.Text==LastReactionResult.Message,"visible result belongs to this unstarted attempt: " QuickScenario)
-    CheckQuick(QuickRequests=(InStr(QuickScenario,"release_") || QuickScenario="before_switch" ? 0 : 1),"no send or retry after start failure: " QuickScenario)
+    Assert(QuickRequests=(InStr(QuickScenario,"release_") || QuickScenario="before_switch" ? 0 : 1),"no send or retry after start failure: " QuickScenario)
 }
 QuickScenario := "replacement", QuickRequests := 0
 previousResult := LastReactionResult
 queued := CreateReactionJob({Mode:"queued",Window:123})
 ActiveReactionJob := queued
 QuickReaction()
-CheckQuick(ActiveReactionJob=QuickReplacement && QuickReplacement.Phase="queued" && LastReactionResult=previousResult
+Assert(ActiveReactionJob=QuickReplacement && QuickReplacement.Phase="queued" && LastReactionResult=previousResult
     && ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message="replacement pending","old start cannot finalize or overwrite replacement")
 CancelReaction()
 QuickScenario := "success", QuickRequests := 0
 ActiveReactionJob := CreateReactionJob({Mode:"queued",Window:123})
 QuickReaction()
-CheckQuick(!ActiveReactionJob && QuickRequests=2 && LastReactionResult.Reason="completed"
+Assert(!ActiveReactionJob && QuickRequests=2 && LastReactionResult.Reason="completed"
     && LastReactionResult.Mode="reaction_send" && LastReactionResult.Completed=1,"successful handoff keeps the send result")
-FileAppend("PASS: " QuickChecks " quick reaction result checks; no real browser operations`n","*")
+FileAppend("PASS: " Checks " quick reaction result checks; no real browser operations`n","*")
 ExitApp()
-CheckQuick(value,message) {
-    global QuickChecks
-    if !value
-        throw Error(message)
-    QuickChecks++
-}
 QuickRelease(keys) {
     if QuickScenario="release_error"
         throw Error("key exception")

@@ -34,7 +34,7 @@ function Invoke-FixtureRequest($Request) {
 '@
 Write-TestWorker -Runtime $release -Definitions $mock
 $tests = @'
-global SqliteChecks := 0, RegistrationSyncFault := "", CancelOnCapture := true
+global RegistrationSyncFault := "", CancelOnCapture := true
 db := OpenSettingsRepository(SettingsDatabasePath).Db
 tokens := "["
 Loop 5
@@ -42,46 +42,46 @@ Loop 5
 tokens .= "]"
 payload := '{"browser":"fixture","tokens":' tokens '}'
 SaveReactionRegistration(payload)
-SqlCheck(db.Scalar("PRAGMA user_version")="3","schema version")
+Assert(db.Scalar("PRAGMA user_version")="3","schema version")
 snapshot := LoadReactionRegistrationSnapshot()
-SqlCheck(db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="1","saved registration")
+Assert(db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="1","saved registration")
 reply := SendWorkerRequest(0,"reaction_configure","","Payload=" snapshot "`n")
-SqlCheck(reply.State="configured","worker accepts snapshot over pipe")
+Assert(reply.State="configured","worker accepts snapshot over pipe")
 StopBrowserWorker()
 EnsureReactionRegistrations(0)
-SqlCheck(IsWorkerRegistrationCurrent(),"worker restart restores registrations")
+Assert(IsWorkerRegistrationCurrent(),"worker restart restores registrations")
 db.Exec("PRAGMA query_only=ON")
 reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:StrReplace(payload,"👏1","must-not-save")})
-SqlCheck(reply.State="save_failed" && LoadReactionRegistrationSnapshot()==snapshot,"failed commit preserves registration")
-SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="👏1","failed save retains worker registration")
+Assert(reply.State="save_failed" && LoadReactionRegistrationSnapshot()==snapshot,"failed commit preserves registration")
+Assert(SendWorkerRequest(0,"fixture_registration").Detail="👏1","failed save retains worker registration")
 db.Exec("PRAGMA query_only=OFF")
 beforeCancel := LoadReactionRegistrationSnapshot()
 global ActiveReactionJob := CreateReactionJob({Mode:"reaction_capture",Window:0,Cancelled:false})
 global CaptureFixturePayload := StrReplace(payload,"👏1","cancelled-first")
 captured := RequestBrowserOperation(0,"reaction_capture")
-SqlCheck(captured.State="captured" && ActiveReactionJob.Cancelled && LoadReactionRegistrationSnapshot()==beforeCancel,"capture response does not persist cancelled request")
+Assert(captured.State="captured" && ActiveReactionJob.Cancelled && LoadReactionRegistrationSnapshot()==beforeCancel,"capture response does not persist cancelled request")
 cancelled := FinalizeReactionCapture(ActiveReactionJob,captured)
-SqlCheck(cancelled.State="cancelled" && LoadReactionRegistrationSnapshot()==beforeCancel,"cancel before commit retains DB")
-SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="👏1","cancel before commit retains worker")
+Assert(cancelled.State="cancelled" && LoadReactionRegistrationSnapshot()==beforeCancel,"cancel before commit retains DB")
+Assert(SendWorkerRequest(0,"fixture_registration").Detail="👏1","cancel before commit retains worker")
 stale := CreateReactionJob({Mode:"reaction_capture",Window:0,Cancelled:false})
 RecordBrowserOperation({Mode:"chat_clear",State:"cleared",Window:321,Duration:25})
 recordBefore := LastBrowserOperation
 cancelled := FinalizeReactionCapture(stale,{State:"captured",Detail:payload})
-SqlCheck(cancelled.State="cancelled" && LoadReactionRegistrationSnapshot()==beforeCancel,"replaced job cannot commit")
-SqlCheck(LastBrowserOperation=recordBefore && recordBefore.Mode="chat_clear" && recordBefore.State="cleared"
+Assert(cancelled.State="cancelled" && LoadReactionRegistrationSnapshot()==beforeCancel,"replaced job cannot commit")
+Assert(LastBrowserOperation=recordBefore && recordBefore.Mode="chat_clear" && recordBefore.State="cleared"
     && recordBefore.Window=321 && recordBefore.Duration=25,"stale registration cannot mutate another operation's diagnostic record")
 global ActiveReactionJob := 0
 workerBefore := WorkerState.ProcessId
 SendWorkerRequest(0,"fixture_seed")
 payload := StrReplace(payload,"👏1","updated-first")
 reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:payload})
-SqlCheck(reply.State="registered" && WorkerState.ProcessId=workerBefore,"capture sync keeps worker alive")
-SqlCheck(SendWorkerRequest(0,"fixture_count").Detail="1","capture sync retains video cache")
-SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="updated-first","changed registration reaches existing worker")
+Assert(reply.State="registered" && WorkerState.ProcessId=workerBefore,"capture sync keeps worker alive")
+Assert(SendWorkerRequest(0,"fixture_count").Detail="1","capture sync retains video cache")
+Assert(SendWorkerRequest(0,"fixture_registration").Detail="updated-first","changed registration reaches existing worker")
 global CancelOnRegistrationSync := true, CommittedAtCancellation := false
 reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:payload})
-SqlCheck(CommittedAtCancellation && reply.State="registered","cancel during sync preserves committed result")
-SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail="updated-first","cancel after save still synchronizes worker")
+Assert(CommittedAtCancellation && reply.State="registered","cancel during sync preserves committed result")
+Assert(SendWorkerRequest(0,"fixture_registration").Detail="updated-first","cancel after save still synchronizes worker")
 ; The countdown records capture, save and synchronization as one completed operation.
 CaptureFixturePayload := payload
 for expected in ["registered","save_failed","sync_failed","cancelled"] {
@@ -93,10 +93,10 @@ for expected in ["registered","save_failed","sync_failed","cancelled"] {
     ActiveReactionJob := job
     try {
         ReactionCountdown()
-        SqlCheck(!ActiveReactionJob && LastReactionResult.Reason=expected,"capture finishes with its final outcome: " expected)
-        SqlCheck(LastBrowserOperation.Mode="reaction_capture" && LastBrowserOperation.State=expected
+        Assert(!ActiveReactionJob && LastReactionResult.Reason=expected,"capture finishes with its final outcome: " expected)
+        Assert(LastBrowserOperation.Mode="reaction_capture" && LastBrowserOperation.State=expected
             && LastBrowserOperation.Window=0 && LastBrowserOperation.Duration>=0,"diagnostics record the complete capture outcome: " expected)
-        SqlCheck(job.RegistrationCommitted=(expected="registered" || expected="sync_failed"),"capture outcome agrees with durable commit: " expected)
+        Assert(job.RegistrationCommitted=(expected="registered" || expected="sync_failed"),"capture outcome agrees with durable commit: " expected)
     } finally {
         RegistrationSyncFault := ""
         db.Exec("PRAGMA query_only=OFF")
@@ -120,30 +120,30 @@ for fault,expectedDetail in Map("refused","Fixture registration refusal",
     payload := StrReplace(payload,previousName,nextName)
     reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:payload})
     snapshot := LoadReactionRegistrationSnapshot()
-    SqlCheck(reply.State="sync_failed" && InStr(snapshot,nextName),fault ": sync failure retains committed registration")
-    SqlCheck(reply.Detail==expectedDetail,fault ": capture synchronization preserves the failure reason")
-    SqlCheck(IsWorkerRunning() && WorkerState.ProcessHandle=preservedWorker && !IsWorkerRegistrationCurrent(),fault ": healthy worker survives without permission to perform reactions")
+    Assert(reply.State="sync_failed" && InStr(snapshot,nextName),fault ": sync failure retains committed registration")
+    Assert(reply.Detail==expectedDetail,fault ": capture synchronization preserves the failure reason")
+    Assert(IsWorkerRunning() && WorkerState.ProcessHandle=preservedWorker && !IsWorkerRegistrationCurrent(),fault ": healthy worker survives without permission to perform reactions")
     for mode in ["reaction_send","reaction_check","reaction_capture"] {
         blocked := RequestBrowserOperation(0,mode,"","Reaction=1`n")
-        SqlCheck(blocked.State="sync_failed" && !IsWorkerRegistrationCurrent(),fault ": unsynchronized registration blocks " mode)
-        SqlCheck(blocked.HasOwnProp("Detail") && blocked.Detail==expectedDetail,fault ": blocked " mode " preserves the failure reason")
+        Assert(blocked.State="sync_failed" && !IsWorkerRegistrationCurrent(),fault ": unsynchronized registration blocks " mode)
+        Assert(blocked.HasOwnProp("Detail") && blocked.Detail==expectedDetail,fault ": blocked " mode " preserves the failure reason")
     }
     job := CreateReactionJob({Mode:"reaction_check",Window:0})
     ActiveReactionJob := job
     ReactionCountdown()
-    SqlCheck(!ActiveReactionJob && LastReactionResult.Reason="sync_failed" && LastReactionResult.Detail==expectedDetail,
+    Assert(!ActiveReactionJob && LastReactionResult.Reason="sync_failed" && LastReactionResult.Detail==expectedDetail,
         fault ": reaction result retains the synchronization reason for inspection")
-    SqlCheck(Integer(SendWorkerRequest(0,"fixture_send_count").Detail)=beforeSends,fault ": blocked requests never reach the reaction handler")
-    SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail==previousName,fault ": failed synchronization does not publish partial registration")
-    SqlCheck(IsWorkerRunning() && WorkerState.ProcessHandle=preservedWorker && SendWorkerRequest(0,"fixture_count").Detail="1",fault ": repeated refusal preserves the worker and video cache")
+    Assert(Integer(SendWorkerRequest(0,"fixture_send_count").Detail)=beforeSends,fault ": blocked requests never reach the reaction handler")
+    Assert(SendWorkerRequest(0,"fixture_registration").Detail==previousName,fault ": failed synchronization does not publish partial registration")
+    Assert(IsWorkerRunning() && WorkerState.ProcessHandle=preservedWorker && SendWorkerRequest(0,"fixture_count").Detail="1",fault ": repeated refusal preserves the worker and video cache")
     RegistrationSyncFault := ""
     if fault!="exception"
         FileDelete(flag)
     recovered := RequestBrowserOperation(0,"reaction_send","","Reaction=1`n")
-    SqlCheck(recovered.State="operated" && IsWorkerRegistrationCurrent(),fault ": next operation synchronizes before proceeding")
-    SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail==nextName,fault ": recovery uses committed registration")
-    SqlCheck(Integer(SendWorkerRequest(0,"fixture_send_count").Detail)=beforeSends+1,fault ": recovery performs only the new request without replay")
-    SqlCheck(WorkerState.ProcessHandle=preservedWorker && SendWorkerRequest(0,"fixture_count").Detail="1",fault ": recovery reuses the healthy worker and cache")
+    Assert(recovered.State="operated" && IsWorkerRegistrationCurrent(),fault ": next operation synchronizes before proceeding")
+    Assert(SendWorkerRequest(0,"fixture_registration").Detail==nextName,fault ": recovery uses committed registration")
+    Assert(Integer(SendWorkerRequest(0,"fixture_send_count").Detail)=beforeSends+1,fault ": recovery performs only the new request without replay")
+    Assert(WorkerState.ProcessHandle=preservedWorker && SendWorkerRequest(0,"fixture_count").Detail="1",fault ": recovery reuses the healthy worker and cache")
 }
 for bad in [
     "{", "{}",
@@ -159,7 +159,7 @@ for bad in [
     try SaveReactionRegistration(bad)
     catch
         failed := true
-    SqlCheck(failed && LoadReactionRegistrationSnapshot()==snapshot,"invalid payload preserves data")
+    Assert(failed && LoadReactionRegistrationSnapshot()==snapshot,"invalid payload preserves data")
 }
 external := SqliteConnection(SettingsDatabasePath)
 external.ConfigureStorage()
@@ -169,7 +169,7 @@ failed := false
 try SaveReactionRegistration(payload)
 catch
     failed := true
-SqlCheck(failed,"external update is not overwritten")
+Assert(failed,"external update is not overwritten")
 ReloadAppSettings()
 SaveReactionRegistration(payload)
 ; A failed aggregate-size check rolls back the candidate row as well.
@@ -183,21 +183,21 @@ before := LoadReactionRegistrationSnapshot(), failed := false
 try SaveReactionRegistration(db.Scalar("SELECT json_set(?,'$.browser','sizefour')",large))
 catch
     failed := true
-SqlCheck(failed && LoadReactionRegistrationSnapshot()==before,"aggregate overflow rolls back candidate")
+Assert(failed && LoadReactionRegistrationSnapshot()==before,"aggregate overflow rolls back candidate")
 db.Run("DELETE FROM reaction_registrations WHERE browser!='fixture'")
 second := db.Scalar("SELECT json_set(?,'$.browser','second')",payload)
 SaveReactionRegistration(second)
 backup := A_ScriptDir "\backup.db"
 BackupSettingsDatabase(backup)
 copy := SettingsRepository(backup)
-SqlCheck(copy.Db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="2","backup includes every browser")
+Assert(copy.Db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="2","backup includes every browser")
 for row in db.Rows("SELECT browser,payload FROM reaction_registrations")
-    SqlCheck(copy.Db.Scalar("SELECT payload FROM reaction_registrations WHERE browser=?",row[1])==row[2],"backup preserves browser payload")
+    Assert(copy.Db.Scalar("SELECT payload FROM reaction_registrations WHERE browser=?",row[1])==row[2],"backup preserves browser payload")
 copy.Close()
 db.Run("DELETE FROM reaction_registrations WHERE browser='second'")
 CloseSettingsStore()
-SqlCheck(LoadReactionRegistrationSnapshot()==snapshot,"DB reload preserves registration")
-FileAppend("PASS: " SqliteChecks " registration DB, backup and IPC checks`n","*")
+Assert(LoadReactionRegistrationSnapshot()==snapshot,"DB reload preserves registration")
+FileAppend("PASS: " Checks " registration DB, backup and IPC checks`n","*")
 ExitApp()
 FixtureWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
     global CancelOnRegistrationSync, CommittedAtCancellation
@@ -220,16 +220,10 @@ CommitCapturedReactionRegistration(hwnd,reply) {
     try {
         result := FinalizeReactionCapture(ActiveReactionJob,reply)
         if result.State = "registered" || result.State = "sync_failed"
-            SqlCheck(ActiveReactionJob.RegistrationCommitted && IsWorkerRegistrationCurrent()=(result.State="registered"),"committed capture reports actual worker readiness")
+            Assert(ActiveReactionJob.RegistrationCommitted && IsWorkerRegistrationCurrent()=(result.State="registered"),"committed capture reports actual worker readiness")
         return result
     }
     finally global ActiveReactionJob := 0
-}
-SqlCheck(value,message) {
-    global SqliteChecks
-    SqliteChecks++
-    if !value
-        throw Error(message)
 }
 '@
 Invoke-AppTest -Runtime $release -Body $tests -Setup @'
@@ -243,7 +237,7 @@ RuntimePorts.WorkerRequest := FixtureWorkerRequest
 $displayRuntime=New-TestRuntime
 Edit-TestSource $displayRuntime 'src/browser/browser_service.ahk' 'WinGetProcessName("ahk_id " hwnd)' 'RegistrationDisplayProcess(hwnd)'
 Invoke-AppTest -Runtime $displayRuntime -Body @'
-global DisplayChecks := 0, DisplayProcess := "brave.exe", DisplayRequests := 0
+global DisplayProcess := "brave.exe", DisplayRequests := 0
 RuntimePorts.BrowserRequest := RejectDisplayRequest
 RuntimePorts.WorkerRequest := RejectDisplayRequest
 BuildManagement()
@@ -254,51 +248,45 @@ for target in [0,123] {
     for process in ["closed","autohotkey64.exe"] {
         DisplayProcess := process
         RefreshReactionRegistration()
-        CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未選択"),"missing, closed and non-browser targets are not registered browsers")
+        Assert(InStr(ReactionRegistrationLabel.Text,"未選択"),"missing, closed and non-browser targets are not registered browsers")
     }
 }
 TargetBrowserHwnd := 123, DisplayProcess := "BRAVE.EXE"
 RefreshReactionRegistration()
-CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未設定"),"known browser with no saved registration is unconfigured")
+Assert(InStr(ReactionRegistrationLabel.Text,"未設定"),"known browser with no saved registration is unconfigured")
 tokens := "["
 Loop 5
     tokens .= (A_Index>1 ? "," : "") '{"name":"button' A_Index '","id":"id' A_Index '","class":"button","type":50000}'
 tokens .= "]"
 SaveReactionRegistration('{"browser":"chrome","tokens":' tokens '}')
 RefreshReactionRegistration()
-CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未設定"),"another browser registration cannot configure the current browser")
+Assert(InStr(ReactionRegistrationLabel.Text,"未設定"),"another browser registration cannot configure the current browser")
 SaveReactionRegistration('{"browser":"brave","tokens":' tokens '}')
 for busy in [false,true] {
     IsBrowserOperationBusy := busy
     RefreshReactionRegistration()
-    CheckDisplay(InStr(ReactionRegistrationLabel.Text,"設定済み（メニューの認識は未確認）")=1,"saved registration can be shown even while a browser request owns the gate")
-    CheckDisplay(IsBrowserOperationBusy=busy,"display does not take or release another request's gate")
+    Assert(InStr(ReactionRegistrationLabel.Text,"設定済み（メニューの認識は未確認）")=1,"saved registration can be shown even while a browser request owns the gate")
+    Assert(IsBrowserOperationBusy=busy,"display does not take or release another request's gate")
 }
 IsBrowserOperationBusy := false
 job := CreateReactionJob({Mode:"reaction_send",Phase:"running"})
 ActiveReactionJob := job
 RefreshReactionRegistration()
-CheckDisplay(ActiveReactionJob=job && job.Phase="running" && InStr(ReactionRegistrationLabel.Text,"設定済み")=1,"display preserves a running reaction owner")
+Assert(ActiveReactionJob=job && job.Phase="running" && InStr(ReactionRegistrationLabel.Text,"設定済み")=1,"display preserves a running reaction owner")
 ActiveReactionJob := 0
 db := OpenSettingsRepository(SettingsDatabasePath).Db
 db.DefineProp("Scalar",{Call:RegistrationDisplayReadFailure})
 try {
     RefreshReactionRegistration()
-    CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未確認") && InStr(ReactionRegistrationLabel.Text,"Synthetic registration read failure"),"read failure replaces a stale configured label with its cause")
+    Assert(InStr(ReactionRegistrationLabel.Text,"未確認") && InStr(ReactionRegistrationLabel.Text,"Synthetic registration read failure"),"read failure replaces a stale configured label with its cause")
 } finally db.DeleteProp("Scalar")
 RefreshReactionRegistration()
-CheckDisplay(InStr(ReactionRegistrationLabel.Text,"設定済み")=1,"new display refresh can read the preserved registration after failure")
-CheckDisplay(DisplayRequests=0 && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle && !IsWorkerRegistrationCurrent(),"display never starts, contacts or synchronizes a worker")
-CheckDisplay(LastBrowserOperation=previousOperation && LastReactionResult=previousResult,"display leaves operation diagnostics and reaction result untouched")
-CheckDisplay(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"display does not suspend app windows")
-FileAppend("PASS: " DisplayChecks " local registration display checks; no browser or worker operations`n","*")
+Assert(InStr(ReactionRegistrationLabel.Text,"設定済み")=1,"new display refresh can read the preserved registration after failure")
+Assert(DisplayRequests=0 && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle && !IsWorkerRegistrationCurrent(),"display never starts, contacts or synchronizes a worker")
+Assert(LastBrowserOperation=previousOperation && LastReactionResult=previousResult,"display leaves operation diagnostics and reaction result untouched")
+Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"display does not suspend app windows")
+FileAppend("PASS: " Checks " local registration display checks; no browser or worker operations`n","*")
 ExitApp()
-CheckDisplay(value,label) {
-    global DisplayChecks
-    if !value
-        throw Error(label)
-    DisplayChecks++
-}
 RegistrationDisplayProcess(hwnd) {
     if DisplayProcess="closed"
         throw TargetError("Fixture browser is closed")

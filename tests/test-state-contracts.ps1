@@ -6,41 +6,40 @@ $release = New-TestRuntime
 $commitAnchor = 'ApplyPreferences(state, persist := true) {'
 Edit-TestSource $release 'src/settings/settings_service.ahk' $commitAnchor ($commitAnchor + "`r`n    ProbePreferenceCommit()")
 $tests = @'
-global ContractChecks := 0
 AutoMode := false
 originalLibrary := CreateTestLibrarySnapshot()
 caseLibrary := CreateTestLibrarySnapshot()
 caseLibrary.Profiles.Push({Id:"case-profile",Name:"lower",Channel:"",Items:[{Id:"case-item",Name:"lower item",Text:"lower",Slot:1},{Id:"CASE-ITEM",Name:"upper item",Text:"upper",Slot:2}]})
 caseLibrary.Profiles.Push({Id:"CASE-PROFILE",Name:"upper",Channel:"",Items:[]})
 CommitTestLibraryChange(caseLibrary,"case-sensitive identities")
-CheckContract(FindProfileById(Profiles,"CASE-PROFILE").Name="upper","profile lookup preserves exact stored identity")
+Assert(FindProfileById(Profiles,"CASE-PROFILE").Name="upper","profile lookup preserves exact stored identity")
 SaveInputProfileId("case-profile")
 SaveInputProfileId("CASE-PROFILE")
-CheckContract(InputProfileId=="CASE-PROFILE" && LoadSettings(SettingsDatabasePath).InputProfileId=="CASE-PROFILE","case-only selection change persists exact identity")
+Assert(InputProfileId=="CASE-PROFILE" && LoadSettings(SettingsDatabasePath).InputProfileId=="CASE-PROFILE","case-only selection change persists exact identity")
 for unknownId in ["missing-profile","Case-profile","@shared"] {
     beforeSelectionHistory := LibraryHistory.Length
     rejected := false
     try SaveInputProfileId(unknownId)
     catch
         rejected := true
-    CheckContract(rejected && InputProfileId=="CASE-PROFILE"
+    Assert(rejected && InputProfileId=="CASE-PROFILE"
         && LoadSettings(SettingsDatabasePath).InputProfileId=="CASE-PROFILE"
         && LibraryHistory.Length=beforeSelectionHistory,"invalid input selection reports failure and preserves saved selection: " unknownId)
 }
 ExecuteProfileCommand("rename","CASE-PROFILE","renamed upper")
-CheckContract(FindProfileById(Profiles,"case-profile").Name="lower" && FindProfileById(Profiles,"CASE-PROFILE").Name="renamed upper","edit cannot target a case-insensitive match")
+Assert(FindProfileById(Profiles,"case-profile").Name="lower" && FindProfileById(Profiles,"CASE-PROFILE").Name="renamed upper","edit cannot target a case-insensitive match")
 historyBeforeAssignment := LibraryHistory.Length
 rejected := false
 try SaveShortcutItemAssignments("case-profile","Case-item","")
 catch
     rejected := true
 assigned := GetLibraryItems(LoadSettings(SettingsDatabasePath),"case-profile")
-CheckContract(rejected && assigned[1].Slot=1 && assigned[2].Slot=2 && LibraryHistory.Length=historyBeforeAssignment,"unknown case variant cannot clear saved assignments or add history")
+Assert(rejected && assigned[1].Slot=1 && assigned[2].Slot=2 && LibraryHistory.Length=historyBeforeAssignment,"unknown case variant cannot clear saved assignments or add history")
 SaveShortcutItemAssignments("case-profile","CASE-ITEM","case-item")
 assigned := GetLibraryItems(LoadSettings(SettingsDatabasePath),"case-profile")
-CheckContract(assigned[1].Slot=2 && assigned[2].Slot=1,"exact case-distinct item identities swap assignments")
+Assert(assigned[1].Slot=2 && assigned[2].Slot=1,"exact case-distinct item identities swap assignments")
 ExecuteProfileCommand("delete","CASE-PROFILE")
-CheckContract(FindProfileById(Profiles,"case-profile") && !FindProfileById(Profiles,"CASE-PROFILE"),"deletion removes only exact profile")
+Assert(FindProfileById(Profiles,"case-profile") && !FindProfileById(Profiles,"CASE-PROFILE"),"deletion removes only exact profile")
 CommitTestLibraryChange(originalLibrary,"restore identity fixture")
 a := ExecuteProfileCommand("add","","A").ProfileId
 b := ExecuteProfileCommand("add","","B").ProfileId
@@ -51,37 +50,37 @@ EditingProfileId := b
 RefreshPalette(), RefreshManagement()
 oldBChoice := FindProfileIndexById(Profiles,b)
 ExecuteProfileCommand("delete",a)
-CheckContract(GetInputProfile().Id=c && GetEditingProfileId()=b,"deleting preceding profile preserves both independent identities")
-CheckContract(LoadSettings(SettingsDatabasePath).InputProfileId=c,"active identity persists without a list index")
+Assert(GetInputProfile().Id=c && GetEditingProfileId()=b,"deleting preceding profile preserves both independent identities")
+Assert(LoadSettings(SettingsDatabasePath).InputProfileId=c,"active identity persists without a list index")
 ; The displayed choices still predate the deletion, as after a failed refresh.
 ManagementTarget.Choose(oldBChoice+1)
 ChangeManagementTarget()
-CheckContract(EditingProfileId==b,"management resolves the displayed profile identity after preceding deletion")
+Assert(EditingProfileId==b,"management resolves the displayed profile identity after preceding deletion")
 PaletteProfile.Choose(oldBChoice)
 SelectPaletteProfile()
-CheckContract(InputProfileId==b && LoadSettings(SettingsDatabasePath).InputProfileId==b,"palette saves the displayed profile identity after preceding deletion")
+Assert(InputProfileId==b && LoadSettings(SettingsDatabasePath).InputProfileId==b,"palette saves the displayed profile identity after preceding deletion")
 SaveInputProfileId(c)
 UndoLibraryCommand()
-CheckContract(GetInputProfile().Id=c && GetEditingProfileId()=b,"undo restores order without retargeting either selection")
+Assert(GetInputProfile().Id=c && GetEditingProfileId()=b,"undo restores order without retargeting either selection")
 RefreshPalette(), RefreshManagement()
 oldCChoice := FindProfileIndexById(Profiles,c)
 ExecuteProfileCommand("delete",c)
-CheckContract(!GetInputProfile() && InputProfileId="","deleting selected profile clears input target")
+Assert(!GetInputProfile() && InputProfileId="","deleting selected profile clears input target")
 ManagementTarget.Choose(oldCChoice+1)
 ChangeManagementTarget()
-CheckContract(EditingProfileId==b && InStr(ManagementStatus.Text,"選び直してください"),"deleted management choice is rejected without choosing another profile")
+Assert(EditingProfileId==b && InStr(ManagementStatus.Text,"選び直してください"),"deleted management choice is rejected without choosing another profile")
 PaletteProfile.Choose(oldCChoice)
 SelectPaletteProfile()
-CheckContract(InputProfileId="" && LoadSettings(SettingsDatabasePath).InputProfileId="" && InStr(PaletteHint.Text,"選び直してください"),"deleted palette choice is rejected without changing saved selection")
+Assert(InputProfileId="" && LoadSettings(SettingsDatabasePath).InputProfileId="" && InStr(PaletteHint.Text,"選び直してください"),"deleted palette choice is rejected without changing saved selection")
 ManagementTarget.Choose(0)
 ChangeManagementTarget()
-CheckContract(EditingProfileId==b,"absent selection is not interpreted as shared items")
+Assert(EditingProfileId==b,"absent selection is not interpreted as shared items")
 ManagementTarget.Choose(1)
 ChangeManagementTarget()
-CheckContract(EditingProfileId="","explicit shared choice selects shared items")
+Assert(EditingProfileId="","explicit shared choice selects shared items")
 EditingProfileId := b
 UndoLibraryCommand()
-CheckContract(!GetInputProfile(),"undo does not reselect deleted input target")
+Assert(!GetInputProfile(),"undo does not reselect deleted input target")
 EditingProfileId := ""
 Loop 3
     ExecuteDanmakuCommand("add","","",{Name:"same",Text:"same",Slot:0})
@@ -90,11 +89,11 @@ selectedId := SharedDanmakuItems[2].Id
 PaletteList.Modify(2,"Select Focus"), ManagedList.Modify(2,"Select Focus")
 ExecuteDanmakuCommand("delete","",SharedDanmakuItems[1].Id)
 RefreshPalette(), RefreshManagement()
-CheckContract(PaletteList.GetText(PaletteList.GetNext(),4)=selectedId,"palette restores duplicate text by ID after preceding deletion")
-CheckContract(ManagedList.GetText(ManagedList.GetNext(),4)=selectedId,"management restores duplicate text by ID after preceding deletion")
+Assert(PaletteList.GetText(PaletteList.GetNext(),4)=selectedId,"palette restores duplicate text by ID after preceding deletion")
+Assert(ManagedList.GetText(ManagedList.GetNext(),4)=selectedId,"management restores duplicate text by ID after preceding deletion")
 ExecuteDanmakuCommand("edit","",SharedDanmakuItems[1].Id,{Name:"renamed",Text:"changed",Slot:0})
 RefreshPalette(), RefreshManagement()
-CheckContract(PaletteList.GetText(PaletteList.GetNext(),4)=selectedId && ManagedList.GetText(ManagedList.GetNext(),4)=selectedId,"text edits preserve selected identity")
+Assert(PaletteList.GetText(PaletteList.GetNext(),4)=selectedId && ManagedList.GetText(ManagedList.GetNext(),4)=selectedId,"text edits preserve selected identity")
 ; Mixed edits exercise one changed-range planner, including unchanged interior items.
 Loop 12
     ExecuteDanmakuCommand("add","","",{Name:"item" A_Index,Text:"body" A_Index,Slot:0})
@@ -130,12 +129,12 @@ for operation in ["insert","delete","mixed","reverse","duplicate-id","duplicate-
     catch
         failed := true
     for id, row in oldRows
-        CheckContract(row.Position=oldRanks[id],"planner never mutates previous ranks: " operation)
+        Assert(row.Position=oldRanks[id],"planner never mutates previous ranks: " operation)
     if operation="duplicate-id" || operation="duplicate-slot" {
-        CheckContract(failed,"invalid identity/slot rejected: " operation)
+        Assert(failed,"invalid identity/slot rejected: " operation)
         VerifySettingsRoundTrip(original,LoadSettings(SettingsDatabasePath))
     } else {
-        CheckContract(!failed,"valid mixed change saves: " operation)
+        Assert(!failed,"valid mixed change saves: " operation)
         VerifySettingsRoundTrip(CreateTestSettingsSnapshot(),LoadSettings(SettingsDatabasePath))
         UndoLibraryCommand()
         VerifySettingsRoundTrip(original,LoadSettings(SettingsDatabasePath))
@@ -152,27 +151,27 @@ for at in [1,2,3] {
     delta := BuildScopeStorageDelta(expanded,oldScope)
     rank := 0
     for item in expanded {
-        CheckContract(delta.Rows[item.Id].Position>rank,"inserted ranks stay strictly ordered at " at)
+        Assert(delta.Rows[item.Id].Position>rank,"inserted ranks stay strictly ordered at " at)
         rank := delta.Rows[item.Id].Position
     }
-    CheckContract(oldScope.Rows["left"].Position=1024 && oldScope.Rows["right"].Position=2048,"rank expansion preserves baseline")
-    CheckContract(delta.Rows.Count=22 && delta.Deleted.Length=0,"all inserted rows retained")
+    Assert(oldScope.Rows["left"].Position=1024 && oldScope.Rows["right"].Position=2048,"rank expansion preserves baseline")
+    Assert(delta.Rows.Count=22 && delta.Deleted.Length=0,"all inserted rows retained")
 }
 oldJob := CreateReactionJob({Mode:"queued"})
 currentJob := CreateReactionJob({Mode:"queued"})
 ActiveReactionJob := currentJob
 RefreshOperationControls()
 FinishReactionJob(oldJob)
-CheckContract(ActiveReactionJob=currentJob && currentJob.Phase="queued","stale cleanup preserves replacement job")
-CheckContract(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"stale cleanup keeps replacement job controls disabled")
-CheckContract(!SetReactionJobPhase(oldJob,"running"),"stale callback cannot restart completed job")
+Assert(ActiveReactionJob=currentJob && currentJob.Phase="queued","stale cleanup preserves replacement job")
+Assert(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"stale cleanup keeps replacement job controls disabled")
+Assert(!SetReactionJobPhase(oldJob,"running"),"stale callback cannot restart completed job")
 IsBrowserOperationBusy := true
 CancelReaction()
-CheckContract(currentJob.Phase="stopping" && ActiveReactionJob=currentJob,"cancel during request waits for result")
+Assert(currentJob.Phase="stopping" && ActiveReactionJob=currentJob,"cancel during request waits for result")
 IsBrowserOperationBusy := false
 CancelReaction()
-CheckContract(currentJob.Phase="finished" && currentJob.Cancelled && !ActiveReactionJob,"cancel cleanup finishes once")
-CheckContract(!SetReactionJobPhase(currentJob,"running"),"finished cancellation cannot resume")
+Assert(currentJob.Phase="finished" && currentJob.Cancelled && !ActiveReactionJob,"cancel cleanup finishes once")
+Assert(!SetReactionJobPhase(currentJob,"running"),"finished cancellation cannot resume")
 RuntimePorts.ShortcutRelease := (keys) => true
 RuntimePorts.Foreground := (hwnd) => true
 RuntimePorts.BrowserRequest := CancelQueuedContext
@@ -180,7 +179,7 @@ queued := CreateReactionJob({Mode:"queued",Window:123})
 ActiveReactionJob := queued
 SetReactionStatus("queued",false)
 QuickReaction()
-CheckContract(!ActiveReactionJob && queued.Phase="finished" && LastReactionResult.Reason="cancelled" && ReactionExecutionStatus.Phase="finished","cancel during queued context request publishes terminal cancellation")
+Assert(!ActiveReactionJob && queued.Phase="finished" && LastReactionResult.Reason="cancelled" && ReactionExecutionStatus.Phase="finished","cancel during queued context request publishes terminal cancellation")
 ; A queued selection change must run wholly before or after a preference edit.
 global ProbePreferenceArmed := false, ProbePreferenceRuns := 0, ProbePreferenceTarget := b
 for saveChange in [() => SaveAutoDetection(!AutoMode),
@@ -192,13 +191,13 @@ for saveChange in [() => SaveAutoDetection(!AutoMode),
     deadline := A_TickCount+1000
     while !ProbePreferenceRuns && A_TickCount<deadline
         Sleep(10)
-    CheckContract(!ProbePreferenceArmed && ProbePreferenceRuns=1,"queued selection actually reaches preference commit boundary")
+    Assert(!ProbePreferenceArmed && ProbePreferenceRuns=1,"queued selection actually reaches preference commit boundary")
     persisted := LoadSettings(SettingsDatabasePath)
-    CheckContract(InputProfileId==b && persisted.InputProfileId==b,"preference edit cannot overwrite a concurrent profile selection")
-    CheckContract(persisted.AutoMode=AutoMode && persisted.ShortcutKeys["reaction"]==ShortcutKeys["reaction"]
+    Assert(InputProfileId==b && persisted.InputProfileId==b,"preference edit cannot overwrite a concurrent profile selection")
+    Assert(persisted.AutoMode=AutoMode && persisted.ShortcutKeys["reaction"]==ShortcutKeys["reaction"]
         && persisted.ShortcutKeys["chat_focus"]==ShortcutKeys["chat_focus"],"concurrent selection retains committed preference values")
 }
-FileAppend("PASS: " ContractChecks " identity, publication, storage-range and job-state checks`n","*")
+FileAppend("PASS: " Checks " identity, publication, storage-range and job-state checks`n","*")
 ExitApp()
 ProbePreferenceCommit() {
     global ProbePreferenceArmed
@@ -222,12 +221,6 @@ CancelQueuedContext(*) {
     try CancelReaction()
     finally IsBrowserOperationBusy := false
     return {State:"ok",Video:"abcdefghijk"}
-}
-CheckContract(value,message) {
-    global ContractChecks
-    if !value
-        throw Error(message)
-    ContractChecks++
 }
 '@
 Invoke-AppTest -Runtime $release -Body $tests
