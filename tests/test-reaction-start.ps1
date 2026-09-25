@@ -68,7 +68,10 @@ try {
                         Assert(!ScheduleReaction(mode,3),"interrupted scheduled start reports failure: " mode "/" point "/" scenario)
                     StartProbeArmed := false
                     label := mode "/" point "/" scenario
-                    Assert(StartProbeReached,"start reaches progress rendering: " label)
+                    Assert(StartProbeReached,"start reaches progress rendering: " label
+                        " / result=" LastReactionResult.Reason " / detail=" LastReactionResult.Detail
+                        " / target_exists=" DllCall("IsWindow","Ptr",TargetBrowserHwnd)
+                        " / target_visible=" DllCall("IsWindowVisible","Ptr",TargetBrowserHwnd))
                     if scenario="failure" {
                         Assert(!ActiveReactionJob && LastReactionResult.Reason="unavailable" && LastReactionResult.Detail="start display failure","failed start releases owner and preserves cause: " label)
                         Assert(PaletteStart.Enabled && ManagementItemButtons[1].Enabled,"failed start restores operation controls: " label)

@@ -56,18 +56,18 @@ function Invoke-AhkTest {
     $preamble = @'
 #Warn VarUnset, StdOut
 global Checks := 0
-OnError(ReportUnhandledTestError)
+OnError(FailTest)
 Assert(condition, label) {
     global Checks
     if !condition
-        throw Error(label,-1)
+        FailTest(Error(label,-1))
     Checks++
 }
-ReportUnhandledTestError(failure, *) {
+FailTest(failure, *) {
     try {
         detail := failure is Error ? failure.Message " at " failure.File ":" failure.Line " " failure.Extra "`n" failure.Stack
             : (IsObject(failure) ? Type(failure) : failure)
-        FileAppend("FAIL: unhandled test error: " detail "`n", "**")
+        FileAppend("FAIL: test error: " detail "`n", "**")
     } finally ExitApp(1)
 }
 ; Observe activation without activating or retrying; callers own the action under test.

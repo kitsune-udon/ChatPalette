@@ -95,7 +95,7 @@ foreach ($mode in @('success','failure','timeout','invalid-timeout')) {
     }
 }
 # Unhandled AHK failures must reach stderr and the process exit code, even from timers.
-foreach ($kind in @('synchronous','timer','assertion','caught')) {
+foreach ($kind in @('synchronous','timer','assertion','callback-assertion','caught')) {
     $ahkRuntime=Join-Path $runtime ('ahk-'+$kind)
     New-Item -ItemType Directory -Path $ahkRuntime | Out-Null
     $source=@'
@@ -114,14 +114,16 @@ if Checks != 0
 Assert(true,"first check")
 if Checks != 1
     throw Error("Successful assertion was not counted")
-expectedLine := A_LineNumber+2
-caught := 0
-try Assert(false,"caught assertion")
-catch as failure
-    caught := failure
-if !caught || caught.Line != expectedLine || caught.Message != "caught assertion" || Checks != 1
-    throw Error("Failed assertion lost its caller or changed the success count")
 Assert(false,"AHK fixture failure")
+ExitApp(0)
+'@
+    } elseif ($kind -eq 'callback-assertion') {
+@'
+#Include %A_ScriptDir%\..\src\app\runtime_ports.ahk
+#Include %A_ScriptDir%\..\src\input\text_input.ahk
+RuntimePorts.Text := (*) => Assert(false,"AHK fixture failure")
+; The product catches transport errors, but a failed test condition must still fail the test.
+SendInputText("fixture")
 ExitApp(0)
 '@
     } elseif ($kind -eq 'caught') {
@@ -138,6 +140,11 @@ ExitApp(0)
     } else {
         if ($failure -notmatch '^Test failed \(1\):' -or $stderr -notmatch 'AHK fixture failure' -or $stderr -notmatch 'test\.ahk:\d+' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,1') {
             throw "AHK $kind failure did not record its location and exit with cleanup: $failure"
+        }
+        if ($kind -in @('assertion','callback-assertion')) {
+            $entry=Join-Path $ahkRuntime 'test.ahk'
+            $assertionLine=(Select-String -LiteralPath $entry -SimpleMatch 'Assert(false,"AHK fixture failure")').LineNumber
+            if (!$stderr.Contains("${entry}:$assertionLine")) { throw 'Assertion failure did not identify its caller' }
         }
     }
 }
