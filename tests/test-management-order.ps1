@@ -8,11 +8,18 @@ $anchor='    rows := [BuildPresentationRow(items[previous],previous,id,ShortcutK
 if (!$viewSource.Contains($anchor)) { throw 'Missing partial update boundary' }
 [IO.File]::WriteAllText($viewPath,$viewSource.Replace($anchor,$anchor+"`r`n    ProbePartialUpdate()"),[Text.UTF8Encoding]::new($true))
 
+$controllerPath=Join-Path $release 'src\ui\management\management_controller.ahk'
+$controllerSource=[IO.File]::ReadAllText($controllerPath)
+$commitBoundary='    if !result'
+if (!$controllerSource.Contains($commitBoundary)) { throw 'Missing command presentation boundary' }
+[IO.File]::WriteAllText($controllerPath,$controllerSource.Replace($commitBoundary,"    ProbeManagedCommit()`r`n"+$commitBoundary),[Text.UTF8Encoding]::new($true))
+
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $tests = @'
 OnExit(StopBrowserWorker)
 global ReorderChecks := 0, PartialArmed := false, PartialFailure := false, PartialProbes := 0, PartialGuarded := false
+global CommitProbeArmed := false, QueuedEdits := 0, QueuedTarget := "", CommittedCopy := ""
 BuildManagement()
 for scope in ["shared","profile"] {
     id := scope="shared" ? "" : ExecuteProfileCommand("add","","fixture").ProfileId
@@ -84,6 +91,43 @@ for fails in [false,true] {
     AssertReorder(DllCall("IsWindowVisible","Ptr",ManagedList.Hwnd) && ManagedList.GetText(39,4)==moved,"queued refresh repairs rows before the tab reopens")
     UndoLibraryChange()
 }
+; A queued second edit must see the committed selection, not the previous row.
+for scopeId in ["","queued-profile"] {
+    for callerCritical in [0,23] {
+        fixtureItems := []
+        Loop 3
+            fixtureItems.Push({Id:"queued-item-" A_Index,Name:"item" A_Index,Text:"body" A_Index,Slot:0})
+        library := {Profiles:[],SharedDanmakuItems:scopeId="" ? fixtureItems : []}
+        if scopeId!=""
+            library.Profiles.Push({Id:scopeId,Name:"queued edits",Channel:"",Items:fixtureItems})
+        CommitTestLibraryChange(library,"prepare queued edits")
+        EditingProfileId := scopeId
+        ShowManagement(1)
+        SelectManagedRow(2)
+        items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},scopeId)
+        originalId := items[2].Id, countBefore := items.Length
+        QueuedEdits := 0, QueuedTarget := "", CommittedCopy := "", CommitProbeArmed := true
+        try {
+            Critical(callerCritical)
+            HandleDanmakuCommand("duplicate")
+            AssertReorder(A_IsCritical=callerCritical,"command restores caller interruption policy")
+            Critical("Off")
+            deadline := A_TickCount+1000
+            while !QueuedEdits && A_TickCount<deadline
+                Sleep(10)
+            AssertReorder(QueuedEdits=1 && QueuedTarget==CommittedCopy,"queued delete sees the newly selected duplicate")
+            items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},scopeId)
+            AssertReorder(items.Length=countBefore && items[2].Id==originalId,"queued deletion preserves the original item")
+            savedItems := GetLibraryItems(LoadSettings(SettingsDatabasePath),scopeId)
+            AssertReorder(savedItems.Length=countBefore && savedItems[2].Id==originalId,"queued edit agrees with committed storage")
+            AssertReorder(ManagedList.GetCount()=countBefore && InStr(ManagementStatus.Text,"削除"),"latest edit owns the final list and notice")
+        } finally {
+            Critical("Off")
+            SetTimer(DeleteAfterManagedCommit,0)
+            CommitProbeArmed := false
+        }
+    }
+}
 FileAppend("PASS: " ReorderChecks " management reorder checks; no browser operations`n","*")
 ExitApp()
 ProbePartialUpdate() {
@@ -97,6 +141,24 @@ ProbePartialUpdate() {
     ManagementTabs.Choose(2)
     if PartialFailure
         throw Error("partial render failure")
+}
+ProbeManagedCommit() {
+    global CommitProbeArmed, CommittedCopy
+    if !CommitProbeArmed
+        return
+    CommitProbeArmed := false
+    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},EditingProfileId)
+    CommittedCopy := items[3].Id
+    SetTimer(DeleteAfterManagedCommit,-1)
+    ; Make the timer eligible exactly between persistence and presentation.
+    Sleep(40)
+}
+DeleteAfterManagedCommit() {
+    global QueuedEdits, QueuedTarget
+    QueuedEdits++
+    target := GetSelectedManagedTarget()
+    QueuedTarget := target ? target.Item.Id : ""
+    HandleDanmakuCommand("delete")
 }
 AssertReorder(condition,message) {
     global ReorderChecks

@@ -27,33 +27,42 @@ RefreshManagementAfterCommand(editId, message := "変更は保存済みです。
     }
 }
 HandleDanmakuCommand(action, *) {
-    if !OperationAllowed("edit")
-        return
-    selected := GetSelectedManagedTarget()
-    if !selected
-        return
-    try result := ExecuteDanmakuCommand(action,selected.ProfileId,selected.Item.Id)
-    catch as failure {
-        SetManagementNotice("保存できませんでした。" failure.Message)
-        return
-    }
-    if !result
-        return
-    updateManagement := action = "up" || action = "down"
-        ? RenderManagedOrder.Bind(selected.Index,result.Index) : RenderManagedSelection.Bind(result.Index)
-    RefreshManagementAfterCommand(selected.ProfileId,result.Label "：保存済み",updateManagement)
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        ; Keep the saved result and its selection visible before the next edit enters.
+        if !OperationAllowed("edit")
+            return
+        selected := GetSelectedManagedTarget()
+        if !selected
+            return
+        try result := ExecuteDanmakuCommand(action,selected.ProfileId,selected.Item.Id)
+        catch as failure {
+            SetManagementNotice("保存できませんでした。" failure.Message)
+            return
+        }
+        if !result
+            return
+        updateManagement := action = "up" || action = "down"
+            ? RenderManagedOrder.Bind(selected.Index,result.Index) : RenderManagedSelection.Bind(result.Index)
+        RefreshManagementAfterCommand(selected.ProfileId,result.Label "：保存済み",updateManagement)
+    } finally Critical(previousCritical)
 }
 UndoLibraryChange(*) {
-    if !OperationAllowed("edit")
-        return
-    editId := GetEditingProfileId()
-    try label := UndoLibraryCommand()
-    catch as failure {
-        SetManagementNotice("取り消しを保存できませんでした。" failure.Message)
-        return
-    }
-    if label != ""
-        RefreshManagementAfterCommand(editId,label "を取り消しました。")
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        if !OperationAllowed("edit")
+            return
+        editId := GetEditingProfileId()
+        try label := UndoLibraryCommand()
+        catch as failure {
+            SetManagementNotice("取り消しを保存できませんでした。" failure.Message)
+            return
+        }
+        if label != ""
+            RefreshManagementAfterCommand(editId,label "を取り消しました。")
+    } finally Critical(previousCritical)
 }
 ManageProfile(action, *) {
     if !OperationAllowed("edit")

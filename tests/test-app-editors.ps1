@@ -289,3 +289,105 @@ GetSelectedManagedTarget() {
     return selected
 }
 '@
+
+# Timers at the saved/display boundary must observe the completed editor result.
+$commitRuntime = New-TestRuntime
+$controllerPath = Join-Path $commitRuntime 'src\ui\management\management_controller.ahk'
+$source = [IO.File]::ReadAllText($controllerPath)
+$boundary = 'RefreshManagementAfterCommand(editId, message := "変更は保存済みです。", updateManagement := 0) {'
+if (!$source.Contains($boundary)) { throw 'Missing saved presentation boundary' }
+[IO.File]::WriteAllText($controllerPath,$source.Replace($boundary,$boundary+"`r`n    ProbeEditorCommit(editId)"),[Text.UTF8Encoding]::new($true))
+$dialogsPath = Join-Path $commitRuntime 'src\ui\management\management_dialogs.ahk'
+$source = [IO.File]::ReadAllText($dialogsPath)
+foreach ($entry in @(
+    @('view.AddButton("w120 Default","保存").OnEvent("Click",Save)','Save'),
+    @('moveButton.OnEvent("Click",Move)','Move'),
+    @('view.AddButton("w180 Default","連携する").OnEvent("Click",Save)','Save'))) {
+    if (!$source.Contains($entry[0])) { throw 'Missing editor submit callback' }
+    $source=$source.Replace($entry[0],$entry[0]+"`r`n        global SubmitCommitFixture := "+$entry[1])
+}
+[IO.File]::WriteAllText($dialogsPath,$source,[Text.UTF8Encoding]::new($true))
+Invoke-AppFixture -Runtime $commitRuntime -Body @'
+    global CommitProbeArmed := false, CommitExpectedRow := 0, CommitExpectedId := "", QueuedTargetId := "", QueuedEdits := 0
+    global ExpectedResolveCritical := 0
+    RuntimePorts.ResolveChannel := ResolveCommitFixtureChannel
+    TargetBrowserHwnd := 123
+    for action in ["add","edit","move","undo","link"] {
+        for callerCritical in [0,23] {
+            shared := [], own := [], SubmitCommitFixture := 0, ExpectedResolveCritical := 0
+            Loop 3 {
+                shared.Push({Id:"shared-" A_Index,Name:"shared" A_Index,Text:"body" A_Index,Slot:0})
+                own.Push({Id:"own-" A_Index,Name:"own" A_Index,Text:"body" A_Index,Slot:0})
+            }
+            CommitTestLibraryChange({Profiles:[{Id:"commit-profile",Name:"fixture",Channel:"",Items:own}],SharedDanmakuItems:shared},"prepare editor commit")
+            LibraryHistory := []
+            scope := action="link" ? "commit-profile" : ""
+            EditingProfileId := scope
+            ShowManagement(1), SelectManagedRow(2)
+            if action="undo" {
+                ExecuteDanmakuCommand("add",scope,"",{Name:"undo item",Text:"undo body",Slot:0})
+                RefreshManagement(), SelectManagedRow(4)
+            } else if action="link"
+                OpenChannelLinkDialog(scope)
+            else if action="move"
+                TransferItem()
+            else {
+                OpenDanmakuEditor(action="add")
+                for control in ActiveEditorDialog.Window
+                    if control.Type="Edit"
+                        control.Value := "saved " action
+            }
+            if action!="undo"
+                Assert(ActiveEditorDialog && IsObject(SubmitCommitFixture),action ": owns a current editor callback")
+            CommitExpectedRow := action="add" ? 4 : (action="move" || action="undo" ? 1 : 2)
+            CommitExpectedId := "", QueuedTargetId := "", QueuedEdits := 0, CommitProbeArmed := true
+            try {
+                ExpectedResolveCritical := callerCritical
+                Critical(callerCritical)
+                if action="undo"
+                    UndoLibraryChange()
+                else
+                    SubmitCommitFixture.Call()
+                Assert(A_IsCritical=callerCritical,action ": restores caller interruption policy")
+                Critical("Off")
+                deadline := A_TickCount+1000
+                while !QueuedEdits && A_TickCount<deadline
+                    Sleep(10)
+                Assert(QueuedEdits=1 && QueuedTargetId==CommitExpectedId,action ": next edit sees the completed selection")
+                Assert(!ActiveEditorDialog && InStr(ManagementStatus.Text,"削除"),action ": latest completed operation owns the notice")
+                live := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},scope)
+                saved := GetLibraryItems(LoadSettings(SettingsDatabasePath),scope)
+                expectedCount := action="add" ? 3 : action="move" ? 1 : 2
+                Assert(live.Length=expectedCount && saved.Length=expectedCount,action ": each operation is persisted once")
+                for i,item in live
+                    Assert(item.Id==saved[i].Id && item.Id!=CommitExpectedId,action ": memory and storage preserve the same remaining identities")
+            } finally {
+                Critical("Off")
+                SetTimer(DeleteAfterEditorCommit,0)
+                CommitProbeArmed := false
+            }
+        }
+    }
+'@ -Helpers @'
+ResolveCommitFixtureChannel(hwnd) {
+    Assert(A_IsCritical=ExpectedResolveCritical,"channel verification preserves caller interruption policy")
+    return {State:"ok",Author:"fixture channel",Channel:"/channel/fixture",Video:"abcdefghijk"}
+}
+ProbeEditorCommit(scope) {
+    global CommitProbeArmed, CommitExpectedId
+    if !CommitProbeArmed
+        return
+    CommitProbeArmed := false
+    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},scope)
+    CommitExpectedId := items[CommitExpectedRow].Id
+    SetTimer(DeleteAfterEditorCommit,-1)
+    Sleep(40)
+}
+DeleteAfterEditorCommit() {
+    global QueuedTargetId, QueuedEdits
+    selected := GetSelectedManagedTarget()
+    QueuedTargetId := selected ? selected.Item.Id : ""
+    HandleDanmakuCommand("delete")
+    QueuedEdits++
+}
+'@

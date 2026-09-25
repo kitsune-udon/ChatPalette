@@ -50,19 +50,23 @@ OpenDanmakuEditor(isNew) {
             : chosen ? "保存すると、この弾幕にキーを割り当てます。" : "キーでは呼び出さず、パレットから選んで使います。"
     }
     Save(*) {
-        if !Trim(name.Value) || !Trim(text.Value) {
-            status.Text := "弾幕名と本文を入力してください。"
-            return
-        }
-        try result := ExecuteDanmakuCommand(isNew ? "add" : "edit",editId,isNew ? "" : original.Id,{Name:name.Value,Text:text.Value,Slot:slot.Value-1})
-        catch as failure {
-            status.Text := "保存できませんでした。" failure.Message
-            return
-        }
-        FinishDanmakuEditor(view)
-        RefreshManagementAfterCommand(editId,result.Label "：保存済み",RenderManagedSelection.Bind(result.Index))
-        if WinActive("ahk_id " ManagementWindow.Hwnd)
-            ManagedList.Focus()
+        local commitCritical := A_IsCritical
+        Critical("On")
+        try {
+            if !Trim(name.Value) || !Trim(text.Value) {
+                status.Text := "弾幕名と本文を入力してください。"
+                return
+            }
+            try result := ExecuteDanmakuCommand(isNew ? "add" : "edit",editId,isNew ? "" : original.Id,{Name:name.Value,Text:text.Value,Slot:slot.Value-1})
+            catch as failure {
+                status.Text := "保存できませんでした。" failure.Message
+                return
+            }
+            FinishDanmakuEditor(view)
+            RefreshManagementAfterCommand(editId,result.Label "：保存済み",RenderManagedSelection.Bind(result.Index))
+            if WinActive("ahk_id " ManagementWindow.Hwnd)
+                ManagedList.Focus()
+        } finally Critical(commitCritical)
     }
 }
 
@@ -137,15 +141,19 @@ TransferItem(*) {
         DestroyEditorDialog(view)
     }
     Move(*) {
-        if !target.Value
-            return
-        try result := ExecuteDanmakuCommand("move",editId,item.Id,0,GetSelectedProfileId(target))
-        catch as failure {
-            status.Text := "保存できませんでした。" failure.Message
-            return
-        }
-        Close()
-        RefreshManagementAfterCommand(editId,result.Label "：保存済み")
+        local commitCritical := A_IsCritical
+        Critical("On")
+        try {
+            if !target.Value
+                return
+            try result := ExecuteDanmakuCommand("move",editId,item.Id,0,GetSelectedProfileId(target))
+            catch as failure {
+                status.Text := "保存できませんでした。" failure.Message
+                return
+            }
+            Close()
+            RefreshManagementAfterCommand(editId,result.Label "：保存済み")
+        } finally Critical(commitCritical)
     }
 }
 
@@ -223,20 +231,25 @@ OpenChannelLinkDialog(preferredProfileId := "",*) {
             WinActivate("ahk_id " ManagementWindow.Hwnd)
     }
     Save(*) {
+        local commitCritical := A_IsCritical
         try {
-            selectedId := GetSelectedProfileId(target), submittedName := name.Value
-            fresh := ResolveBrowserChannel(TargetBrowserHwnd)
-            if fresh.State != "ok" || !(fresh.Channel == candidate.Channel)
-                throw Error("チャンネルが変わりました。連携画面を閉じて、もう一度開いてください。")
-            if selectedId = ""
-                result := ExecuteProfileCommand("add","",submittedName,candidate.Channel)
-            else
-                result := ExecuteProfileCommand("bind",selectedId,candidate.Channel)
-        } catch as failure {
-            status.Text := "連携できませんでした。" failure.Message
-            return
-        }
-        Close()
-        RefreshManagementAfterCommand(result.ProfileId,"チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。")
+            try {
+                selectedId := GetSelectedProfileId(target), submittedName := name.Value
+                fresh := ResolveBrowserChannel(TargetBrowserHwnd)
+                if fresh.State != "ok" || !(fresh.Channel == candidate.Channel)
+                    throw Error("チャンネルが変わりました。連携画面を閉じて、もう一度開いてください。")
+                ; Network verification stays interruptible; only commit and presentation are atomic.
+                Critical("On")
+                if selectedId = ""
+                    result := ExecuteProfileCommand("add","",submittedName,candidate.Channel)
+                else
+                    result := ExecuteProfileCommand("bind",selectedId,candidate.Channel)
+            } catch as failure {
+                status.Text := "連携できませんでした。" failure.Message
+                return
+            }
+            Close()
+            RefreshManagementAfterCommand(result.ProfileId,"チャンネルと連携しました。自動判別でこの配信者の弾幕を選びます。")
+        } finally Critical(commitCritical)
     }
 }

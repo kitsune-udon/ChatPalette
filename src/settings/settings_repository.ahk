@@ -78,8 +78,7 @@ class SettingsRepository {
             throw Error("選択中の配信者がありません。")
         state.AutoMode := Integer(row[2]), state.DefaultReactionKind := Integer(row[3]), state.DefaultReactionCount := Integer(row[4])
         state.DefaultReactionIntervalMs := Integer(row[5])
-        state.ShortcutKeys := ReadShortcutKeys(this.Db)
-        state.ShortcutKeys["reaction"] := row[6]
+        state.ShortcutKeys := ReadShortcutKeys(this.Db,row[6])
         ValidateSettingsPreferences(state)
         validated := BuildLibraryStoragePlan(state,scopes,true)
         for id, scope in scopes
