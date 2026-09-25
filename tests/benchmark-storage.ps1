@@ -17,14 +17,14 @@ for count in [1000,10000,100000] {
     state := {Profiles:[],SharedDanmakuItems:items}
     base := BuildLibraryStoragePlan(state,Map())
     for operation in ["edit","swap","undo"] {
-        changed := items.Clone(), middle := count//2
+        draftItems := items.Clone(), middle := count//2
         if operation = "edit" {
-            changed[middle] := items[middle].Clone()
-            changed[middle].Text := "edited"
+            draftItems[middle] := items[middle].Clone()
+            draftItems[middle].Text := "edited"
         } else {
-            changed[middle] := items[middle+1], changed[middle+1] := items[middle]
+            draftItems[middle] := items[middle+1], draftItems[middle+1] := items[middle]
         }
-        draft := {Profiles:[],SharedDanmakuItems:changed}, benchmarkPrevious := base.Scopes
+        draft := {Profiles:[],SharedDanmakuItems:draftItems}, benchmarkPrevious := base.Scopes
         if operation = "undo" {
             benchmarkPrevious := BuildLibraryStoragePlan(draft,benchmarkPrevious).Scopes
             draft := state
@@ -38,7 +38,8 @@ for count in [1000,10000,100000] {
                 samples .= (finished-started)*1000/frequency "`n"
         }
         benchmarkSorted := StrSplit(RTrim(Sort(samples,"N"),"`n"),"`n")
-        FileAppend(count "," operation "," Round(benchmarkSorted[(Repeats+1)//2],3) "," Round(benchmarkSorted[-1],3) "`n","*")
+        median := (benchmarkSorted[(Repeats+1)//2]+benchmarkSorted[(Repeats+2)//2])/2
+        FileAppend(count "," operation "," Round(median,3) "," Round(benchmarkSorted[-1],3) "`n","*")
     }
 }
 ExitApp()

@@ -85,15 +85,72 @@ foreach ($candidates in @(
 $noPoint=[pscustomobject]@{}
 $noPoint | Add-Member ScriptMethod TryGetClickablePoint { param($point) return $false }
 Assert ($null -eq (Get-ReactionHoverPoint $noPoint)) 'unsupported hover point rejected without moving pointer'
+# Exercise real discovery and classification with only UIA observations replaced.
+$chatFinder=(Get-Command Find-ChatInput).ScriptBlock
+$inputRecords=(Get-Command Get-YouTubeInputRecords).ScriptBlock
+$elementWindow=(Get-Command Test-ElementWindow).ScriptBlock
+$rootRead='[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)'
+$discoverySource=$chatFinder.ToString()
+if (($discoverySource.Split(@($rootRead),[StringSplitOptions]::None)).Count -ne 2) { throw 'Chat discovery root boundary missing' }
+Set-Item Function:Find-ChatInput ([scriptblock]::Create($discoverySource.Replace($rootRead,'$script:ChatTestRoot')))
+$script:ChatTestRoot=[pscustomobject]@{Candidates=@()}
+$script:ChatTestRoot | Add-Member ScriptMethod FindAll { param($scope,$condition) return $this.Candidates }
+function Test-ElementWindow($Element,$WindowHandle) { return $Element.Window -eq $WindowHandle }
+function Get-YouTubeInputRecords($Target,$WindowHandle) {
+    if ($Target.Detached) { throw 'Candidate detached during observation' }
+    return $Target.Records
+}
+function ChatCandidate {
+    return [pscustomobject]@{Window=123;Detached=$false;Records=@(
+        @{Id='input';Name='';Class='yt-live-chat-text-input-field-renderer';Type=50004;Enabled=$true;Hidden=$false;Editable=$true},
+        $document)}
+}
+try {
+    $result=Find-ChatInput 123
+    Assert ($result.State -eq 'chat_missing' -and $null -eq $result.Element) 'empty discovery reports missing without a target'
+    $valid=ChatCandidate
+    foreach ($invalidKind in @('hidden','disabled','read-only','comment','foreign','detached','no-document')) {
+        $invalid=ChatCandidate
+        switch ($invalidKind) {
+            'hidden' { $invalid.Records[0].Hidden=$true }
+            'disabled' { $invalid.Records[0].Enabled=$false }
+            'read-only' { $invalid.Records[0].Editable=$false }
+            'comment' { $invalid.Records[0].Id='contenteditable-root'; $invalid.Records[0].Class='ytd-comment-simplebox-renderer' }
+            'foreign' { $invalid.Window=456 }
+            'detached' { $invalid.Detached=$true }
+            'no-document' { $invalid.Records=@($invalid.Records[0]) }
+        }
+        $script:ChatTestRoot.Candidates=@($invalid)
+        $result=Find-ChatInput 123
+        Assert ($result.State -eq 'chat_missing' -and $null -eq $result.Element) "$invalidKind candidate alone cannot become a chat target"
+        $script:ChatTestRoot.Candidates=@($invalid,$valid)
+        $result=Find-ChatInput 123
+        Assert ($result.State -eq 'ok' -and [object]::ReferenceEquals($result.Element,$valid)) "$invalidKind candidate does not hide the unique valid chat"
+    }
+    $other=ChatCandidate
+    foreach ($candidates in @(@($valid,$other),@($other,$valid))) {
+        $script:ChatTestRoot.Candidates=$candidates
+        $result=Find-ChatInput 123
+        Assert ($result.State -eq 'chat_ambiguous' -and $null -eq $result.Element) 'multiple valid chats yield no target regardless of discovery order'
+    }
+} finally {
+    Set-Item Function:Find-ChatInput $chatFinder
+    Set-Item Function:Get-YouTubeInputRecords $inputRecords
+    Set-Item Function:Test-ElementWindow $elementWindow
+}
 $script:target=[System.Windows.Automation.AutomationElement]::RootElement
 $script:video='abcdefghijk'; $script:foreground=$true; $script:belongs=$true
 $script:pendingFocus=0; $script:changeAfterFocus=$false; $script:blurAfterFocus=$false; $script:identity=$true
+$script:chatFailure=''
 $script:focusCalls=0; $script:hoverCalls=0; $script:missing=$false; $script:kind='chat'; $script:throwOnFocus=$false
 $script:finalVideo='abcdefghijk'; $script:reads=0; $script:loseDuringPoint=$false
 function Read-BrowserVideoId($WindowHandle) { $script:reads++; if ($script:reads -gt 1) { return $script:finalVideo }; return $script:video }
 function Test-ReactionForeground($WindowHandle) { return $script:foreground }
 function Test-ElementWindow($Element,$WindowHandle) { return $script:belongs }
-function Find-ChatInput($WindowHandle) { if (!$script:missing) { return $script:target } }
+function Find-ChatInput($WindowHandle) {
+    if ($script:chatFailure) { return @{State=$script:chatFailure;Element=$null} }
+    return @{State='ok';Element=$script:target}
+}
 function Find-ReactionLauncher($WindowHandle) { if (!$script:missing) { return $script:target } }
 $script:chatField=@{Id='input';Name='';Class='yt-live-chat-text-input-field-renderer';Type=50004;Focused=$false;Enabled=$true;Hidden=$false;Editable=$true}
 function Get-YouTubeInputRecords($Target,$WindowHandle) {
@@ -106,9 +163,9 @@ function Focus-ChatElement($Target) {
     if ($script:changeAfterFocus) { $script:finalVideo='ABCDEFGHIJK' }
     if ($script:blurAfterFocus) { $script:foreground=$false }
 }
-function Get-FocusedYouTubeInput($WindowHandle,[ref]$VerifiedElement) {
-    if ($script:pendingFocus -gt 0) { $script:pendingFocus--; return '' }
-    $VerifiedElement.Value=$script:target; return $script:kind
+function Get-FocusedYouTubeInput($WindowHandle) {
+    if ($script:pendingFocus -gt 0) { $script:pendingFocus--; return $null }
+    if ($script:kind) { return @{Kind=$script:kind;Element=$script:target} }
 }
 function Test-FocusedInputIdentity($Element,$WindowHandle) { return $script:belongs -and $script:identity }
 function Get-ReactionHoverPoint($Target) {
@@ -126,7 +183,11 @@ Assert ((Request 'chat_focus').State -eq 'focused' -and $script:focusCalls -eq 1
 Assert (!$script:chatField.Focused) 'focus discovery preserves the observed input record'
 Assert ((Request 'reactions_show').State -eq 'hovered' -and $script:hoverCalls -eq 1) 'launcher hovered without registration or invocation'
 $script:missing=$true
-Assert ((Request 'chat_focus').State -eq 'chat_missing') 'missing chat is distinguished from focus failure'
+foreach ($state in @('chat_missing','chat_ambiguous')) {
+    $script:chatFailure=$state
+    Assert ((Request 'chat_focus').State -eq $state -and $script:focusCalls -eq 1) "$state discovery prevents focus and preserves its reason"
+}
+$script:chatFailure=''
 Assert ((Request 'reactions_show').State -eq 'unsupported') 'missing or ambiguous launcher rejected'
 $script:missing=$false; $script:foreground=$false
 foreach ($mode in @('chat_focus','reactions_show')) { Assert ((Request $mode).State -eq 'wrong_window') 'background browser rejected' }
@@ -141,13 +202,7 @@ $script:video='abcdefghijk'; $script:loseDuringPoint=$true
 Assert ((Request 'reactions_show').State -eq 'wrong_window' -and $script:hoverCalls -eq 1) 'foreground switch after geometry lookup prevents pointer movement'
 $script:loseDuringPoint=$false; $script:foreground=$true
 Assert ($script:focusCalls -eq 1 -and $script:hoverCalls -eq 1) 'all rejected requests have no page effects'
-$script:kind='comment'
-Assert ((Request 'verify_chat' 'abcdefghijk').State -eq 'wrong_input') 'clear validation never accepts comments'
-$script:kind='chat'
-Assert ((Request 'verify_chat' 'abcdefghijk').State -eq 'ok') 'clear validation accepts chat'
-$script:belongs=$false
-Assert ((Request 'verify_chat' 'abcdefghijk').State -eq 'wrong_input') 'clear validation requires exact focused identity'
-$script:belongs=$true; $script:throwOnFocus=$true
+$script:throwOnFocus=$true
 Assert ((Request 'chat_focus').State -eq 'unknown' -and $script:focusCalls -eq 2) 'uncertain focus never retries'
 $script:throwOnFocus=$false; $script:pendingFocus=2
 $before=$script:focusCalls
@@ -185,4 +240,24 @@ $focused=Request 'chat_focus'; $script:kind='comment'; $script:reads=0
 Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=7;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'comment field rejects deferred delivery'
 $script:kind='chat'; $script:reads=0
 Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=8;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'failed verification also consumes the token'
+# Chat verification has one meaning: consume the exact focus proof, including failures.
+foreach ($tokenForm in @('missing','empty')) {
+    $focused=Request 'chat_focus'
+    $request=@{Mode='verify_chat';Window=123;Seq=9;Video='abcdefghijk'}
+    if ($tokenForm -eq 'empty') { $request.FocusToken='' }
+    $script:reads=0
+    Assert ((Invoke-WorkerRequest $request).State -eq 'wrong_input') "chat verification rejects $tokenForm proof instead of accepting any chat"
+    Assert ($null -eq $script:FocusedChat -and $script:reads -eq 0) "invalid $tokenForm proof is consumed before browser inspection"
+}
+$focused=Request 'chat_focus'; $script:belongs=$false; $script:reads=0
+Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=10;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'chat verification still rejects identity lost after a valid proof'
+$script:belongs=$true
+foreach ($mode in @('browser_context','verify_input')) {
+    $focused=Request 'chat_focus'
+    $ownedProof=$script:FocusedChat; $script:reads=0
+    $reply=Invoke-WorkerRequest @{Mode=$mode;Window=123;Seq=11;Video='abcdefghijk';FocusToken='unrelated'}
+    Assert ($reply.State -eq 'ok' -and [object]::ReferenceEquals($script:FocusedChat,$ownedProof)) "$mode does not consume another operation's focus proof"
+    $script:reads=0
+    Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=12;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'ok') 'the owning chat verification can still consume its preserved proof'
+}
 Write-Output "PASS: $script:checks page action checks; no real typing, pointer movement or reactions."

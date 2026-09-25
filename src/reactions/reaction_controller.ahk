@@ -9,7 +9,7 @@ InitReactions() {
 CreateReactionJob(values) {
     job := {Mode:"reaction_send", Phase:"waiting", Window:0, Video:"", Choice:1,
         Remaining:0, Total:0, Completed:0, Cancelled:false, Interval:0,
-        StartedAt:-1, FirstStartedAt:-1, Applied:"", RegistrationCommitted:false}
+        StartedAt:-1, FirstStartedAt:-1, Applied:"", RegistrationCommitted:false, ReleasedStatus:0}
     for name, value in values.OwnProps()
         job.%name% := value
     if job.Mode = "queued"
@@ -40,11 +40,17 @@ StopReactionTimers() {
 }
 FinishReactionJob(job) {
     global ActiveReactionJob
-    job.Phase := "finished"
-    if ActiveReactionJob != job
-        return false
-    StopReactionTimers()
-    ActiveReactionJob := 0
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        job.Phase := "finished"
+        if ActiveReactionJob != job
+            return false
+        StopReactionTimers()
+        ; Release and the final publication's baseline are one ownership decision.
+        job.ReleasedStatus := ReactionExecutionStatus
+        ActiveReactionJob := 0
+    } finally Critical(previousCritical)
     RefreshOperationControls()
     return true
 }
@@ -60,14 +66,16 @@ ScheduleReaction(mode, delay, options := 0) {
         return false
     hwnd := TargetBrowserHwnd
     if !IsBrowser(hwnd) {
-        ReactionNotice("wrong_window")
+        ReactionNotice({State:"wrong_window"})
         return false
     }
-    context := RequestBrowserOperation(hwnd, "browser_context")
+    try context := RequestBrowserOperation(hwnd, "browser_context")
+    catch as failure
+        context := {State:"unavailable",Detail:failure.Message}
     if !OperationAllowed("reaction")
         return false
     if context.State != "ok" {
-        ReactionNotice(context.State)
+        ReactionNotice(context)
         return false
     }
     choice := options ? options.Reaction : DefaultReactionKind
@@ -108,7 +116,7 @@ StartReactionJob(job) {
         return false
     } finally {
         if !started && FinishReactionJob(job) && startFailure
-            ReactionNotice("unavailable",startFailure.Message,job)
+            ReactionNotice({State:"unavailable",Detail:startFailure.Message},job)
     }
 }
 
@@ -166,7 +174,7 @@ ReactionCountdown() {
             if job.Cancelled && !job.RegistrationCommitted
                 SetReactionStatus("登録・確認を中止しました。", true,"",job,"cancelled")
             else if reply
-                ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "", job)
+                ReactionNotice(reply,job)
         }
     }
 }
@@ -225,7 +233,7 @@ RunReactionSendLoop(job) {
     try {
         if !IsTargetForeground(job.Window) {
             if FinishReactionJob(job)
-                ReactionNotice("wrong_window","",job)
+                ReactionNotice({State:"wrong_window"},job)
             return
         }
         if job.Interval > 0 {
@@ -238,7 +246,7 @@ RunReactionSendLoop(job) {
                 return
             if !IsTargetForeground(job.Window) {
                 if FinishReactionJob(job)
-                    ReactionNotice("wrong_window","",job)
+                    ReactionNotice({State:"wrong_window"},job)
                 return
             }
             job.StartedAt := AppClockMs()
@@ -249,7 +257,7 @@ RunReactionSendLoop(job) {
         }
     } catch as operationError {
         if FinishReactionJob(job)
-            ReactionNotice("unknown", operationError.Message,job)
+            ReactionNotice({State:"unknown",Detail:operationError.Message},job)
     } finally {
         if precisionEnabled {
             OnExit(releasePrecision, 0)
@@ -298,7 +306,7 @@ ApplyReactionResult(job, reply) {
     global ActiveReactionJob
     if reply.State != "operated" {
         FinishReactionJob(job)
-        ReactionNotice(reply.State, reply.HasOwnProp("Detail") ? reply.Detail : "",job)
+        ReactionNotice(reply,job)
         return
     }
     if job.FirstStartedAt < 0
@@ -354,7 +362,7 @@ QuickReaction(*) {
             if queuedJob.Cancelled
                 SetReactionStatus("中止しました。",true,"",queuedJob,"cancelled")
             else if startFailure
-                ReactionNotice(startFailure.State, startFailure.HasOwnProp("Detail") ? startFailure.Detail : "", queuedJob)
+                ReactionNotice(startFailure,queuedJob)
             else
                 SetReactionStatus("開始できませんでした。キーを離し、YouTubeを最前面にして再実行してください。",true,"",queuedJob,"unavailable")
         }
@@ -368,8 +376,9 @@ SetReactionStatus(message, final := false, detail := "", job := 0, reason := "")
     try {
         if !job && ActiveReactionJob
             job := ActiveReactionJob
-        ; A final result may follow release, but must never replace another owner's progress.
-        if job && ActiveReactionJob != job && (!final || ActiveReactionJob)
+        ; After release, publish only if no later status has taken its place.
+        if job && ActiveReactionJob != job
+            && (!final || ActiveReactionJob || ReactionExecutionStatus != job.ReleasedStatus)
             return false
         status := {Phase:final ? "finished" : (job ? job.Phase : "running"), Message: message}
         ReactionExecutionStatus := status

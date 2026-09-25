@@ -72,6 +72,7 @@ class PanelViewport {
         this.LastFocus := 0
         SetTimer(this.FocusHandler,50)
         this.Updating := true
+        this.PendingResize := false
         try {
             ; A scrollbar appearing can change the other axis's client size.
             Loop 2 {
@@ -104,6 +105,7 @@ class PanelViewport {
             return
         }
         this.Updating := true
+        this.PendingOffset := 0
         try this.ApplyOffset(x,y)
         finally this.Updating := false
     }
@@ -115,11 +117,10 @@ class PanelViewport {
             SetTimer(this.UpdateHandler,-10)
             return
         }
-        resize := this.PendingResize, offset := this.PendingOffset
-        this.PendingResize := false, this.PendingOffset := 0
-        if resize
+        if this.PendingResize
             this.Resize()
-        if offset
+        ; Layout may replace the queued position; read it only after layout finishes.
+        if offset := this.PendingOffset
             this.SetOffset(offset.X,offset.Y)
     }
 
@@ -213,6 +214,7 @@ class PanelViewport {
             return
         this.LastFocus := control
         this.Updating := true
+        this.PendingOffset := 0
         try this.RevealFocusedControl(control)
         finally this.Updating := false
     }

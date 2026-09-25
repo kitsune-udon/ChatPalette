@@ -53,12 +53,8 @@ foreach ($scenario in @('disconnect','missing-signal','missing-server')) {
 Write-Output 'PASS: worker exits on pipe disconnect, missing notification and missing server; isolated protocol only'
 
 $release = New-TestRuntime
-$workerPath = Join-Path $release 'src\browser\worker_client.ahk'
-$workerSource = [IO.File]::ReadAllText($workerPath)
 $launch = '            if !DllCall("CreateProcessW", "Str", executable'
-if (!$workerSource.Contains($launch)) { throw 'Missing worker launch failure injection point' }
-$workerSource = $workerSource.Replace($launch, '            executable := ProbeWorkerExecutable(executable)' + "`r`n" + $launch)
-[IO.File]::WriteAllText($workerPath,$workerSource,[Text.UTF8Encoding]::new($true))
+Edit-TestSource $release 'src/browser/worker_client.ahk' $launch ('            executable := ProbeWorkerExecutable(executable)' + "`r`n" + $launch)
 Invoke-AppFixture -Runtime $release -Body @'
     global WorkerLaunchFailure := true, FailedStartHandles := []
     priorCritical := A_IsCritical, startupFailed := false
@@ -183,19 +179,18 @@ Invoke-AppFixture -Runtime $release -Body @'
     cancelledMessage := ReactionExecutionStatus.Message
     QuickReaction()
     Assert(ReactionExecutionStatus.Message = cancelledMessage, "queued cancellation result is retained")
-    global ShortcutReleaseReplacement, ShortcutReleaseResult
     for released in [false, true] {
         replacementJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
-        ShortcutReleaseReplacement := replacementJob
-        ShortcutReleaseResult := released
+        RuntimePorts.ShortcutRelease := ReplaceShortcutJob.Bind(replacementJob,released)
         ActiveReactionJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
         SetReactionStatus("新しい開始待ち", false)
         QuickReaction()
         Assert(ActiveReactionJob = replacementJob && ReactionExecutionStatus.Phase = "queued", "old shortcut cleanup preserves replacement job")
     }
-    ShortcutReleaseReplacement := 0
+    RuntimePorts.ShortcutRelease := 0
     CancelReaction()
     global FixtureStarts := []
+    RuntimePorts.BrowserRequest := RecordReactionStart
     Assert(ReactionIntervalLabels()[1] = "待機なし", "待機なし is an explicit UI option")
     clockJob := {Interval:25, StartedAt:100}
     Assert(ReactionWaitRemaining(clockJob, 110) = 15, "processing time is included in interval")
@@ -212,6 +207,7 @@ Invoke-AppFixture -Runtime $release -Body @'
                 Assert(FixtureStarts[A_Index+1] - FixtureStarts[A_Index] >= interval - 0.1, "minimum start-to-start target respected")
         }
     }
+    RuntimePorts.BrowserRequest := 0
     job := CreateReactionJob({Mode:"reaction_send", Window:123, Video:"abcdefghijk", Choice:1, Total:10000, Completed:0, Cancelled:false, Interval:0})
     ActiveReactionJob := job
     SetTimer(CancelReaction, -30)
@@ -241,6 +237,16 @@ Invoke-AppFixture -Runtime $release -Body @'
     StopBrowserWorker()
 
 '@ -Helpers @'
+; Model Esc and a replacement shortcut while the original KeyWait is suspended.
+ReplaceShortcutJob(replacement, released, keys) {
+    global ActiveReactionJob := replacement
+    return released
+}
+RecordReactionStart(hwnd,mode,video,extra) {
+    if mode = "reaction_send" && ActiveReactionJob
+        FixtureStarts.Push(ActiveReactionJob.StartedAt)
+    return NativeRequestBrowserOperation(hwnd,mode,video,extra)
+}
 AdvancingTransportClock() {
     global TransportClock
     now := TransportClock
@@ -263,12 +269,8 @@ CancelDuringFixtureWait() {
 
 # Cleanup failures must remain visible and preserve ownership for a later retry.
 $cleanupRuntime = New-TestRuntime
-$cleanupPath = Join-Path $cleanupRuntime 'src\browser\worker_client.ahk'
-$cleanupSource = [IO.File]::ReadAllText($cleanupPath)
 $stopObservation = '            if state != 0'
-if (!$cleanupSource.Contains($stopObservation)) { throw 'Missing worker stop observation point' }
-$cleanupSource = $cleanupSource.Replace($stopObservation, '            state := ObserveWorkerStop(state)' + "`r`n" + $stopObservation)
-[IO.File]::WriteAllText($cleanupPath,$cleanupSource,[Text.UTF8Encoding]::new($true))
+Edit-TestSource $cleanupRuntime 'src/browser/worker_client.ahk' $stopObservation ('            state := ObserveWorkerStop(state)' + "`r`n" + $stopObservation)
 Invoke-AppFixture -Runtime $cleanupRuntime -Body @'
     global StopFaultArmed := false, StopChecks := 0, StopOwned := false, StopNestedState := "", StopClock := 0
     BuildManagement()
@@ -291,7 +293,7 @@ Invoke-AppFixture -Runtime $cleanupRuntime -Body @'
                     EnsureWorkerRunning()
                 else if entry="registration" {
                     reply := NativeRequestBrowserOperation(123,"reaction_check")
-                    failed := reply.State="sync_failed"
+                    failed := reply.State="sync_failed" && InStr(reply.Detail,"補助プロセスの終了を確認できませんでした") > 0
                 } else if entry="capture-sync" {
                     reply := SynchronizeCapturedReactionRegistration(123,{State:"saved"})
                     failed := reply.State="sync_failed" && InStr(reply.Detail,"補助プロセスの終了を確認できませんでした") > 0

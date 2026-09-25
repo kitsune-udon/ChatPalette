@@ -2,7 +2,6 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$fixture = $release
 $tests = @'
 OnExit(StopBrowserWorker)
 AutoMode := false

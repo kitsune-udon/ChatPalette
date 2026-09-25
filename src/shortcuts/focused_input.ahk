@@ -14,15 +14,19 @@ QueueFocusedDanmaku(scope,slot,hwnd) {
         return true
     } finally Critical(previousCritical)
 }
+; One continuation rule covers waits and the final identity-to-input boundary.
+CanContinueFocusedDanmaku(focus) {
+    return CanContinuePageAction(focus) && focus.Pending && AppClockMs() <= focus.Pending.Deadline
+}
 CompleteFocusedDanmaku(focus,result) {
     pending := focus.Pending
     cancelled := {State:"input_cancelled"}
     try {
-        if !CanContinuePageAction(focus) || AppClockMs() > pending.Deadline
+        if !CanContinueFocusedDanmaku(focus)
             return cancelled
         if !WaitShortcutRelease(pending.Binding)
             return cancelled
-        if !CanContinuePageAction(focus) || AppClockMs() > pending.Deadline
+        if !CanContinueFocusedDanmaku(focus)
             return cancelled
         if !result.HasOwnProp("Detail") || result.Detail = ""
             return cancelled
@@ -30,13 +34,12 @@ CompleteFocusedDanmaku(focus,result) {
         if !context || !(context.Video == result.Video)
             return cancelled
         plan := PlanShortcutInput(pending.Library,context,pending.Slot)
-        if !CanContinuePageAction(focus) || AppClockMs() > pending.Deadline
+        if !CanContinueFocusedDanmaku(focus)
             return cancelled
         verified := RequestBrowserOperation(focus.Window,"verify_chat",result.Video,"FocusToken=" result.Detail)
         if verified.State != "ok" || !(verified.Video == result.Video)
             return cancelled
-        if !CanContinuePageAction(focus) || AppClockMs() > pending.Deadline
-            return cancelled
+        ; The sender checks continuation after its final item validation.
         return SendPlannedDanmaku(plan,focus)
     } catch {
         return cancelled

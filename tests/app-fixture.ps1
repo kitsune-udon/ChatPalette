@@ -27,7 +27,7 @@ $script:fakeTarget = [pscustomobject]@{ Current=[pscustomobject]@{IsOffscreen=$f
 $script:fakeInvoke = [pscustomobject]@{}
 $script:fakeInvoke | Add-Member ScriptMethod Invoke { }
 function Get-ReactionInvoker($Target) { return $script:fakeInvoke }
-function Find-RegisteredReactions([long]$WindowHandle, $Plan) { return @{ Elements=@($script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget) } }
+function Find-RegisteredReactions([long]$WindowHandle, $Plan) { return @{ Elements=@($script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget,$script:fakeTarget); Detail="fixture reactions" } }
 '@
 Write-TestWorker -Runtime $release -Definitions $mock
     $frame = @'
@@ -44,46 +44,10 @@ Assert(condition, label) {
         throw Error(label)
     Checks++
 }
-FixtureResolveChannel(hwnd) {
-    global FixtureResolveCount
-    if IsSet(FixtureInputMode) && FixtureInputMode {
-        FixtureResolveCount++
-        return {State:"ok",Author:"A",Channel:"/channel/a",Video:"aaaaaaaaaaa"}
-    }
-    return RequestBrowserOperation(hwnd)
-}
-FixtureVerifyInput(hwnd, expectedVideo) {
-    if IsSet(FixtureInputMode) && FixtureInputMode
-        return expectedVideo == FixtureCurrentVideo
-    return NativeVerifyInputTarget(hwnd,expectedVideo)
-}
-CaptureFixtureInput(text) {
-    if !(IsSet(FixtureInputMode) && FixtureInputMode)
-        throw Error("Unexpected input outside fixture")
-    FixtureSent.Push(text)
+RejectFixtureInput(text) {
+    throw Error("Unexpected input outside fixture")
 }
 
-FixtureRequest(hwnd, mode, video, extra) {
-    if mode = "reaction_send" && ActiveReactionJob
-        FixtureStarts.Push(ActiveReactionJob.StartedAt)
-    return NativeRequestBrowserOperation(hwnd,mode,video,extra)
-}
-FixtureReactionWindowActive(hwnd) {
-    return hwnd = 123
-}
-FixtureShortcutKey(action,key, enabled := true) {
-    if IsSet(KeyCalls)
-        KeyCalls.Push({Key:key, Enabled:enabled})
-}
-FixtureShortcutRelease(keys) {
-    global ActiveReactionJob
-    if IsSet(ShortcutReleaseReplacement) && ShortcutReleaseReplacement {
-        ; Model Esc followed by a new shortcut while the old KeyWait is suspended.
-        ActiveReactionJob := ShortcutReleaseReplacement
-        return ShortcutReleaseResult
-    }
-    return NativeWaitShortcutRelease(keys)
-}
 
 '@
     Invoke-AppTest -Runtime $release -Body ($frame + "`r`n" + $Helpers) -TimeoutMs $TimeoutMs -Setup @'
@@ -96,17 +60,11 @@ fixtureSettings.Profiles := [{Id:"fixture-profile",Name:"テスト投稿者",Cha
 fixtureSettings.SharedDanmakuItems := [{Id:"fixture-shared",Name:"拍手",Text:"👏👏👏👏👏👏",Slot:1}]
 OpenSettingsRepository(A_ScriptDir "\data\settings.db").SaveAll(fixtureSettings)
 CloseSettingsStore()
-global FixtureInputMode := false, FixtureResolveCount := 0, FixtureCurrentVideo := "", FixtureSent := []
-global FixtureStarts := [], KeyCalls := [], ShortcutReleaseReplacement := 0, ShortcutReleaseResult := true
 RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
 RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
-RuntimePorts.ResolveChannel := FixtureResolveChannel
-RuntimePorts.VerifyInput := FixtureVerifyInput
-RuntimePorts.Foreground := FixtureReactionWindowActive
-RuntimePorts.Text := CaptureFixtureInput
-RuntimePorts.ShortcutKey := FixtureShortcutKey
-RuntimePorts.ShortcutRelease := FixtureShortcutRelease
-RuntimePorts.BrowserRequest := FixtureRequest
+RuntimePorts.Foreground := (hwnd) => hwnd=123
+RuntimePorts.Text := RejectFixtureInput
+RuntimePorts.ShortcutKey := (*) => 0
 
 '@
 }

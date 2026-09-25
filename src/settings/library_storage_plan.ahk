@@ -114,7 +114,7 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
             throw Error("弾幕キーの割当が重複または不正です。")
         if slot
             slots[slot] := true
-        row := unchanged ? priorRow : CreateStorageRow(item,0)
+        row := unchanged ? priorRow : CreateStorageRow(item,priorRow ? priorRow.Position : 0)
         rows[item.Id] := row
         if previous.Has(item.Id) {
             positions.Push(previous[item.Id].Position)

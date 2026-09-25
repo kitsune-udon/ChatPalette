@@ -70,6 +70,22 @@ while RefreshCount<2 && A_TickCount<deadline
     Sleep(10)
 Assert(!cycle.Active && !cycle.Pending && RefreshCount=2,"failed rendering also releases pending refresh")
 
+; An explicit refresh can fulfill queued work before its timer is dispatched.
+for reenterLatest in [false,true] {
+    before := RefreshCount
+    Critical("On")
+    try {
+        cycle.Begin(), cycle.Begin(), cycle.End()
+        Assert(cycle.Begin(),"a newer explicit refresh starts before the queued callback")
+        if reenterLatest
+            cycle.Begin()
+        cycle.End()
+    } finally Critical("Off")
+    Sleep(40)
+    Assert(RefreshCount=before+(reenterLatest ? 1 : 0),"new refresh replaces the old reservation but preserves its own reentry")
+    Assert(!cycle.Active && !cycle.Pending,"completed refresh leaves no owned or pending work")
+}
+
 FileAppend("PASS: " Checks " operation model checks; no application startup`n","*")
 ExitApp()
 Assert(condition, label) {

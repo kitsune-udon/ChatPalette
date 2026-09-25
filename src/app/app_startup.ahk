@@ -1,20 +1,19 @@
 ﻿; Shared initialization for the desktop entry and isolated test runners.
-InitializeApplication() {
+InitializeApplication(showRecoveryDialogs := true) {
     global StartupSource := "", AppStartedAt := FormatTime(, "yyyy/MM/dd HH:mm:ss")
     try StartupSource := CaptureAppSource()
     global AppVersion := Trim(FileRead(A_ScriptDir "\VERSION", "UTF-8"))
-    global ApplicationShortcutsInstalled := false, ShortcutKeys := DefaultShortcutKeys()
+    global ApplicationShortcutsInstalled := false
     RecordBrowserOperation({Mode:"なし", State:"未実行", Duration:0})
     global AppDataDirectory := A_ScriptDir "\data"
     global SettingsDatabasePath := AppDataDirectory "\settings.db"
-    global SharedDanmakuItems := []
-    global Profiles := [], InputProfileId := "", TargetBrowserHwnd := 0, PaletteWindow := 0
-    global AutoMode := 1, IsBrowserOperationBusy := false, ActivePageAction := 0
+    global TargetBrowserHwnd := 0, PaletteWindow := 0
+    global IsBrowserOperationBusy := false, ActivePageAction := 0
     global PaletteRefresh := RefreshCycle(RunScheduledPaletteSearch), ManagementRefresh := RefreshCycle(RefreshManagement)
     global DetectedChannel := {State: "unavailable", Author: "", Channel: ""}
     global ActiveEditorDialog := false
     OnExit(CloseSettingsStore)
-    if !InitializeAppSettings()
+    if !InitializeAppSettings(showRecoveryDialogs)
         ExitApp(1)
     InitReactions()
     global EditingProfileId := "", ManagementWindow := 0

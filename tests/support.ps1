@@ -9,6 +9,15 @@ function New-TestRuntime {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\library-model.ahk') -Destination (Join-Path $path 'library-model.ahk')
     return $path
 }
+# Edit only a caller-provided isolated copy; preserve literal, all-match replacement.
+function Edit-TestSource {
+    param([string]$Runtime, [string]$RelativePath, [string]$Before, [string]$After)
+    $path = Join-Path $Runtime $RelativePath
+    $source = [IO.File]::ReadAllText($path)
+    if (!$source.Contains($Before)) { throw "Missing test injection in ${RelativePath}: $Before" }
+    [IO.File]::WriteAllText($path,$source.Replace($Before,$After),[Text.UTF8Encoding]::new($true))
+}
+
 function Get-AutoHotkeyPath {
     $candidates = if ($env:AHK_EXE) { @($env:AHK_EXE) } else {
         @((Join-Path $env:ProgramFiles 'AutoHotkey\v2\AutoHotkey64.exe'), (Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey\v2\AutoHotkey64.exe'))
@@ -38,7 +47,7 @@ function Wait-TestProcess {
 
 function Invoke-AppTest {
     param([string]$Runtime, [string]$Body, [int]$TimeoutMs = 30000, [string]$Setup = '')
-    $source = "#Requires AutoHotkey v2.0`r`n#SingleInstance Force`r`n#Include %A_ScriptDir%\src\app\app_modules.ahk`r`n#Include %A_ScriptDir%\library-model.ahk`r`n" + $Setup + "`r`nInitializeApplication()`r`n" + $Body
+    $source = "#Requires AutoHotkey v2.0`r`n#SingleInstance Force`r`n#Include %A_ScriptDir%\src\app\app_modules.ahk`r`n#Include %A_ScriptDir%\library-model.ahk`r`n" + $Setup + "`r`nInitializeApplication(false)`r`n" + $Body
     Invoke-AhkTest -Runtime $Runtime -Source $source -TimeoutMs $TimeoutMs
 }
 function Invoke-AhkTest {
@@ -54,11 +63,23 @@ ReportUnhandledTestError(failure, *) {
         FileAppend("FAIL: unhandled test error: " detail "`n", "**")
     } finally ExitApp(1)
 }
+; Observe activation without activating or retrying; callers own the action under test.
+RequireTestWindowActive(hwnd) {
+    if active := WinWaitActive("ahk_id " hwnd,,2)
+        return active
+    foreground := DllCall("GetForegroundWindow","Ptr"), foregroundPid := 0
+    DllCall("GetWindowThreadProcessId","Ptr",foreground,"UInt*",&foregroundPid)
+    owner := DllCall("GetWindow","Ptr",hwnd,"UInt",4,"Ptr")
+    throw Error("Test window did not become active: exists=" DllCall("IsWindow","Ptr",hwnd)
+        . " visible=" DllCall("IsWindowVisible","Ptr",hwnd) " enabled=" DllCall("IsWindowEnabled","Ptr",hwnd)
+        . " owner_enabled=" (owner ? DllCall("IsWindowEnabled","Ptr",owner) : "none")
+        . " foreground_owned=" (foregroundPid=DllCall("GetCurrentProcessId")))
+}
 '@
     [IO.File]::WriteAllText($entry, $preamble + "`r`n" + $Source, [Text.UTF8Encoding]::new($true))
     $out = Join-Path $Runtime 'stdout.txt'
     $err = Join-Path $Runtime 'stderr.txt'
-    $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + $entry + '"'), '--smoke' -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + $entry + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     $exitCode = Wait-TestProcess -Process $run -TimeoutMs $TimeoutMs
     Get-Content -LiteralPath $out,$err
     if ($exitCode -ne 0) { throw "Test failed ($exitCode): $Runtime" }

@@ -7,7 +7,10 @@ Invoke-AppFixture -Body @'
         {Id:"input-a",Name:"A",Channel:"/channel/a",Items:[{Id:"fixture-a2",Name:"A2",Text:"A-two",Slot:2},{Id:"fixture-a1",Name:"A1",Text:"A-one",Slot:1}]},
         {Id:"input-b",Name:"B",Channel:"/channel/b",Items:[{Id:"fixture-b1",Name:"B1",Text:"B-one",Slot:1},{Id:"fixture-b2",Name:"B2",Text:"B-two",Slot:2}]}],SharedDanmakuItems:[]}
     CommitTestLibraryChange(fixtureLibrary,"input fixture")
-    global FixtureInputMode := true, FixtureResolveCount := 0, FixtureCurrentVideo := "aaaaaaaaaaa", FixtureSent := []
+    global FixtureResolveCount := 0, FixtureCurrentVideo := "aaaaaaaaaaa", FixtureSent := []
+    RuntimePorts.ResolveChannel := ResolveInputPlanChannel
+    RuntimePorts.VerifyInput := (hwnd,video) => video == FixtureCurrentVideo
+    RuntimePorts.Text := (text) => FixtureSent.Push(text)
     AutoMode := true
     plan := ResolveShortcutInput("profile",1,123)
     Assert(FixtureResolveCount=1 && plan.Text="A-one" && plan.Video="aaaaaaaaaaa","shortcut resolves profile and slot exactly once")
@@ -49,13 +52,47 @@ Invoke-AppFixture -Body @'
         escaped := true
     Assert(!escaped && PartialInputAttempts=1 && FixtureSent.Length=1,"partial input failure is handled without replay")
     Assert(InStr(PaletteHint.Text,"結果を確認できません") && InStr(PaletteHint.Text,"自動では再実行しません"),"partial input failure is reported as unknown rather than not typed")
-    FixtureInputMode := false
 '@ -Helpers @'
+ResolveInputPlanChannel(hwnd) {
+    global FixtureResolveCount
+    FixtureResolveCount++
+    return {State:"ok",Author:"A",Channel:"/channel/a",Video:"aaaaaaaaaaa"}
+}
 PartialInputFailure(text) {
     global PartialInputAttempts
     PartialInputAttempts++
     FixtureSent.Push(SubStr(text,1,2))
     throw Error("Synthetic failure after partial input")
+}
+'@
+
+# Resolution and final verification failures use one user-facing input boundary.
+Invoke-AppFixture -Body @'
+    global InputFailureMode := "", InputRequests := [], InputSent := []
+    RuntimePorts.WorkerRequest := InputBoundaryRequest
+    RuntimePorts.Text := (text) => InputSent.Push(text)
+    BuildManagement()
+    for mode in ["browser_context","verify_input"] {
+        InputFailureMode := mode, InputRequests := [], InputSent := []
+        PaletteHint.Text := "previous message", escaped := false
+        try RequestShortcutInput("shared",1,123)
+        catch
+            escaped := true
+        Assert(!escaped,"input boundary handles " mode " failure without an unhandled exception")
+        Assert(InputSent.Length=0 && InputRequests.Length=(mode="browser_context" ? 1 : 2),mode ": failed verification does not type or retry")
+        Assert(PaletteHint.Text="Synthetic input failure: " mode,mode ": the observed failure reaches the existing input guidance")
+        Assert(!IsBrowserOperationBusy && OperationAllowed("input"),mode ": failed input releases the browser gate")
+        Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),mode ": failed input restores both parent windows")
+        InputFailureMode := "", InputRequests := []
+        RequestShortcutInput("shared",1,123)
+        Assert(InputRequests.Length=2 && InputSent.Length=1 && InputSent[1]==SharedDanmakuItems[1].Text,mode ": a new request succeeds once after recovery")
+    }
+'@ -Helpers @'
+InputBoundaryRequest(hwnd,mode,video,extra) {
+    InputRequests.Push(mode)
+    if mode=InputFailureMode
+        throw Error("Synthetic input failure: " mode)
+    return {State:"ok",Video:"abcdefghijk"}
 }
 '@
 
@@ -79,11 +116,12 @@ Invoke-AppFixture -Body @'
     browser.AddEdit("w320","fixture")
     PresentWindow(browser,"",0,false)
     TargetBrowserHwnd := browser.Hwnd
-    sent := []
+    sent := [], foregroundChecks := []
     RuntimePorts.BrowserIdentity := (hwnd) => hwnd=browser.Hwnd
     RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"ok",Video:"abcdefghijk"}
     RuntimePorts.VerifyInput := (hwnd,video) => hwnd=browser.Hwnd && video=="abcdefghijk"
-    RuntimePorts.Foreground := (hwnd) => !!WinActive("ahk_id " hwnd)
+    ; Retain the exact observation used by delivery; a later foreground read can differ.
+    RuntimePorts.Foreground := (hwnd) => (foregroundChecks.Push(!!WinActive("ahk_id " hwnd)), foregroundChecks[-1])
     RuntimePorts.Text := (text) => sent.Push(text)
     RefreshPalette()
     for ordering in [[2,"Sort"],[2,"SortDesc"],[1,"Sort"],[3,"SortDesc"]] {
@@ -99,9 +137,12 @@ Invoke-AppFixture -Body @'
             Assert(GetEditingProfileId()==item.ProfileId && ManagedList.GetNext()=item.Index
                 && ManagedList.GetText(ManagedList.GetNext(),4)==id,"sorted selection opens the matching library item " id)
             Assert(InputProfileId=="sort-profile","opening sorted shared/profile items preserves the input profile")
-            before := sent.Length
+            before := sent.Length, foregroundChecks.Length := 0
             InsertPaletteItem()
-            Assert(sent.Length=before+1 && sent[-1]==item.Text,"sorted input sends exactly the displayed item " id)
+            Assert(sent.Length=before+1 && sent[-1]==item.Text,"sorted input sends exactly the displayed item " id
+                . " (sent=" (sent.Length-before) ", foreground_checks=" foregroundChecks.Length
+                . ", last_foreground=" (foregroundChecks.Length ? foregroundChecks[-1] : "unobserved")
+                . ", hint=" PaletteHint.Text ")")
         }
     }
     ; A visible row with no published backing identity must not use its position.
@@ -152,8 +193,7 @@ Invoke-AppFixture -Body @'
 '@ -Helpers @'
 ActivateDeliveryWindow(hwnd) {
     WinActivate("ahk_id " hwnd)
-    if !WinWaitActive("ahk_id " hwnd,,2)
-        throw Error("Delivery fixture could not activate its own window")
+    RequireTestWindowActive(hwnd)
 }
 DeliveryRequest(hwnd,mode,video,extra) {
     global DeliveryCalls, DeliveryValidationArmed

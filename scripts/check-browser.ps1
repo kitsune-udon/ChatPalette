@@ -45,7 +45,7 @@ try {
         $report.PageKind=if (([uri]$address).AbsolutePath -in @('/live_chat','/live_chat_replay')) {'Popout'} else {'Watch'}
         if ($PageKind -ne 'Auto' -and $PageKind -ne $report.PageKind) { throw 'Unexpected page kind' }
     }
-    $report.ChatDetected=$null -ne (Find-ChatInput $WindowHandle)
+    $report.ChatDetected=(Find-ChatInput $WindowHandle).State -eq 'ok'
     $report.LauncherDetected=$null -ne (Find-ReactionLauncher $WindowHandle)
     if ($Exercise) {
         if (!$report.Foreground -or !$report.VideoDetected) { throw 'Place the target video in the foreground before exercising actions' }

@@ -8,7 +8,7 @@ $source += 'Counts := [' + ($Counts -join ',') + "]`r`nRepeats := $Repeats`r`n"
 $source += @'
 DllCall("QueryPerformanceFrequency","Int64*",&frequency := 0)
 started := Tick()
-InitializeApplication()
+InitializeApplication(false)
 initializedMs := Round(Tick()-started,3)
 FileAppend("items,operation,median_ms,max_ms`n0,cold_initialize," initializedMs "," initializedMs "`n","*")
 AutoMode := false
@@ -33,7 +33,8 @@ for count in Counts {
                 samples .= elapsed "`n"
         }
         sorted := StrSplit(RTrim(Sort(samples,"N"),"`n"),"`n")
-        FileAppend(count "," operation "," Round(sorted[Ceil(Repeats/2)],3) "," Round(sorted[-1],3) "`n","*")
+        median := (sorted[(Repeats+1)//2]+sorted[(Repeats+2)//2])/2
+        FileAppend(count "," operation "," Round(median,3) "," Round(sorted[-1],3) "`n","*")
     }
 }
 ExitApp()

@@ -25,7 +25,7 @@ Invoke-AppFixture -Runtime $release -Body @'
     PaletteStatusControl.GetPos(,&reactionY)
     Assert(settingsY!=reactionY,"first palette frame separates notification rows")
     WinActivate("ahk_id " PaletteWindow.Hwnd)
-    Assert(WinWaitActive("ahk_id " PaletteWindow.Hwnd,,2),"palette active before first click")
+    Assert(RequireTestWindowActive(PaletteWindow.Hwnd),"palette active before first click")
     global PaletteClickCount := 0
     PaletteManageButton.OnEvent("Click",RecordPaletteClick,-1)
     PaletteManageButton.GetPos(&clickX,&clickY,&clickWidth,&clickHeight)
@@ -43,7 +43,7 @@ Invoke-AppFixture -Runtime $release -Body @'
             . " refreshing=" PaletteRefresh.Active " search_pending=" PaletteSearchPending "`n","*")
     }
     Assert(ManagementWindow && PaletteClickCount=1,"first palette click creates management exactly once")
-    Assert(WinWaitActive("ahk_id " ManagementWindow.Hwnd,,2),"first palette click opens management")
+    Assert(RequireTestWindowActive(ManagementWindow.Hwnd),"first palette click opens management")
     coldControls := [ManagementTitle,ManagementTarget,ManagementAddProfileButton,ManagementProfileMenu,ManagedList,ManagementUndo,ManagementScopeHint]
     initialRects := []
     for control in coldControls {
@@ -112,10 +112,7 @@ Invoke-AppFixture -Runtime $release -Body @'
     global HelpKeyClicks := 0
     helpKeyButton.OnEvent("Click",RecordHelpKeyClick,-1)
     WinActivate("ahk_id " helpHwnd)
-    helpActive := WinWaitActive("ahk_id " helpHwnd,,2)
-    Assert(helpActive,"help is active before shortcut click: visible=" DllCall("IsWindowVisible","Ptr",helpHwnd)
-        . " enabled=" DllCall("IsWindowEnabled","Ptr",helpHwnd) " owner_enabled=" DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd)
-        . " editor=" (ActiveEditorDialog ? ActiveEditorDialog.Label : "none") " foreground_is_app=" IsAppWindow(WinExist("A")))
+    Assert(RequireTestWindowActive(helpHwnd),"help is active before shortcut click")
     SendMessage(0xF5,0,0,helpKeyButton.Hwnd) ; BM_CLICK keeps native button dispatch independent of pointer movement.
     deadline := A_TickCount+2000
     while !ActiveEditorDialog && A_TickCount<deadline

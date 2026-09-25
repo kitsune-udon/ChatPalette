@@ -8,7 +8,7 @@ Invoke-AppFixture -Body @'
     ; Exercise the actual Save callback on this test application's own windows.
     ManagementWindow.Show()
     WinActivate("ahk_id " ManagementWindow.Hwnd)
-    WinWaitActive("ahk_id " ManagementWindow.Hwnd,,2)
+    RequireTestWindowActive(ManagementWindow.Hwnd)
     EditingProfileId := ""
     RefreshManagement()
     ShowShortcutManager()
@@ -17,7 +17,7 @@ Invoke-AppFixture -Body @'
     otherWindow.Show("w200 h100")
     WinActivate("ahk_id " otherWindow.Hwnd)
     ShowPalette()
-    Assert(WinWaitActive("ahk_id " keyDialog.Hwnd,,2),"palette shortcut recalls key editor")
+    Assert(RequireTestWindowActive(keyDialog.Hwnd),"palette shortcut recalls key editor")
     WinClose("ahk_id " keyDialog.Hwnd)
     Sleep(50)
     Assert(!ActiveEditorDialog,"key editor closes normally after recall")
@@ -31,16 +31,16 @@ Invoke-AppFixture -Body @'
     otherWindow := Gui(,"outside editor fixture")
     otherWindow.Show("w200 h100")
     WinActivate("ahk_id " otherWindow.Hwnd)
-    Assert(WinWaitActive("ahk_id " otherWindow.Hwnd,,2),"another window is active before editor recall")
+    Assert(RequireTestWindowActive(otherWindow.Hwnd),"another window is active before editor recall")
     ShowPalette()
-    Assert(WinWaitActive("ahk_id " popup.Hwnd,,2),"palette shortcut recalls the editor's owned confirmation")
+    Assert(RequireTestWindowActive(popup.Hwnd),"palette shortcut recalls the editor's owned confirmation")
     popup.Destroy(), otherWindow.Destroy()
     editor.Opt("-Disabled")
     CloseDanmakuEditor(ActiveEditorDialog.Window)
     beforeFocusSave := SharedDanmakuItems.Length
     OpenDanmakuEditor(true)
     WinActivate("ahk_id " ActiveEditorDialog.Window.Hwnd)
-    WinWaitActive("ahk_id " ActiveEditorDialog.Window.Hwnd,,2)
+    RequireTestWindowActive(ActiveEditorDialog.Window.Hwnd)
     Assert(WinActive("ahk_id " ActiveEditorDialog.Window.Hwnd),"editor activated before save")
     editNumber := 0
     for control in ActiveEditorDialog.Window {
@@ -71,7 +71,7 @@ Invoke-AppFixture -Body @'
     otherWindow.Show("w200 h100")
     WinActivate("ahk_id " otherWindow.Hwnd)
     ShowPalette()
-    Assert(WinWaitActive("ahk_id " moveDialog.Hwnd,,2),"palette shortcut recalls transfer editor")
+    Assert(RequireTestWindowActive(moveDialog.Hwnd),"palette shortcut recalls transfer editor")
     WinClose("ahk_id " moveDialog.Hwnd)
     Sleep(50)
     Assert(!ActiveEditorDialog,"transfer editor closes normally after recall")
@@ -79,9 +79,9 @@ Invoke-AppFixture -Body @'
     UndoLibraryChange()
     OpenDanmakuEditor(true)
     WinActivate("ahk_id " ActiveEditorDialog.Window.Hwnd)
-    Assert(WinWaitActive("ahk_id " ActiveEditorDialog.Window.Hwnd,,2),"editor is active before cancellation")
+    Assert(RequireTestWindowActive(ActiveEditorDialog.Window.Hwnd),"editor is active before cancellation")
     CloseDanmakuEditor(ActiveEditorDialog.Window)
-    Assert(WinWaitActive("ahk_id " ManagementWindow.Hwnd,,2) && SharedDanmakuItems.Length=beforeFocusSave,"cancel restores panel without saving")
+    Assert(RequireTestWindowActive(ManagementWindow.Hwnd) && SharedDanmakuItems.Length=beforeFocusSave,"cancel restores panel without saving")
     OpenDanmakuEditor(true)
     priorEditor := ActiveEditorDialog.Window
     CloseDanmakuEditor(priorEditor)
@@ -226,11 +226,7 @@ EditorLibrarySignature(library) {
 
 # Change the editing scope after row validation, before the caller can read it again.
 $selectionRuntime = New-TestRuntime
-$controllerPath = Join-Path $selectionRuntime 'src/ui/management/management_controller.ahk'
-$controller = [IO.File]::ReadAllText($controllerPath)
-$anchor = 'GetSelectedManagedTarget() {'
-if (!$controller.Contains($anchor)) { throw 'Missing selected target boundary' }
-[IO.File]::WriteAllText($controllerPath,$controller.Replace($anchor,'OriginalGetSelectedManagedTarget() {'),[Text.UTF8Encoding]::new($true))
+Edit-TestSource $selectionRuntime 'src/ui/management/management_controller.ahk' 'GetSelectedManagedTarget() {' 'OriginalGetSelectedManagedTarget() {'
 Invoke-AppFixture -Runtime $selectionRuntime -Body @'
     ShowManagement(1)
     global SelectionSwitchArmed := false
@@ -292,21 +288,14 @@ GetSelectedManagedTarget() {
 
 # Timers at the saved/display boundary must observe the completed editor result.
 $commitRuntime = New-TestRuntime
-$controllerPath = Join-Path $commitRuntime 'src\ui\management\management_controller.ahk'
-$source = [IO.File]::ReadAllText($controllerPath)
 $boundary = 'RefreshManagementAfterCommand(editId, message := "変更は保存済みです。", updateManagement := 0) {'
-if (!$source.Contains($boundary)) { throw 'Missing saved presentation boundary' }
-[IO.File]::WriteAllText($controllerPath,$source.Replace($boundary,$boundary+"`r`n    ProbeEditorCommit(editId)"),[Text.UTF8Encoding]::new($true))
-$dialogsPath = Join-Path $commitRuntime 'src\ui\management\management_dialogs.ahk'
-$source = [IO.File]::ReadAllText($dialogsPath)
+Edit-TestSource $commitRuntime 'src/ui/management/management_controller.ahk' $boundary ($boundary+"`r`n    ProbeEditorCommit(editId)")
 foreach ($entry in @(
     @('view.AddButton("w120 Default","保存").OnEvent("Click",Save)','Save'),
     @('moveButton.OnEvent("Click",Move)','Move'),
     @('view.AddButton("w180 Default","連携する").OnEvent("Click",Save)','Save'))) {
-    if (!$source.Contains($entry[0])) { throw 'Missing editor submit callback' }
-    $source=$source.Replace($entry[0],$entry[0]+"`r`n        global SubmitCommitFixture := "+$entry[1])
+    Edit-TestSource $commitRuntime 'src/ui/management/management_dialogs.ahk' $entry[0] ($entry[0]+"`r`n        global SubmitCommitFixture := "+$entry[1])
 }
-[IO.File]::WriteAllText($dialogsPath,$source,[Text.UTF8Encoding]::new($true))
 Invoke-AppFixture -Runtime $commitRuntime -Body @'
     global CommitProbeArmed := false, CommitExpectedRow := 0, CommitExpectedId := "", QueuedTargetId := "", QueuedEdits := 0
     global ExpectedResolveCritical := 0
@@ -390,4 +379,45 @@ DeleteAfterEditorCommit() {
     HandleDanmakuCommand("delete")
     QueuedEdits++
 }
+'@
+
+# Stale management scopes cannot turn into an operation on shared items.
+Invoke-AppFixture -Body @'
+    ShowManagement(1)
+    RuntimePorts.ResolveChannel := (*) => {State:"ok",Author:"fixture",Channel:"/channel/stale-owner",Video:"abcdefghijk"}
+    TargetBrowserHwnd := 123
+    for action in ["add","edit","move","delete","duplicate","up","down","bind"] {
+        items := [{Id:"owner-item-1",Name:"same",Text:"first",Slot:0},
+            {Id:"owner-item-2",Name:"same",Text:"second",Slot:0},
+            {Id:"owner-item-3",Name:"same",Text:"third",Slot:0}]
+        CommitTestLibraryChange({Profiles:[{Id:"stale-owner",Name:"source",Channel:"",Items:items},
+            {Id:"other-owner",Name:"other",Channel:"",Items:[]}],SharedDanmakuItems:[]},"prepare stale owner")
+        EditingProfileId := "stale-owner"
+        RefreshManagement(), SelectManagedRow(2)
+        ; Keep the old display, as after a failed refresh; moved items keep their IDs.
+        CommitTestLibraryChange({Profiles:[{Id:"other-owner",Name:"other",Channel:"",Items:[]}],SharedDanmakuItems:items},"move items and remove owner")
+        beforeHistory := LibraryHistory.Length, escaped := ""
+        try {
+            switch action {
+                case "add", "edit": OpenDanmakuEditor(action="add")
+                case "move": TransferItem()
+                case "bind": ManageProfile("bind")
+                default: HandleDanmakuCommand(action)
+            }
+        } catch as failure
+            escaped := failure.Message
+        Assert(escaped="" && !ActiveEditorDialog,"missing scope refuses to open or escape: " action)
+        Assert(InStr(ManagementStatus.Text,"選び直してください"),"missing scope requests a new selection: " action)
+        Assert(LibraryHistory.Length=beforeHistory && SharedDanmakuItems.Length=3
+            && SharedDanmakuItems[2].Id=="owner-item-2","stale action leaves shared items and undo history unchanged: " action)
+        saved := LoadSettings(SettingsDatabasePath)
+        Assert(saved.Profiles.Length=1 && saved.SharedDanmakuItems.Length=3
+            && saved.SharedDanmakuItems[2].Id=="owner-item-2","stale action leaves storage unchanged: " action)
+        Assert(DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"refused action leaves management enabled: " action)
+    }
+    EditingProfileId := ""
+    RefreshManagement()
+    OpenDanmakuEditor(true)
+    Assert(ActiveEditorDialog && ActiveEditorDialog.Label="弾幕の編集","explicit shared selection still opens a new item editor")
+    CloseDanmakuEditor(ActiveEditorDialog.Window)
 '@

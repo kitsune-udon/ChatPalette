@@ -16,6 +16,7 @@ Invoke-AppFixture -Body @'
     savedKeys := CurrentShortcutMap(), changedKeys := savedKeys.Clone(), changedKeys["reaction"] := "^+r"
     SaveShortcutMap(changedKeys)
     global KeyCalls := []
+    RuntimePorts.ShortcutKey := (action,key,enabled) => KeyCalls.Push({Key:key,Enabled:enabled})
     SaveReactionDefaults(reactionDraft)
     persisted := LoadSettings(SettingsDatabasePath)
     Assert(GetShortcutKey("reaction")=="^+r" && persisted.ShortcutKeys["reaction"]=="^+r" && KeyCalls.Length=0,"reaction defaults preserve a subsequently changed key without registration")

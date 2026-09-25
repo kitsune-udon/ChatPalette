@@ -9,8 +9,13 @@ OpenDanmakuEditor(isNew) {
         selected := isNew ? 0 : GetSelectedManagedTarget()
         if !isNew && !selected
             return
-        editId := selected ? selected.ProfileId : GetEditingProfileId()
-        items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},editId)
+        editId := selected ? selected.ProfileId : EditingProfileId
+        try items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},editId)
+        catch as failure {
+            RefreshManagement()
+            SetManagementNotice(failure.Message)
+            return
+        }
         original := selected ? selected.Item : {Name:"",Text:"",Slot:0}
         view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕を" (isNew ? "追加" : "編集"))
         view.SetFont("s10","Yu Gothic UI")
@@ -165,16 +170,21 @@ OpenChannelLinkDialog(preferredProfileId := "",*) {
         SetManagementNotice("YouTubeを最前面にして" ShortcutKeyLabel(GetShortcutKey("palette")) "を押し、もう一度チャンネル連携を開いてください。")
         return
     }
-    candidate := ResolveBrowserChannel(TargetBrowserHwnd)
-    if candidate.State != "ok" {
-        SetManagementNotice("チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。")
-        return
-    }
+    try candidate := ResolveBrowserChannel(TargetBrowserHwnd)
+    catch as failure
+        candidate := {State:"unavailable",Detail:failure.Message}
     previousCritical := A_IsCritical, view := 0
     Critical("On")
     try {
         if RestoreActiveEditorDialog() || !OperationAllowed("edit")
             return
+        if candidate.State != "ok" {
+            message := "チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。"
+            if candidate.HasOwnProp("Detail") && candidate.Detail != ""
+                message .= " " candidate.Detail
+            SetManagementNotice(message)
+            return
+        }
         if preferredProfileId != "" && !FindProfileById(Profiles,preferredProfileId) {
             SetManagementNotice("対象の配信者がありません。選び直してください。")
             return
@@ -233,19 +243,25 @@ OpenChannelLinkDialog(preferredProfileId := "",*) {
     Save(*) {
         local commitCritical := A_IsCritical
         try {
+            if !ActiveEditorDialog || ActiveEditorDialog.Window != view || !OperationAllowed("preferences")
+                return
             try {
-                selectedId := GetSelectedProfileId(target), submittedName := name.Value
-                fresh := ResolveBrowserChannel(TargetBrowserHwnd)
+                ; Verification may close or replace this editor. Rejoin its owner before publishing.
+                try {
+                    selectedId := GetSelectedProfileId(target), submittedName := name.Value
+                    fresh := ResolveBrowserChannel(TargetBrowserHwnd)
+                } finally Critical("On")
+                if !ActiveEditorDialog || ActiveEditorDialog.Window != view
+                    return
                 if fresh.State != "ok" || !(fresh.Channel == candidate.Channel)
                     throw Error("チャンネルが変わりました。連携画面を閉じて、もう一度開いてください。")
-                ; Network verification stays interruptible; only commit and presentation are atomic.
-                Critical("On")
                 if selectedId = ""
                     result := ExecuteProfileCommand("add","",submittedName,candidate.Channel)
                 else
                     result := ExecuteProfileCommand("bind",selectedId,candidate.Channel)
             } catch as failure {
-                status.Text := "連携できませんでした。" failure.Message
+                if ActiveEditorDialog && ActiveEditorDialog.Window = view
+                    status.Text := "連携できませんでした。" failure.Message
                 return
             }
             Close()

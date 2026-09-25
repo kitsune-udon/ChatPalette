@@ -19,7 +19,7 @@ SaveInputProfileId(id) {
     previousCritical := A_IsCritical
     Critical("On")
     try {
-        if id == InputProfileId || (id != "" && !FindProfileById(Profiles,id))
+        if id == InputProfileId
             return
         state := CreatePreferences()
         state.InputProfileId := id

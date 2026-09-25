@@ -41,3 +41,7 @@ LoadReactionRegistrationSnapshot() {
     db := OpenSettingsRepository(SettingsDatabasePath).Db
     return db.Scalar("SELECT json_object('version',1,'profiles',json_group_array(json(payload))) FROM reaction_registrations")
 }
+HasReactionRegistration(browser) {
+    db := OpenSettingsRepository(SettingsDatabasePath).Db
+    return db.Scalar("SELECT EXISTS(SELECT 1 FROM reaction_registrations WHERE browser=?)",browser) = "1"
+}

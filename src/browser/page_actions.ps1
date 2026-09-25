@@ -1,6 +1,5 @@
 ﻿# Page actions never invoke a reaction button or send a chat message.
-function Find-ChatInput([long]$WindowHandle, [ref]$Failure = ([ref]$null)) {
-    if ($null -ne $Failure) { $Failure.Value = 'chat_missing' }
+function Find-ChatInput([long]$WindowHandle) {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
     $focusable = [System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::IsKeyboardFocusableProperty, $true)
@@ -20,9 +19,9 @@ function Find-ChatInput([long]$WindowHandle, [ref]$Failure = ([ref]$null)) {
             } catch { }
         }
     )
-    if ($matches.Count -eq 1) { return $matches[0] }
-    if ($matches.Count -gt 1 -and $null -ne $Failure) { $Failure.Value = 'chat_ambiguous' }
-    return $null
+    if ($matches.Count -eq 1) { return @{State='ok'; Element=$matches[0]} }
+    if ($matches.Count -gt 1) { return @{State='chat_ambiguous'; Element=$null} }
+    return @{State='chat_missing'; Element=$null}
 }
 
 function Get-ReactionLauncherKind($Field) {
@@ -99,16 +98,16 @@ function Wait-ChatFocus($Target, [long]$WindowHandle, [string]$Video) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     do {
         if (!(Test-ReactionForeground $WindowHandle)) { return 'wrong_window' }
-        $verified = $null
-        $kind = Get-FocusedYouTubeInput $WindowHandle ([ref]$verified)
-        if ($kind -eq 'chat' -and [System.Windows.Automation.Automation]::Compare($Target,$verified)) {
+        $focusedInput = Get-FocusedYouTubeInput $WindowHandle
+        if ($null -ne $focusedInput -and $focusedInput.Kind -eq 'chat' -and
+            [System.Windows.Automation.Automation]::Compare($Target,$focusedInput.Element)) {
             if ((Read-BrowserVideoId $WindowHandle) -cne $Video) { return 'changed' }
             if (!(Test-ReactionForeground $WindowHandle)) { return 'wrong_window' }
             if (Test-FocusedInputIdentity $Target $WindowHandle) { return 'focused' }
             return 'focus_failed'
         }
         # Do not override a user moving to another identified input.
-        if ($kind) { return 'focus_failed' }
+        if ($null -ne $focusedInput) { return 'focus_failed' }
         if ($timer.ElapsedMilliseconds -ge 350) { break }
         Start-Sleep -Milliseconds 25
     } while ($true)
@@ -144,9 +143,9 @@ function Invoke-PageAction($Request) {
         if (!$video) { return $reply }
         if ($Request.Video -and $Request.Video -cne $video) { $reply.State='changed'; return $reply }
         if ($Request.Mode -eq 'chat_focus') {
-            $failure = 'chat_missing'
-            $target = Find-ChatInput $window ([ref]$failure)
-            if ($null -eq $target) { $reply.State=$failure; return $reply }
+            $discovery = Find-ChatInput $window
+            if ($discovery.State -ne 'ok') { $reply.State=$discovery.State; return $reply }
+            $target = $discovery.Element
             if (!(Test-ElementWindow $target $window)) { $reply.State='wrong_window'; return $reply }
             $records = @(Get-YouTubeInputRecords $target $window)
             if ((Get-YouTubeInputKind $records) -ne 'chat') { $reply.State='chat_missing'; return $reply }

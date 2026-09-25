@@ -185,11 +185,51 @@ try {
     Set-Item Function:Read-BrowserVideoId $addressReader
     $script:AddressBarCache.Clear()
 }
+# Exercise focused-input publication while substituting only native observations.
+$focusReader=(Get-Command Get-FocusedYouTubeInput).ScriptBlock
+$recordReader=(Get-Command Get-YouTubeInputRecords).ScriptBlock
+$windowCheck=(Get-Command Test-ElementWindow).ScriptBlock
+$focusSource=$focusReader.ToString()
+$focusRead='[System.Windows.Automation.AutomationElement]::FocusedElement'
+$focusCompare='[System.Windows.Automation.Automation]::Compare($focused, $latest)'
+if (!$focusSource.Contains($focusRead) -or !$focusSource.Contains($focusCompare)) { throw 'Focused input boundary missing' }
+Set-Item Function:Get-FocusedYouTubeInput ([scriptblock]::Create($focusSource.Replace($focusRead,'(Get-TestFocusedElement)').Replace($focusCompare,'[object]::ReferenceEquals($focused, $latest)')))
+function Get-TestFocusedElement {
+    $script:FocusTestReads++
+    if ($script:FocusTestScenario -eq 'missing') { return $null }
+    if ($script:FocusTestScenario -eq 'changed' -and $script:FocusTestReads -eq 2) { return [pscustomobject]@{} }
+    return $script:FocusTestTarget
+}
+function Test-ElementWindow($Element,$WindowHandle) {
+    return $WindowHandle -eq 123 -and $script:FocusTestScenario -ne 'outside' -and
+        !($script:FocusTestScenario -eq 'detached' -and $script:FocusTestReads -eq 2)
+}
+function Get-YouTubeInputRecords($Target,$WindowHandle) { return $Target.Records }
+try {
+    foreach ($scenario in @('chat','comment','missing','changed','outside','detached','unfocused','unknown')) {
+        $script:FocusTestScenario=$scenario; $script:FocusTestReads=0
+        $field=if ($scenario -eq 'comment') { Field 'contenteditable-root' } else { Field 'input' }
+        $parent=if ($scenario -eq 'comment') { $commentParent } else { $chatParent }
+        if ($scenario -eq 'unfocused') { $field.Focused=$false }
+        if ($scenario -eq 'unknown') { $field.Id='unrecognized' }
+        $script:FocusTestTarget=[pscustomobject]@{Records=@($field,$parent,$document)}
+        $found=Get-FocusedYouTubeInput 123
+        if ($scenario -in @('chat','comment')) {
+            Assert ($found.Kind -eq $scenario -and [object]::ReferenceEquals($found.Element,$script:FocusTestTarget)) "focused result pairs classification with its verified element: $scenario"
+        } else {
+            Assert ($null -eq $found) "rejected focus publishes no partial result: $scenario"
+        }
+    }
+} finally {
+    Set-Item Function:Get-FocusedYouTubeInput $focusReader
+    Set-Item Function:Get-YouTubeInputRecords $recordReader
+    Set-Item Function:Test-ElementWindow $windowCheck
+}
 # Exercise the worker route without any UI, keystrokes or network.
 $script:video = 'abcdefghijk'
 $script:kind = 'comment'
 function Read-BrowserVideoId($WindowHandle) { return $script:video }
-function Get-FocusedYouTubeInput($WindowHandle, [ref]$VerifiedElement) { $VerifiedElement.Value = "original"; return $script:kind }
+function Get-FocusedYouTubeInput($WindowHandle) { if ($script:kind) { return @{Kind=$script:kind;Element="original"} } }
 function Test-FocusedInputIdentity($VerifiedElement, $WindowHandle) { return $VerifiedElement -eq $script:focusedId -and !!$script:kind }
 $script:focusedId = "original"
 function Fetch-Metadata($Video) { throw 'Input verification must not fetch metadata' }

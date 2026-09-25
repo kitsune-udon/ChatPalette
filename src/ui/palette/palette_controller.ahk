@@ -38,9 +38,14 @@ HidePalette(*) {
 
 SelectProfileFromBrowser(hwnd) {
     global DetectedChannel
-    DetectedChannel := ResolveBrowserChannel(hwnd)
+    try DetectedChannel := ResolveBrowserChannel(hwnd)
+    catch as failure
+        DetectedChannel := {State:"unavailable",Channel:"",Author:"",Video:"",Detail:failure.Message}
     if DetectedChannel.State != "ok" {
-        SetDetectionStatus("動画を確認できません。YouTubeの入力欄から開き直してください。")
+        message := "動画を確認できません。YouTubeの入力欄から開き直してください。"
+        if DetectedChannel.HasOwnProp("Detail") && DetectedChannel.Detail != ""
+            message .= " " DetectedChannel.Detail
+        SetDetectionStatus(message)
         return false
     }
     profile := FindProfileByChannel(Profiles,DetectedChannel.Channel)

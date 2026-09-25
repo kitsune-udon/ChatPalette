@@ -57,13 +57,14 @@ Invoke-AppFixture -Body @'
     ManagementWindow.Hide()
     LayoutPalette(PaletteWindow,0,560,660)
     ; Link chooser uses the detected channel, and creation+binding is one undo step.
-    FixtureInputMode := true, FixtureResolveCount := 0, FixtureCurrentVideo := "aaaaaaaaaaa"
+    global LinkResolveCount := 0
+    RuntimePorts.ResolveChannel := ResolveLinkFixtureChannel
     TargetBrowserHwnd := 123
     historyBeforeLink := LibraryHistory.Length
     profilesBeforeLink := Profiles.Length
     PaletteWindow.Show()
     WinActivate("ahk_id " PaletteWindow.Hwnd)
-    Assert(WinWaitActive("ahk_id " PaletteWindow.Hwnd,,2),"palette is foreground before link click")
+    Assert(RequireTestWindowActive(PaletteWindow.Hwnd),"palette is foreground before link click")
     RefreshOperationControls()
     SendMessage(0xF5,0,0,PaletteBind.Hwnd)
     deadline := A_TickCount+2000
@@ -72,19 +73,19 @@ Invoke-AppFixture -Body @'
     Assert(ActiveEditorDialog,"palette button opens shared link editor")
     linkDialog := ActiveEditorDialog.Window
     WinActivate("ahk_id " linkDialog.Hwnd)
-    Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link chooser active")
+    Assert(RequireTestWindowActive(linkDialog.Hwnd),"link chooser active")
     for control in linkDialog
         if control.Type="Button" && control.Text="連携する"
             linkSave := control
     WinActivate("ahk_id " linkDialog.Hwnd)
-    Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
+    Assert(RequireTestWindowActive(linkDialog.Hwnd),"link editor is foreground before save")
     SendMessage(0xF5,0,0,linkSave.Hwnd)
     deadline := A_TickCount+2000
     while ActiveEditorDialog && A_TickCount<deadline
         Sleep(10)
     Assert(!ActiveEditorDialog && Profiles.Length=profilesBeforeLink+1,"link dialog creates new profile")
     Assert(Profiles[-1].Channel="/channel/a" && LibraryHistory.Length=historyBeforeLink+1,"creation and linking commit once")
-    Assert(FixtureResolveCount=2,"link rechecks channel before commit")
+    Assert(LinkResolveCount=2,"link rechecks channel before commit")
     UndoLibraryChange()
     Assert(Profiles.Length=profilesBeforeLink && !FindProfileByChannel(Profiles,"/channel/a"),"one undo removes created linked profile")
     targetProfile := ExecuteProfileCommand("add","","managed target").ProfileId
@@ -101,7 +102,7 @@ Invoke-AppFixture -Body @'
     }
     Assert(linkChoice && linkChoice.Text="managed target","management link opens shared chooser with managed profile selected")
     WinActivate("ahk_id " linkDialog.Hwnd)
-    Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
+    Assert(RequireTestWindowActive(linkDialog.Hwnd),"link editor is foreground before save")
     SendMessage(0xF5,0,0,linkSave.Hwnd)
     deadline := A_TickCount+2000
     while ActiveEditorDialog && A_TickCount<deadline
@@ -121,7 +122,7 @@ Invoke-AppFixture -Body @'
     global MismatchResolveCalls := 0
     RuntimePorts.ResolveChannel := ResolveMismatchedChannel
     WinActivate("ahk_id " linkDialog.Hwnd)
-    Assert(WinWaitActive("ahk_id " linkDialog.Hwnd,,2),"link editor is foreground before save")
+    Assert(RequireTestWindowActive(linkDialog.Hwnd),"link editor is foreground before save")
     SendMessage(0xF5,0,0,linkSave.Hwnd)
     deadline := A_TickCount+2000, rejectedMessage := false
     while ActiveEditorDialog && !rejectedMessage && A_TickCount<deadline {
@@ -133,13 +134,13 @@ Invoke-AppFixture -Body @'
     Assert(MismatchResolveCalls=1,"link save invokes fresh channel verification exactly once")
     Assert(ActiveEditorDialog && rejectedMessage,"case-only channel change is rejected while retaining editor")
     Assert(LibraryHistory.Length=beforeMismatchHistory && FindProfileById(Profiles,targetProfile).Channel=="/channel/a","rejected channel change leaves saved binding and history untouched")
-    RuntimePorts.ResolveChannel := FixtureResolveChannel
+    RuntimePorts.ResolveChannel := ResolveLinkFixtureChannel
     WinClose("ahk_id " linkDialog.Hwnd)
     deadline := A_TickCount+2000
     while ActiveEditorDialog && A_TickCount<deadline
         Sleep(10)
     Assert(!ActiveEditorDialog,"shared link editor closes normally")
-    FixtureInputMode := false
+    RuntimePorts.ResolveChannel := 0
     TargetBrowserHwnd := 0
     ManagementWindow.Hide()
     noticeControls := [PaletteHint,PaletteSettingsStatus,PaletteStatusControl]
@@ -193,15 +194,7 @@ Invoke-AppFixture -Body @'
     anchor := Gui(,"Presentation test anchor")
     anchor.AddText(,"anchor")
     PresentWindow(anchor,"w240 h100")
-    activated := WinWaitActive("ahk_id " anchor.Hwnd,,2)
-    if !activated {
-        foreground := DllCall("GetForegroundWindow","Ptr"), foregroundPid := 0
-        DllCall("GetWindowThreadProcessId","Ptr",foreground,"UInt*",&foregroundPid)
-        FileAppend("Presentation diagnostic: visible=" DllCall("IsWindowVisible","Ptr",anchor.Hwnd)
-            . " enabled=" DllCall("IsWindowEnabled","Ptr",anchor.Hwnd)
-            . " foreground_owned=" (foregroundPid=DllCall("GetCurrentProcessId")) "`n","*")
-    }
-    Assert(activated,"normal presentation activates")
+    Assert(RequireTestWindowActive(anchor.Hwnd),"normal presentation activates")
     presentationProbe := Gui(,"Presentation test view")
     presentationProbe.AddText(,"prepared")
     global PresentationStates := []
@@ -211,7 +204,7 @@ Invoke-AppFixture -Body @'
     Assert(PresentationStates[2] && WinActive("ahk_id " anchor.Hwnd),"visible update stays visible and does not steal focus")
     presentationProbe.Hide()
     PresentWindow(presentationProbe,"",ObservePresentation)
-    Assert(!PresentationStates[3] && WinWaitActive("ahk_id " presentationProbe.Hwnd,,2),"reopening prepares while hidden and then activates")
+    Assert(!PresentationStates[3] && RequireTestWindowActive(presentationProbe.Hwnd),"reopening prepares while hidden and then activates")
     presentationProbe.Destroy()
     failedView := Gui(,"Failed layout test")
     failedView.AddText(,"must stay hidden")
@@ -255,6 +248,11 @@ Invoke-AppFixture -Body @'
     Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"editor unlocks palette")
 
 '@ -Helpers @'
+ResolveLinkFixtureChannel(hwnd) {
+    global LinkResolveCount
+    LinkResolveCount++
+    return {State:"ok",Author:"A",Channel:"/channel/a",Video:"aaaaaaaaaaa"}
+}
 ResolveMismatchedChannel(hwnd) {
     global MismatchResolveCalls
     MismatchResolveCalls++
@@ -298,6 +296,31 @@ Invoke-AppFixture -Body @'
     LinkWaitChange := "name"
     SubmitDialog("連携する")
     Assert(Profiles[-1].Name=="submitted name" && Profiles[-1].Channel==LinkChannel,"new-profile submission freezes its name before browser verification")
+    for mode in ["cancel","cancel-error","replace","replace-error"] {
+        LinkChannel := "/channel/" mode
+        OpenChannelLinkDialog()
+        window := ActiveEditorDialog.Window.Hwnd, button := FindDialogControl("Button","連携する")
+        beforeProfiles := Profiles.Length, beforeHistory := LibraryHistory.Length
+        LinkWaitChange := mode
+        WinActivate("ahk_id " window)
+        Assert(RequireTestWindowActive(window),"link editor is active before cancellation: " mode)
+        SendMessage(0xF5,0,0,button.Hwnd)
+        deadline := A_TickCount+2000
+        while LinkWaitChange!="done" && A_TickCount<deadline
+            Sleep(10)
+        Assert(LinkWaitChange="done","verification returned after closing the link editor: " mode)
+        Assert(Profiles.Length=beforeProfiles && LibraryHistory.Length=beforeHistory
+            && !FindProfileByChannel(Profiles,LinkChannel),"cancelled verification never publishes a profile or undo entry: " mode)
+        stored := LoadSettings(SettingsDatabasePath)
+        Assert(stored.Profiles.Length=beforeProfiles && !FindProfileByChannel(stored.Profiles,LinkChannel),"cancelled verification leaves the database unchanged: " mode)
+        if InStr(mode,"replace") {
+            Assert(ActiveEditorDialog && ActiveEditorDialog.Label="弾幕の編集"
+                && !DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"stale link completion preserves the replacement editor and its parent lock: " mode)
+            CloseDanmakuEditor(ActiveEditorDialog.Window)
+        } else
+            Assert(!ActiveEditorDialog && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"cancelled link releases the editor and parents: " mode)
+        LinkWaitChange := ""
+    }
     EditingProfileId := ""
     RefreshManagement(), ManagedList.Modify(1,"Select Focus")
     TransferItem()
@@ -319,7 +342,18 @@ ChangeSelectionDuringVerification(hwnd) {
     change := LinkWaitChange, LinkWaitChange := ""
     if change="profile"
         LinkChoice.Choose(3)
-    else if change="name"
+    else if InStr(change,"cancel") || InStr(change,"replace") {
+        window := ActiveEditorDialog.Window.Hwnd
+        WinClose("ahk_id " window)
+        Assert(WinWaitClose("ahk_id " window,,2) && !ActiveEditorDialog,"cancel closes the original editor during verification")
+        if InStr(change,"replace") {
+            EditingProfileId := ""
+            OpenDanmakuEditor(true)
+        }
+        LinkWaitChange := "done"
+        if InStr(change,"error")
+            throw Error("fixture verification failed after cancellation")
+    } else if change="name"
         LinkName.Value := "changed during verification"
     return {State:"ok",Author:"fixture",Channel:LinkChannel,Video:"abcdefghijk"}
 }
@@ -332,8 +366,87 @@ FindDialogControl(kind,label := "") {
 SubmitDialog(label) {
     hwnd := ActiveEditorDialog.Window.Hwnd, button := FindDialogControl("Button",label)
     WinActivate("ahk_id " hwnd)
-    Assert(WinWaitActive("ahk_id " hwnd,,2),"dialog is foreground before " label)
+    Assert(RequireTestWindowActive(hwnd),"dialog is foreground before " label)
     SendMessage(0xF5,0,0,button.Hwnd)
     Assert(WinWaitClose("ahk_id " hwnd,,2) && !ActiveEditorDialog,"submitted dialog finishes " label)
+}
+'@
+
+# Failure diagnostics must preserve the foreground and reject unusable targets.
+Invoke-AppFixture -Body @'
+    anchor := Gui(,"foreground diagnostic anchor")
+    anchor.AddText(,"fixture")
+    PresentWindow(anchor,"w240 h100")
+    Assert(RequireTestWindowActive(anchor.Hwnd)=anchor.Hwnd,"foreground helper returns the verified window")
+    hidden := Gui("+Owner" anchor.Hwnd,"hidden fixture")
+    disabled := Gui("+Owner" anchor.Hwnd " +Disabled","disabled fixture")
+    disabled.AddText(,"fixture")
+    PresentWindow(disabled,"w240 h100",0,false)
+    for target in [
+        {Name:"hidden",Hwnd:hidden.Hwnd,Expected:"exists=1 visible=0 enabled=1 owner_enabled=1"},
+        {Name:"disabled",Hwnd:disabled.Hwnd,Expected:"exists=1 visible=1 enabled=0 owner_enabled=1"},
+        {Name:"missing",Hwnd:0,Expected:"exists=0 visible=0 enabled=0 owner_enabled=none"}] {
+        failureMessage := ""
+        try RequireTestWindowActive(target.Hwnd)
+        catch as failure
+            failureMessage := failure.Message
+        Assert(InStr(failureMessage,"Test window did not become active: " target.Expected)
+            && InStr(failureMessage,"foreground_owned=1"),target.Name ": failure identifies the actual window state")
+        Assert(WinActive("ahk_id " anchor.Hwnd),target.Name ": waiting never activates a different window")
+    }
+    hidden.Destroy(), disabled.Destroy(), anchor.Destroy()
+'@
+
+# Initial lookup failures return to management; a newer operation owns its own UI.
+Invoke-AppFixture -Body @'
+    global InitialLinkMode := "", InitialLinkOwner := "", InitialLinkCalls := 0
+    RuntimePorts.ResolveChannel := ResolveInitialLink
+    ShowManagement(1)
+    TargetBrowserHwnd := 123
+    beforeProfiles := Profiles.Length, beforeHistory := LibraryHistory.Length
+    for owner in ["", "editor", "busy"] {
+        for mode in ["error", "unavailable", "ok"] {
+            InitialLinkMode := mode, InitialLinkOwner := owner
+            SetManagementNotice("existing notice")
+            callsBefore := InitialLinkCalls, escaped := ""
+            try OpenChannelLinkDialog()
+            catch as failure
+                escaped := failure.Message
+            Assert(escaped="","initial lookup failure is handled: " owner "/" mode)
+            Assert(InitialLinkCalls=callsBefore+1,"initial lookup runs once: " owner "/" mode)
+            Assert(Profiles.Length=beforeProfiles && LibraryHistory.Length=beforeHistory,"opening or failing never saves a profile: " owner "/" mode)
+            if owner="editor" {
+                Assert(ActiveEditorDialog && ActiveEditorDialog.Label="弾幕の編集"
+                    && !DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"newer editor and parent lock survive: " mode)
+                Assert(ManagementStatus.Text="通知：newer operation notice","old lookup does not publish into newer editor: " mode)
+                CloseDanmakuEditor(ActiveEditorDialog.Window)
+            } else if owner="busy" {
+                Assert(IsBrowserOperationBusy && !ActiveEditorDialog,"newer request remains the owner: " mode)
+                Assert(ManagementStatus.Text="通知：newer operation notice","old lookup does not publish during newer request: " mode)
+                IsBrowserOperationBusy := false
+                RefreshOperationControls()
+            } else if mode="ok" {
+                Assert(ActiveEditorDialog && ActiveEditorDialog.Label="チャンネル連携","normal retry opens channel editor")
+                DestroyEditorDialog(ActiveEditorDialog.Window)
+            } else {
+                Assert(!ActiveEditorDialog && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"failed lookup leaves management usable: " mode)
+                Assert(InStr(ManagementStatus.Text,"チャンネルを確認できませんでした。")
+                    && InStr(ManagementStatus.Text,"fixture initial lookup failure"),"lookup failure retains its cause: " mode)
+            }
+        }
+    }
+'@ -Helpers @'
+ResolveInitialLink(hwnd) {
+    global InitialLinkCalls, IsBrowserOperationBusy
+    InitialLinkCalls++
+    if InitialLinkOwner="editor"
+        OpenDanmakuEditor(true)
+    else if InitialLinkOwner="busy"
+        IsBrowserOperationBusy := true
+    if InitialLinkOwner!=""
+        SetManagementNotice("newer operation notice")
+    if InitialLinkMode="error"
+        throw Error("fixture initial lookup failure")
+    return {State:InitialLinkMode, Author:"fixture", Channel:"/channel/initial", Video:"abcdefghijk", Detail:"fixture initial lookup failure"}
 }
 '@

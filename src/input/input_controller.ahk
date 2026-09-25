@@ -67,7 +67,7 @@ SendPlannedDanmaku(plan, pageAction := 0) {
         catch
             return {State:"input_cancelled"}
         canSend := pageAction
-            ? (pageAction.Window = plan.Window && CanContinuePageAction(pageAction))
+            ? (pageAction.Window = plan.Window && CanContinueFocusedDanmaku(pageAction))
             : (OperationAllowed("input") && IsTargetForeground(plan.Window))
         if !canSend
             return {State:"input_cancelled"}
@@ -83,17 +83,18 @@ RequestShortcutInput(scope, slot, hwnd) {
 RunDanmakuInput(resolve, origin) {
     if !OperationAllowed("input")
         return
-    try plan := resolve.Call()
-    catch as failure {
+    try {
+        plan := resolve.Call()
+        if !plan || !OperationAllowed("input")
+            return
+        if origin = "palette"
+            PaletteWindow.Hide()
+        result := DeliverDanmakuInput(plan,origin = "palette")
+    } catch as failure {
         PaletteHint.Text := failure.Message
         ShowStatusTip(failure.Message,3000)
         return
     }
-    if !plan || !OperationAllowed("input")
-        return
-    if origin = "palette"
-        PaletteWindow.Hide()
-    result := DeliverDanmakuInput(plan,origin = "palette")
     if result.State != "inserted"
         ShowInputFailure(result.State)
 }

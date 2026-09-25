@@ -83,20 +83,17 @@ function Invoke-WorkerRequest($Request) {
         Set-ReactionRegistrationSnapshot $Request.Payload
         return @{Seq=$Request.Seq; Window=$Request.Window; State='configured'}
     }
-    if ($Request.Mode -eq 'reaction_status') {
-        $browser = Get-BrowserProcessName ([long]$Request.Window)
-        $state = if (-not $browser) { 'unavailable' } elseif ($script:BrowserReactionSelectors.ContainsKey($browser)) { 'configured' } else { 'not_registered' }
-        return @{ Seq=$Request.Seq; Window=$Request.Window; State=$state }
-    }
     if ($Request.Mode -in @('reaction_capture', 'reaction_check', 'reaction_send')) {
         return Invoke-ReactionRequest $Request
     }
     $reply = @{ Seq = $Request.Seq; State = 'unavailable'; Author = ''; Channel = ''; Video = ''; Window = $Request.Window }
     if ($Request.Mode -notin @('browser_context', 'resolve', 'verify_input', 'verify_chat')) { return $reply }
     $focus = $null
-    if ($Request.FocusToken) {
+    if ($Request.Mode -eq 'verify_chat') {
         $focus = $script:FocusedChat
-        $script:FocusedChat = $null # Consume even when verification fails.
+        $script:FocusedChat = $null # Only chat verification consumes the one-use proof, even on failure.
+        if (!$Request.FocusToken -or $null -eq $focus -or $focus.Token -cne $Request.FocusToken -or
+            $focus.Window -ne [long]$Request.Window) { $reply.State = 'wrong_input'; return $reply }
     }
     $video = Read-BrowserVideoId ([long]$Request.Window)
     $reply.Video = $video
@@ -104,21 +101,18 @@ function Invoke-WorkerRequest($Request) {
     if ($Request.Mode -eq 'browser_context') { $reply.State = 'ok'; return $reply }
     if ($Request.Mode -in @('verify_input','verify_chat')) {
         if ($Request.Video -and $video -cne $Request.Video) { $reply.State = 'changed'; return $reply }
-        $verifiedElement = $null
-        $kind = Get-FocusedYouTubeInput ([long]$Request.Window) ([ref]$verifiedElement)
-        if (!$kind -or ($Request.Mode -eq 'verify_chat' -and $kind -ne 'chat')) { $reply.State = 'wrong_input'; return $reply }
-        if ($Request.FocusToken) {
-            if ($null -eq $focus -or $focus.Token -cne $Request.FocusToken -or
-                $focus.Window -ne [long]$Request.Window -or $focus.Video -cne $video -or
-                $kind -ne 'chat' -or !(Test-ReactionForeground ([long]$Request.Window)) -or
-                ![System.Windows.Automation.Automation]::Compare($focus.Element,$verifiedElement)) {
+        $focusedInput = Get-FocusedYouTubeInput ([long]$Request.Window)
+        if ($null -eq $focusedInput -or ($Request.Mode -eq 'verify_chat' -and $focusedInput.Kind -ne 'chat')) { $reply.State = 'wrong_input'; return $reply }
+        if ($Request.Mode -eq 'verify_chat') {
+            if ($focus.Video -cne $video -or !(Test-ReactionForeground ([long]$Request.Window)) -or
+                ![System.Windows.Automation.Automation]::Compare($focus.Element,$focusedInput.Element)) {
                 $reply.State = 'wrong_input'; return $reply
             }
         }
         if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
-        if (!(Test-FocusedInputIdentity $verifiedElement ([long]$Request.Window))) { $reply.State = 'wrong_input'; return $reply }
+        if (!(Test-FocusedInputIdentity $focusedInput.Element ([long]$Request.Window))) { $reply.State = 'wrong_input'; return $reply }
         $reply.State = 'ok'
-        $reply.Detail = $kind
+        $reply.Detail = $focusedInput.Kind
         return $reply
     }
     $metadata = Resolve-Video $video
@@ -173,7 +167,7 @@ function Start-BrowserWorker([string]$PipeName,
             # Blocks without polling. Closing/crashing the AHK server breaks the read.
             $request = Read-PipeRequest $reader
             try { $reply = & $Handler $request }
-            catch { $reply = @{ Seq = $request.Seq; Window = $request.Window; State = 'unavailable' } }
+            catch { $reply = @{ Seq = $request.Seq; Window = $request.Window; State = 'unavailable'; Detail = $_.Exception.Message } }
             Write-PipeReply $writer $reply
             $null = $signal.Set()
         }

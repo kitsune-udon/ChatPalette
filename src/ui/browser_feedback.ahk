@@ -4,7 +4,7 @@ BrowserOperationLabel(mode) {
         "verify_input","チャット欄・コメント欄の確認", "browser_context","現在の動画の確認",
         "chat_clear","チャット欄のクリア", "chat_focus","チャット欄への移動", "verify_chat","チャット欄の確認", "reactions_show","リアクションUIの表示操作",
         "reaction_capture","リアクションボタンの登録", "reaction_check","リアクションの検出確認",
-        "reaction_send","リアクションボタンの操作", "reaction_status","リアクションの設定状態の確認")
+        "reaction_send","リアクションボタンの操作")
     return modes.Get(mode,"不明な操作：" mode)
 }
 BrowserResultInfo(state) {

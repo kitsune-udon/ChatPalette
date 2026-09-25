@@ -98,6 +98,36 @@ try {
 } finally Critical(previousCritical)
 Sleep(80)
 AssertVisible(PaletteReset,PaletteWindow)
+; A newly focused control supersedes positions queued before its focus was observed.
+for scenario in ["reveal","already-visible"] {
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        SetTimer(PaletteViewport.FocusHandler,0)
+        PaletteSearch.Focus()
+        PaletteViewport.FollowFocus()
+        target := scenario="reveal" ? PaletteReset : PaletteInterval
+        if scenario="already-visible" {
+            PaletteReset.Focus()
+            PaletteViewport.FollowFocus()
+            AssertVisible(target,PaletteWindow)
+        }
+        PaletteViewport.Updating := true
+        PaletteViewport.SetOffset(0,0)
+        PaletteViewport.Updating := false
+        beforeX := PaletteViewport.X, beforeY := PaletteViewport.Y
+        target.Focus()
+        PaletteViewport.FollowFocus()
+        if scenario="already-visible"
+            AssertView(PaletteViewport.X=beforeX && PaletteViewport.Y=beforeY,"visible new focus needs no movement but still supersedes old scrolling")
+        AssertVisible(target,PaletteWindow)
+        PaletteViewport.FlushUpdates()
+        AssertVisible(target,PaletteWindow)
+    } finally {
+        SetTimer(PaletteViewport.FocusHandler,50)
+        Critical(previousCritical)
+    }
+}
 Loop 20 {
     PresentWindow(PaletteWindow,"w260 h300",ResizePalette)
     PaletteSearch.Focus()

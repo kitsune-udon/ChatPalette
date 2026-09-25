@@ -1,8 +1,8 @@
 ﻿; Startup recovery is explicit: a failed load never silently discards settings.
-InitializeAppSettings() {
+InitializeAppSettings(showRecoveryDialogs) {
     try DirCreate(AppDataDirectory)
     catch as failure {
-        if A_Args.Length && A_Args[1] = "--smoke"
+        if !showRecoveryDialogs
             FileAppend("データフォルダーの準備失敗: " failure.Message "`n", "**")
         else
             MsgBox("データフォルダーを準備できません。書き込み権限を確認してください。`n" AppDataDirectory "`n" failure.Message, "起動エラー", "Icon!")
@@ -14,7 +14,7 @@ InitializeAppSettings() {
             return true
         } catch as failure {
             ; Automated checks must fail without leaving a modal dialog behind.
-            if A_Args.Length && A_Args[1] = "--smoke" {
+            if !showRecoveryDialogs {
                 FileAppend("設定の読み込み失敗: " failure.Message "`n", "**")
                 return false
             }
@@ -67,7 +67,7 @@ BackupSettingsForReset(path) {
 }
 
 ExportSettingsBackup(*) {
-    destination := FileSelect("S16",,"弾幕・設定・ボタン登録のバックアップ先（新しいファイル名）","SQLite database (*.db)")
+    destination := FileSelect("S2",,"弾幕・設定・ボタン登録のバックアップ先（新しいファイル名）","SQLite database (*.db)")
     if destination = ""
         return
     try {

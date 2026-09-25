@@ -2,17 +2,10 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$viewPath=Join-Path $release 'src\ui\management\management_view.ahk'
-$viewSource=[IO.File]::ReadAllText($viewPath)
 $anchor='    rows := [BuildPresentationRow(items[previous],previous,id,ShortcutKeys), BuildPresentationRow(items[current],current,id,ShortcutKeys)]'
-if (!$viewSource.Contains($anchor)) { throw 'Missing partial update boundary' }
-[IO.File]::WriteAllText($viewPath,$viewSource.Replace($anchor,$anchor+"`r`n    ProbePartialUpdate()"),[Text.UTF8Encoding]::new($true))
-
-$controllerPath=Join-Path $release 'src\ui\management\management_controller.ahk'
-$controllerSource=[IO.File]::ReadAllText($controllerPath)
+Edit-TestSource $release 'src/ui/management/management_view.ahk' $anchor ($anchor+"`r`n    ProbePartialUpdate()")
 $commitBoundary='    if !result'
-if (!$controllerSource.Contains($commitBoundary)) { throw 'Missing command presentation boundary' }
-[IO.File]::WriteAllText($controllerPath,$controllerSource.Replace($commitBoundary,"    ProbeManagedCommit()`r`n"+$commitBoundary),[Text.UTF8Encoding]::new($true))
+Edit-TestSource $release 'src/ui/management/management_controller.ahk' $commitBoundary ("    ProbeManagedCommit()`r`n"+$commitBoundary)
 
 $fixture = $release
 New-Item -ItemType Directory -Path $fixture -Force | Out-Null

@@ -7,14 +7,18 @@ GetSelectedManagedTarget() {
     index := ManagedList.GetNext()
     if !index
         return 0
-    profile := FindProfileById(Profiles,EditingProfileId)
-    items := profile ? profile.Items : SharedDanmakuItems
-    if index <= items.Length && items[index].Id == ManagedList.GetText(index,4)
-        return {ProfileId:profile ? profile.Id : "", Index:index, Item:items[index]}
+    message := "一覧を更新しました。操作する弾幕を選び直してください。"
+    try {
+        items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},EditingProfileId)
+        if index <= items.Length && items[index].Id == ManagedList.GetText(index,4)
+            return {ProfileId:EditingProfileId, Index:index, Item:items[index]}
+    } catch as failure {
+        message := failure.Message
+    }
     RefreshManagement()
     ManagedList.Modify(0,"-Select")
     UpdateManagementActions()
-    SetManagementNotice("一覧を更新しました。操作する弾幕を選び直してください。")
+    SetManagementNotice(message)
     return 0
 }
 RefreshManagementAfterCommand(editId, message := "変更は保存済みです。", updateManagement := 0) {
@@ -68,7 +72,7 @@ ManageProfile(action, *) {
     if !OperationAllowed("edit")
         return
     if action = "bind"
-        return OpenChannelLinkDialog(GetEditingProfileId())
+        return OpenChannelLinkDialog(EditingProfileId)
     try {
         BeginEditorDialog(ManagementWindow,"配信者の編集")
         RunProfileDialog(action)
@@ -161,17 +165,18 @@ LoadDefaultsAndReturn(*) {
 RefreshReactionRegistration(*) {
     if !IsSet(ReactionRegistrationLabel)
         return
-    if !IsBrowser(TargetBrowserHwnd) {
+    process := ReadBrowserProcessName(TargetBrowserHwnd)
+    if !BrowserNames().Has(process) {
         ReactionRegistrationLabel.Text := "対象ブラウザー：未選択`nYouTubeから" ShortcutKeyLabel(GetShortcutKey("palette")) "で開いてください。"
         return
     }
-    if !OperationAllowed("preferences") {
-        ReactionRegistrationLabel.Text := "設定状態：未確認（処理中）`n終了後、このタブを開き直してください。"
+    ; Saved registration is local state; recognition and synchronization belong to actions.
+    try registered := HasReactionRegistration(SubStr(process,1,-4)) ; Remove the known .exe suffix.
+    catch as failure {
+        ReactionRegistrationLabel.Text := "設定状態：未確認`n" failure.Message
         return
     }
-    result := RequestBrowserOperation(TargetBrowserHwnd,"reaction_status")
-    ReactionRegistrationLabel.Text := result.State = "configured"
+    ReactionRegistrationLabel.Text := registered
         ? "設定済み（メニューの認識は未確認）`n②で確認。開始後、♡にマウスを重ねます。"
-        : result.State = "not_registered" ? "未設定：①から始めてください。`n開始後、YouTubeの♡にマウスを重ねます。"
-        : "設定状態：未確認`nYouTubeからパレットを開き直してください。"
+        : "未設定：①から始めてください。`n開始後、YouTubeの♡にマウスを重ねます。"
 }

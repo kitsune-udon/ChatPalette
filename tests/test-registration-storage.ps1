@@ -23,7 +23,11 @@ function Invoke-FixtureRequest($Request) {
         return @{Seq=$Request.Seq;Window=$Request.Window;State='ok';Detail=[string]$script:Videos.Count}
     }
     if ($Request.Mode -eq 'reaction_configure' -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'reject-sync'))) {
-        return @{Seq=$Request.Seq;Window=$Request.Window;State='unavailable'}
+        $fault = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'reject-sync'))
+        if ($fault -eq 'worker-exception') { throw 'Fixture worker registration failure' }
+        $reply = @{Seq=$Request.Seq;Window=$Request.Window;State='unavailable'}
+        if ($fault -eq 'refused') { $reply.Detail = 'Fixture registration refusal' }
+        return $reply
     }
     return Invoke-WorkerRequest $Request
 }
@@ -45,7 +49,8 @@ SqlCheck(db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="1","saved reg
 reply := SendWorkerRequest(0,"reaction_configure","","Payload=" snapshot "`n")
 SqlCheck(reply.State="configured","worker accepts snapshot over pipe")
 StopBrowserWorker()
-SqlCheck(PrepareReactionRegistrations(0),"worker restart restores registrations")
+EnsureReactionRegistrations(0)
+SqlCheck(IsWorkerRegistrationCurrent(),"worker restart restores registrations")
 db.Exec("PRAGMA query_only=ON")
 reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:StrReplace(payload,"👏1","must-not-save")})
 SqlCheck(reply.State="save_failed" && LoadReactionRegistrationSnapshot()==snapshot,"failed commit preserves registration")
@@ -102,28 +107,38 @@ for expected in ["registered","save_failed","sync_failed","cancelled"] {
 }
 CancelOnCapture := true
 flag := A_ScriptDir "\src\browser\reject-sync"
-for fault in ["refused","exception"] {
+for fault,expectedDetail in Map("refused","Fixture registration refusal",
+    "exception","Synthetic registration synchronization failure",
+    "worker-exception","Fixture worker registration failure",
+    "no-detail","登録情報の同期に失敗しました。") {
     previousName := SendWorkerRequest(0,"fixture_registration").Detail
     preservedWorker := WorkerState.ProcessHandle
     beforeSends := Integer(SendWorkerRequest(0,"fixture_send_count").Detail)
     RegistrationSyncFault := fault
-    if fault="refused"
-        FileAppend("reject",flag)
+    if fault!="exception"
+        FileAppend(fault,flag)
     nextName := "updated-after-" fault
     payload := StrReplace(payload,previousName,nextName)
     reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:payload})
     snapshot := LoadReactionRegistrationSnapshot()
     SqlCheck(reply.State="sync_failed" && InStr(snapshot,nextName),fault ": sync failure retains committed registration")
+    SqlCheck(reply.Detail==expectedDetail,fault ": capture synchronization preserves the failure reason")
     SqlCheck(IsWorkerRunning() && WorkerState.ProcessHandle=preservedWorker && !IsWorkerRegistrationCurrent(),fault ": healthy worker survives without permission to perform reactions")
-    for mode in ["reaction_send","reaction_check","reaction_capture","reaction_status"] {
+    for mode in ["reaction_send","reaction_check","reaction_capture"] {
         blocked := RequestBrowserOperation(0,mode,"","Reaction=1`n")
         SqlCheck(blocked.State="sync_failed" && !IsWorkerRegistrationCurrent(),fault ": unsynchronized registration blocks " mode)
+        SqlCheck(blocked.HasOwnProp("Detail") && blocked.Detail==expectedDetail,fault ": blocked " mode " preserves the failure reason")
     }
+    job := CreateReactionJob({Mode:"reaction_check",Window:0})
+    ActiveReactionJob := job
+    ReactionCountdown()
+    SqlCheck(!ActiveReactionJob && LastReactionResult.Reason="sync_failed" && LastReactionResult.Detail==expectedDetail,
+        fault ": reaction result retains the synchronization reason for inspection")
     SqlCheck(Integer(SendWorkerRequest(0,"fixture_send_count").Detail)=beforeSends,fault ": blocked requests never reach the reaction handler")
     SqlCheck(SendWorkerRequest(0,"fixture_registration").Detail==previousName,fault ": failed synchronization does not publish partial registration")
     SqlCheck(IsWorkerRunning() && WorkerState.ProcessHandle=preservedWorker && SendWorkerRequest(0,"fixture_count").Detail="1",fault ": repeated refusal preserves the worker and video cache")
     RegistrationSyncFault := ""
-    if fault="refused"
+    if fault!="exception"
         FileDelete(flag)
     recovered := RequestBrowserOperation(0,"reaction_send","","Reaction=1`n")
     SqlCheck(recovered.State="operated" && IsWorkerRegistrationCurrent(),fault ": next operation synchronizes before proceeding")
@@ -223,4 +238,79 @@ RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
 RuntimePorts.BrowserIdentity := (hwnd) => hwnd=0
 RuntimePorts.Foreground := (hwnd) => hwnd=0
 RuntimePorts.WorkerRequest := FixtureWorkerRequest
+'@
+
+# Display reads durable registration without starting or synchronizing a worker.
+$displayRuntime=New-TestRuntime
+Edit-TestSource $displayRuntime 'src/browser/browser_service.ahk' 'WinGetProcessName("ahk_id " hwnd)' 'RegistrationDisplayProcess(hwnd)'
+Invoke-AppTest -Runtime $displayRuntime -Body @'
+global DisplayChecks := 0, DisplayProcess := "brave.exe", DisplayRequests := 0
+RuntimePorts.BrowserRequest := RejectDisplayRequest
+RuntimePorts.WorkerRequest := RejectDisplayRequest
+BuildManagement()
+RecordBrowserOperation({Mode:"reaction_send",State:"menu_closed",Duration:17})
+previousOperation := LastBrowserOperation, previousResult := LastReactionResult
+for target in [0,123] {
+    TargetBrowserHwnd := target
+    for process in ["closed","autohotkey64.exe"] {
+        DisplayProcess := process
+        RefreshReactionRegistration()
+        CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未選択"),"missing, closed and non-browser targets are not registered browsers")
+    }
+}
+TargetBrowserHwnd := 123, DisplayProcess := "BRAVE.EXE"
+RefreshReactionRegistration()
+CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未設定"),"known browser with no saved registration is unconfigured")
+tokens := "["
+Loop 5
+    tokens .= (A_Index>1 ? "," : "") '{"name":"button' A_Index '","id":"id' A_Index '","class":"button","type":50000}'
+tokens .= "]"
+SaveReactionRegistration('{"browser":"chrome","tokens":' tokens '}')
+RefreshReactionRegistration()
+CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未設定"),"another browser registration cannot configure the current browser")
+SaveReactionRegistration('{"browser":"brave","tokens":' tokens '}')
+for busy in [false,true] {
+    IsBrowserOperationBusy := busy
+    RefreshReactionRegistration()
+    CheckDisplay(InStr(ReactionRegistrationLabel.Text,"設定済み（メニューの認識は未確認）")=1,"saved registration can be shown even while a browser request owns the gate")
+    CheckDisplay(IsBrowserOperationBusy=busy,"display does not take or release another request's gate")
+}
+IsBrowserOperationBusy := false
+job := CreateReactionJob({Mode:"reaction_send",Phase:"running"})
+ActiveReactionJob := job
+RefreshReactionRegistration()
+CheckDisplay(ActiveReactionJob=job && job.Phase="running" && InStr(ReactionRegistrationLabel.Text,"設定済み")=1,"display preserves a running reaction owner")
+ActiveReactionJob := 0
+db := OpenSettingsRepository(SettingsDatabasePath).Db
+db.DefineProp("Scalar",{Call:RegistrationDisplayReadFailure})
+try {
+    RefreshReactionRegistration()
+    CheckDisplay(InStr(ReactionRegistrationLabel.Text,"未確認") && InStr(ReactionRegistrationLabel.Text,"Synthetic registration read failure"),"read failure replaces a stale configured label with its cause")
+} finally db.DeleteProp("Scalar")
+RefreshReactionRegistration()
+CheckDisplay(InStr(ReactionRegistrationLabel.Text,"設定済み")=1,"new display refresh can read the preserved registration after failure")
+CheckDisplay(DisplayRequests=0 && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle && !IsWorkerRegistrationCurrent(),"display never starts, contacts or synchronizes a worker")
+CheckDisplay(LastBrowserOperation=previousOperation && LastReactionResult=previousResult,"display leaves operation diagnostics and reaction result untouched")
+CheckDisplay(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"display does not suspend app windows")
+FileAppend("PASS: " DisplayChecks " local registration display checks; no browser or worker operations`n","*")
+ExitApp()
+CheckDisplay(value,label) {
+    global DisplayChecks
+    if !value
+        throw Error(label)
+    DisplayChecks++
+}
+RegistrationDisplayProcess(hwnd) {
+    if DisplayProcess="closed"
+        throw TargetError("Fixture browser is closed")
+    return DisplayProcess
+}
+RejectDisplayRequest(*) {
+    global DisplayRequests
+    DisplayRequests++
+    throw Error("Registration display must not request a worker")
+}
+RegistrationDisplayReadFailure(*) {
+    throw Error("Synthetic registration read failure")
+}
 '@

@@ -3,8 +3,9 @@
         return
     if !ManagementWindow
         BuildManagement()
+    else
+        RefreshManagement()
     ManagementTabs.Choose(page)
-    RefreshManagement()
     PaletteWindow.Hide()
     ShowFittedWindow(ManagementWindow,760,660,ResizeManagement)
     if page = 3

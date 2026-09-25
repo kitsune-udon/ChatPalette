@@ -57,11 +57,40 @@ try {
         }
     }
 } finally { [IO.File]::WriteAllBytes($versionFile,$originalVersion) }
+# Required root files must fail before a partial copy or archive can escape.
+foreach ($required in @('main.ahk','LICENSE','.editorconfig')) {
+    foreach ($replacement in @('missing','directory')) {
+        $target=Join-Path $release $required
+        $held=$target+'.held'
+        $incompleteOutput=Join-Path $release 'incomplete-output'
+        Move-Item -LiteralPath $target -Destination $held
+        try {
+            if ($replacement -eq 'directory') { New-Item -ItemType Directory -Path $target | Out-Null }
+            foreach ($operation in @('copy','build')) {
+                $rejected=$false
+                try {
+                    if ($operation -eq 'copy') { Copy-ReleaseFiles $release $incompleteOutput }
+                    else { & (Join-Path $release 'scripts\build-release.ps1') -OutputDirectory $incompleteOutput | Out-Null }
+                } catch {
+                    if ($_.Exception.Message -ne "Missing required release file: $required") { throw }
+                    $rejected=$true
+                }
+                if (!$rejected) { throw "$operation accepted $replacement required file: $required" }
+                if ((Test-Path -LiteralPath $incompleteOutput) -and @(Get-ChildItem -LiteralPath $incompleteOutput -Force).Count) {
+                    throw "$operation left artifacts for $replacement required file: $required"
+                }
+            }
+        } finally {
+            if ($replacement -eq 'directory' -and (Test-Path -LiteralPath $target -PathType Container)) { Remove-Item -LiteralPath $target }
+            Move-Item -LiteralPath $held -Destination $target
+        }
+    }
+}
 # Lock an input after hashing so compression fails after opening its output archive.
 $builderPath=Join-Path $release 'scripts\build-release.ps1'
 $builderBytes=[IO.File]::ReadAllBytes($builderPath)
 $builderSource=[IO.File]::ReadAllText($builderPath)
-$archiveCalls=@($builderSource -split '\r?\n' | Where-Object { $_ -match '^    \[IO.Compression.ZipFile\]::CreateFromDirectory\(' })
+$archiveCalls=@($builderSource -split '\r?\n' | Where-Object { $_ -match '^            \[void\]\[IO.Compression.ZipFileExtensions\]::CreateEntryFromFile\(' })
 if ($archiveCalls.Count -ne 1) { throw 'Archive creation injection point missing' }
 $lockedArchiveCall=@'
     $lockedInput=Get-ChildItem -LiteralPath $stage -Recurse -File -Filter 'README.md' | Select-Object -First 1
@@ -91,7 +120,8 @@ $zipPath=Join-Path $out "ChatPalette-$version.zip"
 $before=(Get-FileHash -LiteralPath $zipPath).Hash
 $archive=[IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
-    $names=@($archive.Entries | ForEach-Object { $_.FullName.Replace('\','/') })
+    $names=@($archive.Entries | ForEach-Object { $_.FullName })
+    if ($names -match '\\') { throw 'ZIP entry names must use forward slashes' }
     if ($names -match '(^data/|/\.tmp/|^private.txt$|^dist/)') { throw 'Private or temporary files included in release' }
     foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/ui-message-probe.ahk','tests/fixtures/library-model.ahk','tests/app-fixture.ps1','tests/test-app-input-plan.ps1','tests/run.ps1','scripts/build-release.ps1')) {
         if ($names -cnotcontains $required) { throw "Missing release file: $required" }
@@ -115,7 +145,7 @@ try {
     }
     if ($expected.Count -ne $archive.Entries.Count-1) { throw 'Incomplete release manifest' }
     foreach ($entry in $archive.Entries) {
-        $name=$entry.FullName.Replace('\','/')
+        $name=$entry.FullName
         if ($name -eq 'SHA256SUMS') { continue }
         $stream=$entry.Open(); $sha=[Security.Cryptography.SHA256]::Create()
         try { $actual=([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }

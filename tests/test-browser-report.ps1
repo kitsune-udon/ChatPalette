@@ -30,11 +30,29 @@ if ($report.AddressDetected -isnot [bool] -or $report.AddressDetected -or !$repo
 [IO.File]::WriteAllText($reportPath,'existing report')
 if ((Invoke-ReportProbe $relative) -eq 0 -or [IO.File]::ReadAllText($reportPath) -cne 'existing report') { throw 'Existing report was overwritten' }
 # Simulate another writer publishing after the initial existence check.
-$source=[IO.File]::ReadAllText($checker)
 $anchor='# Never include titles, URLs, field values or exception text in a shareable report.'
-if (!$source.Contains($anchor)) { throw 'Report publication injection point missing' }
 $injection="[IO.File]::WriteAllText(`$OutputPath,'concurrent report')`r`n"
-[IO.File]::WriteAllText($checker,$source.Replace($anchor,$injection+$anchor),[Text.UTF8Encoding]::new($true))
+Edit-TestSource $runtime 'scripts/check-browser.ps1' $anchor ($injection+$anchor)
 $concurrent=Join-Path $runtime 'concurrent.json'
 if ((Invoke-ReportProbe $concurrent) -eq 0 -or [IO.File]::ReadAllText($concurrent) -cne 'concurrent report') { throw 'Concurrent report was overwritten' }
-Write-Output 'PASS: report directory creation, PowerShell-relative paths, failed inspection record and overwrite protection'
+# Keep the real report path and JSON serialization; replace browser observations.
+Edit-TestSource $runtime 'scripts/check-browser.ps1' ($injection+$anchor) $anchor
+$rootRead='[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)'
+Edit-TestSource $runtime 'scripts/check-browser.ps1' $rootRead '([pscustomobject]@{Current=[pscustomobject]@{ProcessId=1}})'
+foreach ($state in @('ok','chat_missing','chat_ambiguous')) {
+    $fixture=@'
+function Get-Process { return [pscustomobject]@{ProcessName='brave';MainModule=[pscustomobject]@{FileVersionInfo=[pscustomobject]@{FileVersion='test'}}} }
+function Test-ReactionForeground { return $true }
+function Read-BrowserVideoId { return '' }
+$script:AddressBarCache=@{}
+function Find-ChatInput { return @{State='__STATE__';Element=__ELEMENT__} }
+function Find-ReactionLauncher { return $null }
+'@
+    $element=if ($state -eq 'ok') { "'test-chat'" } else { '$null' }
+    [IO.File]::WriteAllText((Join-Path $runtime 'src\browser\browser_worker.ps1'),$fixture.Replace('__STATE__',$state).Replace('__ELEMENT__',$element),[Text.UTF8Encoding]::new($true))
+    $path=Join-Path $runtime ("chat-$state.json")
+    if ((Invoke-ReportProbe $path) -ne 1) { throw "Other missing detections must still fail the $state report" }
+    $report=[IO.File]::ReadAllText($path) | ConvertFrom-Json
+    if ($report.Error -or $report.ChatDetected -isnot [bool] -or $report.ChatDetected -ne ($state -eq 'ok')) { throw "Chat detection state $state was misreported" }
+}
+Write-Output 'PASS: report paths, overwrite protection and chat discovery outcomes'

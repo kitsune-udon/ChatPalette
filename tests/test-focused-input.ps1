@@ -2,7 +2,7 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'app-fixture.ps1')
 Invoke-AppFixture -Body @'
-    global Sent := [], Scenario := "", QueueScope := "shared", InputVideo := "abcdefghijk", Calls := []
+    global Sent := [], Scenario := "", QueueScope := "shared", Calls := []
     global ForegroundOk := true, QueueDuringRelease := false
     AutoMode := false
     ExecuteDanmakuCommand("add","","",{Name:"first",Text:"first draft",Slot:1})
@@ -104,5 +104,56 @@ QueueRequest(hwnd,mode,video,extra) {
         return {State:Scenario="changed_field" ? "wrong_input" : "ok",Video:video}
     }
     throw Error("Unexpected request")
+}
+'@
+
+# Time spent validating the final item still counts toward the pending deadline.
+Invoke-AppFixture -Body @'
+    global ValidationClock := 1000, ValidationElapsed := 0, ExpireDuringValidation := false, ValidationSent := []
+    AutoMode := false
+    item := SharedDanmakuItems[1]
+    global ValidationText := item.Text
+    item.DefineProp("Text",{Get:ReadQueuedValidationText})
+    RuntimePorts.Clock := (*) => ValidationClock
+    RuntimePorts.Foreground := (hwnd) => hwnd=123
+    RuntimePorts.BrowserRequest := RequestQueuedValidation
+    RuntimePorts.ShortcutRelease := (*) => true
+    RuntimePorts.Text := (text) => ValidationSent.Push(text)
+    for elapsed in [4999,5000,5001] {
+        for callerCritical in [0,23] {
+            ValidationClock := 1000, ValidationElapsed := elapsed, ExpireDuringValidation := false, ValidationSent := []
+            try {
+                Critical(callerCritical)
+                completed := RunPageAction("chat_focus",123)
+                Assert(A_IsCritical=callerCritical,"queued deadline restores caller interruption policy")
+                expected := elapsed<=5000
+                Assert(completed=expected && ValidationSent.Length=(expected ? 1 : 0),"final item validation honours the deadline: " elapsed)
+                Assert(LastBrowserOperation.State=(expected ? "inserted" : "input_cancelled"),"deadline result reports whether text was inserted")
+                Assert(!ActivePageAction && !IsBrowserOperationBusy,"final validation releases the focus operation")
+            } finally Critical("Off")
+        }
+    }
+'@ -Helpers @'
+ReadQueuedValidationText(item) {
+    global ValidationClock, ExpireDuringValidation
+    if ExpireDuringValidation {
+        ExpireDuringValidation := false
+        ValidationClock += ValidationElapsed
+    }
+    return ValidationText
+}
+RequestQueuedValidation(hwnd,mode,video,extra) {
+    global ExpireDuringValidation
+    if mode="chat_focus" {
+        QueueFocusedDanmaku("shared",1,hwnd)
+        return {State:"focused",Video:"abcdefghijk",Detail:"validation-token"}
+    }
+    if mode="browser_context"
+        return {State:"ok",Video:"abcdefghijk"}
+    if mode="verify_chat" {
+        ExpireDuringValidation := true
+        return {State:"ok",Video:video}
+    }
+    throw Error("Unexpected queued validation request")
 }
 '@

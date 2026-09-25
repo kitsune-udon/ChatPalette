@@ -15,12 +15,23 @@ $temporaryZip = Join-Path $stage 'release.zip'
 try {
     New-Item -ItemType Directory -Path $payload -Force | Out-Null
     Copy-ReleaseFiles $project $payload
-    $hashes = @(Get-ChildItem -LiteralPath $payload -File -Recurse | Sort-Object FullName | ForEach-Object {
-        (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.FullName.Substring($payload.Length + 1).Replace('\','/')
+    # ZIP names and checksums share one relative-path representation.
+    $entries = @(Get-ChildItem -LiteralPath $payload -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
+        [pscustomobject]@{Path=$_.FullName; Name=$_.FullName.Substring($payload.Length + 1).Replace('\','/')}
     })
-    [IO.File]::WriteAllLines((Join-Path $payload 'SHA256SUMS'), $hashes, [Text.UTF8Encoding]::new($false))
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [IO.Compression.ZipFile]::CreateFromDirectory($payload, $temporaryZip)
+    $hashes = @($entries | ForEach-Object {
+        (Get-FileHash -LiteralPath $_.Path -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name
+    })
+    $manifest = Join-Path $payload 'SHA256SUMS'
+    [IO.File]::WriteAllLines($manifest, $hashes, [Text.UTF8Encoding]::new($false))
+    $entries += [pscustomobject]@{Path=$manifest; Name='SHA256SUMS'}
+    Add-Type -AssemblyName System.IO.Compression.FileSystem, System.IO.Compression
+    $archive = [IO.Compression.ZipFile]::Open($temporaryZip, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($entry in $entries) {
+            [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $entry.Path, $entry.Name)
+        }
+    } finally { $archive.Dispose() }
     # Publish only a complete archive. Move refuses to overwrite a concurrent output.
     [IO.File]::Move($temporaryZip, $zipPath)
     Write-Output $zipPath

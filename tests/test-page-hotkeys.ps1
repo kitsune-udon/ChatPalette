@@ -11,8 +11,7 @@ RuntimePorts.BrowserIdentity := (hwnd) => hwnd=FixtureBrowser.Hwnd
 RuntimePorts.BrowserRequest := ShortcutFixtureRequest
 InstallApplicationShortcuts()
 PresentWindow(FixtureBrowser)
-if !WinWaitActive("ahk_id " FixtureBrowser.Hwnd,,2)
-    throw Error("Fixture window could not be activated")
+RequireTestWindowActive(FixtureBrowser.Hwnd)
 other.Focus()
 SendLevel(1)
 SetKeyDelay(40,40)

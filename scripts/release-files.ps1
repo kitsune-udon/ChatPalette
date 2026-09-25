@@ -6,7 +6,11 @@
 
 function Get-ReleaseFiles([string]$project) {
     # Allowlist only. Never traverse data/, .git/, or test execution directories.
-    $files = @(Get-ChildItem -LiteralPath $project -File | Where-Object { $_.Name -in 'main.ahk', 'README.md','LICENSE','VERSION','CHANGELOG.md','.gitignore','.gitattributes','.editorconfig' })
+    $files = @(foreach ($name in @('main.ahk','README.md','LICENSE','VERSION','CHANGELOG.md','.gitignore','.gitattributes','.editorconfig')) {
+        $path = Join-Path $project $name
+        if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing required release file: $name" }
+        Get-Item -LiteralPath $path -Force -ErrorAction Stop
+    })
     $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'src') -Recurse -File | Where-Object { $_.Extension -in '.ahk','.ps1' })
     $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'docs') -Filter '*.md' -Recurse -File)
     $files += @(Get-ChildItem -LiteralPath (Join-Path $project 'tests') -Filter '*.ps1' -File)

@@ -38,19 +38,17 @@ function Get-InputRecord($Element, [bool]$IncludeEditState) {
         Focused=$info.HasKeyboardFocus; Enabled=$info.IsEnabled; Hidden=$info.IsOffscreen; Editable=$editable}
 }
 
-function Get-FocusedYouTubeInput([long]$WindowHandle, [ref]$VerifiedElement) {
-    $VerifiedElement.Value = $null
+function Get-FocusedYouTubeInput([long]$WindowHandle) {
     $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
-    if ($null -eq $focused -or !(Test-ElementWindow $focused $WindowHandle)) { return '' }
+    if ($null -eq $focused -or !(Test-ElementWindow $focused $WindowHandle)) { return $null }
     $records = @(Get-YouTubeInputRecords $focused $WindowHandle)
-    if (!$records -or !$records[0].Focused) { return '' }
+    if (!$records -or !$records[0].Focused) { return $null }
     $kind = Get-YouTubeInputKind $records
-    if (!$kind) { return '' }
+    if (!$kind) { return $null }
     $latest = [System.Windows.Automation.AutomationElement]::FocusedElement
-    if ($null -eq $latest -or ![System.Windows.Automation.Automation]::Compare($focused, $latest)) { return '' }
-    if (!(Test-ElementWindow $latest $WindowHandle)) { return '' }
-    $VerifiedElement.Value = $focused
-    return $kind
+    if ($null -eq $latest -or ![System.Windows.Automation.Automation]::Compare($focused, $latest)) { return $null }
+    if (!(Test-ElementWindow $latest $WindowHandle)) { return $null }
+    return @{Kind=$kind; Element=$focused}
 }
 
 

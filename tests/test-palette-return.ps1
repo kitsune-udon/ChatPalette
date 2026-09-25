@@ -199,7 +199,7 @@ $navigationRuntime=New-TestRuntime
 $navigationTests=@'
 OnExit(StopBrowserWorker)
 BuildManagement()
-global NavigationChecks := 0, NavigationRequests := 0, NavigationRestarts := 0
+global NavigationChecks := 0, NavigationRequests := 0, NavigationRestarts := 0, NavigationFailure := false
 browser := Gui(,"isolated page operation target")
 browser.AddEdit("w240","page operation fixture")
 RuntimePorts.BrowserIdentity := (hwnd) => hwnd=browser.Hwnd
@@ -213,7 +213,7 @@ try {
             ManagementWindow.Show("w760 h660 NA")
             browser.Show("w280 h120")
             WinActivate("ahk_id " browser.Hwnd)
-            WinWaitActive("ahk_id " browser.Hwnd,,2)
+            RequireTestWindowActive(browser.Hwnd)
             TargetBrowserHwnd := browser.Hwnd
             PaletteChoice.Choose(2), PaletteCount.Choose(3), PaletteInterval.Choose(2)
             calls := NavigationRequests, restarts := NavigationRestarts
@@ -231,6 +231,32 @@ try {
             CheckNavigation(entry=LoadDefaultsAndReturn ? PaletteChoice.Value=DefaultReactionKind && ReactionCounts[PaletteCount.Value]=DefaultReactionCount && ReactionIntervals[PaletteInterval.Value]=DefaultReactionIntervalMs
                 : PaletteChoice.Value=2 && PaletteCount.Value=3 && PaletteInterval.Value=2,"only explicit defaults-return changes session choices: " label)
         }
+    }
+    linked := ExecuteProfileCommand("add","","Navigation linked","/channel/fixture").ProfileId
+    ExecuteDanmakuCommand("add",linked,"",{Name:"Profile only",Text:"profile-only",Slot:1})
+    ExecuteDanmakuCommand("add","","",{Name:"Shared",Text:"shared-only",Slot:1})
+    for entry in [ShowPalette,ReturnToPalette,LoadDefaultsAndReturn] {
+        NavigationFailure := false
+        entry.Call()
+        CheckNavigation(PaletteRows.Length=2 && GetInputProfile().Id=linked,"prepare successful detection before lookup exception: " entry.Name)
+        PaletteWindow.Hide()
+        ManagementWindow.Show("w760 h660 NA")
+        browser.Show("w280 h120")
+        WinActivate("ahk_id " browser.Hwnd)
+        RequireTestWindowActive(browser.Hwnd)
+        calls := NavigationRequests, NavigationFailure := true, escaped := false
+        try entry.Call()
+        catch
+            escaped := true
+        CheckNavigation(!escaped && NavigationRequests=calls+1,"lookup exception is handled without retrying: " entry.Name)
+        CheckNavigation(DetectedChannel.State="unavailable" && DetectedChannel.Channel="" && DetectedChannel.Author="" && DetectedChannel.Video="",
+            "lookup exception invalidates every prior detection field: " entry.Name)
+        CheckNavigation(DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd) && PaletteRows.Length=1 && PaletteRows[1].Text="shared-only"
+            && InStr(PaletteContext.Text,"navigation lookup failure"),"failed lookup still opens the palette with shared items and its cause: " entry.Name)
+        CheckNavigation(GetInputProfile().Id=linked && LoadSettings(SettingsDatabasePath).InputProfileId=linked,"failed detection preserves the saved manual selection: " entry.Name)
+        NavigationFailure := false
+        entry.Call()
+        CheckNavigation(PaletteRows.Length=2 && DetectedChannel.State="ok" && !InStr(PaletteContext.Text,"navigation lookup failure"),"next navigation recovers profile rows and clears the failed lookup message: " entry.Name)
     }
     ; Returning during a reaction may still show its palette, without another browser lookup.
     calls := NavigationRequests
@@ -255,6 +281,8 @@ CheckNavigation(value,label) {
 NavigationResolve(hwnd) {
     global NavigationRequests
     NavigationRequests++
+    if NavigationFailure
+        throw Error("navigation lookup failure")
     return {State:"ok",Channel:"/channel/fixture",Author:"fixture",Video:"abcdefghijk"}
 }
 NavigationRestart() {

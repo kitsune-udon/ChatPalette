@@ -3,11 +3,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 # Pause at the commit boundary only in the isolated runtime, allowing a real AHK timer to compete.
-$settingsPath = Join-Path $release 'src\settings\settings_service.ahk'
-$settingsSource = [IO.File]::ReadAllText($settingsPath)
 $commitAnchor = 'ApplyPreferences(state, persist := true) {'
-if (!$settingsSource.Contains($commitAnchor)) { throw 'Preference commit injection point missing' }
-[IO.File]::WriteAllText($settingsPath,$settingsSource.Replace($commitAnchor,$commitAnchor + "`r`n    ProbePreferenceCommit()"),[Text.UTF8Encoding]::new($true))
+Edit-TestSource $release 'src/settings/settings_service.ahk' $commitAnchor ($commitAnchor + "`r`n    ProbePreferenceCommit()")
 $tests = @'
 global ContractChecks := 0
 AutoMode := false
@@ -20,6 +17,16 @@ CheckContract(FindProfileById(Profiles,"CASE-PROFILE").Name="upper","profile loo
 SaveInputProfileId("case-profile")
 SaveInputProfileId("CASE-PROFILE")
 CheckContract(InputProfileId=="CASE-PROFILE" && LoadSettings(SettingsDatabasePath).InputProfileId=="CASE-PROFILE","case-only selection change persists exact identity")
+for unknownId in ["missing-profile","Case-profile","@shared"] {
+    beforeSelectionHistory := LibraryHistory.Length
+    rejected := false
+    try SaveInputProfileId(unknownId)
+    catch
+        rejected := true
+    CheckContract(rejected && InputProfileId=="CASE-PROFILE"
+        && LoadSettings(SettingsDatabasePath).InputProfileId=="CASE-PROFILE"
+        && LibraryHistory.Length=beforeSelectionHistory,"invalid input selection reports failure and preserves saved selection: " unknownId)
+}
 ExecuteProfileCommand("rename","CASE-PROFILE","renamed upper")
 CheckContract(FindProfileById(Profiles,"case-profile").Name="lower" && FindProfileById(Profiles,"CASE-PROFILE").Name="renamed upper","edit cannot target a case-insensitive match")
 historyBeforeAssignment := LibraryHistory.Length

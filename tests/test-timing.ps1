@@ -84,6 +84,32 @@ DisplayClock += 100
 RenderReactionStatus()
 AssertTiming(PaletteStatusControl.Text="clock pending","throttled progress publishes its latest message")
 SetReactionStatus("clock complete",true)
+AssertTiming(PaletteStatusControl.Text="clock complete","completion bypasses the progress throttle")
+; Publish a new result while the previous snapshot is being rendered.
+global DisplayReentry := true, DisplayFailure := false, DisplayClockReads := 0
+RuntimePorts.Clock := ReentrantDisplayClock
+SetReactionStatus("superseded progress")
+deadline := A_TickCount+1000
+while PaletteStatusControl.Text!="reentrant complete" && A_TickCount<deadline
+    Sleep(10)
+AssertTiming(PaletteStatusControl.Text="reentrant complete" && !PaletteStop.Enabled
+    && LastReactionResult.Message="reentrant complete","reentrant completion replaces the stale progress and releases stop")
+; An explicit refresh fulfills the reservation before its timer is delivered.
+Critical("On")
+try {
+    DisplayReentry := true
+    SetReactionStatus("another superseded progress")
+    RenderReactionStatus()
+    reads := DisplayClockReads
+} finally Critical("Off")
+Sleep(40)
+AssertTiming(DisplayClockReads=reads,"an explicit completed render consumes its pending reservation")
+DisplayFailure := true, failed := false
+try SetReactionStatus("failed render",true)
+catch
+    failed := true
+SetReactionStatus("recovered render",true)
+AssertTiming(failed && PaletteStatusControl.Text="recovered render","render failure releases ownership for the next result")
 RuntimePorts.Clock := 0
 FileAppend("PASS: " TimingChecks " timing lifecycle checks`n", "*")
 TimingMode := "exit", PrecisionEvents := ""
@@ -95,6 +121,19 @@ AssertTiming(value,label) {
     TimingChecks++
     if !value
         throw Error(label)
+}
+ReentrantDisplayClock() {
+    global DisplayReentry, DisplayFailure, DisplayClockReads
+    DisplayClockReads++
+    if DisplayFailure {
+        DisplayFailure := false
+        throw Error("fixture rendering clock failure")
+    }
+    if DisplayReentry {
+        DisplayReentry := false
+        SetReactionStatus("reentrant complete",true)
+    }
+    return DisplayClock
 }
 FixtureTimingForeground(hwnd) {
     if TimingMode="foreground-error"

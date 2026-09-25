@@ -2,43 +2,32 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release=New-TestRuntime
-function Rewrite($relative,$before,$after) {
- $p=Join-Path $release $relative
- $s=[IO.File]::ReadAllText($p)
- if(!$s.Contains($before)){throw "Missing injection: $relative"}
- [IO.File]::WriteAllText($p,$s.Replace($before,$after),[Text.UTF8Encoding]::new($true))
-}
-Rewrite 'src/ui/reaction_feedback.ahk' '            text := view.AddText("w360 r6", "")' ('            text := view.AddText("w360 r6", "")'+"`r`n            ProbeOverlayConstruction(view)")
-Rewrite 'src/ui/palette/palette_view.ahk' '            for row in rows' '            for row in rows {'
-Rewrite 'src/ui/palette/palette_view.ahk' '                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)' ('                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)'+"`r`n                ProbeListUpdate()`r`n            }")
-Rewrite 'src/ui/shortcut_manager.ahk' '            control.Delete(), control.Add(labels), control.Choose(choices[i])' ('            control.Delete(), control.Add(labels), control.Choose(choices[i])'+"`r`n            ProbeShortcutItems(i)")
-Rewrite 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(x, y) {`r`n        ProbeViewport(this)")
-Rewrite 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
-Rewrite 'src/ui/management/management_view.ahk' '        for row in model.Rows' '        for row in model.Rows {'
-Rewrite 'src/ui/management/management_view.ahk' '        ManagedList.ModifyCol(1,160)' ("            ProbeManagementUpdate()`r`n        }`r`n        ManagedList.ModifyCol(1,160)")
-Rewrite 'src/ui/shortcut_manager.ahk' '        viewport.Show()' ("        if IsSet(ProbeShortcutFailure) && ProbeShortcutFailure`r`n            throw Error(""fixture shortcut presentation failure"")`r`n        viewport.Show()")
-Rewrite 'src/ui/window_presenter.ahk' 'PresentWindow(view, options := "", layout := 0, activate := true) {' ('PresentWindow(view, options := "", layout := 0, activate := true) {' + "`r`n    if IsSet(ProbeEditorFailure) && ProbeEditorFailure && ActiveEditorDialog && ActiveEditorDialog.Window = view`r`n        throw Error(""fixture editor presentation failure"")")
-Rewrite 'src/ui/management/management_dialogs.ahk' '    moveButton.OnEvent("Click",Move)' ('    moveButton.OnEvent("Click",Move)' + "`r`n    global ProbeCommitAction := Move")
-Rewrite 'src/ui/management/management_dialogs.ahk' '    view.AddButton("w180 Default","連携する").OnEvent("Click",Save)' ('    view.AddButton("w180 Default","連携する").OnEvent("Click",Save)' + "`r`n    global ProbeCommitAction := Save")
-Rewrite 'src/ui/management/management_view.ahk' 'RefreshManagement(render := 0) {' ('RefreshManagement(render := 0) {' + "`r`n    if IsSet(ProbeAfterSaveFailure) && ProbeAfterSaveFailure`r`n        throw Error(""fixture post-save refresh failure"")")
-Rewrite 'src/ui/palette/palette_view.ahk' 'RefreshPalette() {' ('RefreshPalette() {' + "`r`n    if IsSet(ProbeShortcutRefreshFailure) && ProbeShortcutRefreshFailure`r`n        throw Error(""fixture shortcut refresh failure"")")
-Rewrite 'src/ui/ui_runtime.ahk' 'RefreshOperationControls() {' ('RefreshOperationControls() {' + "`r`n    global ProbeWaitFailure`r`n    if IsSet(ProbeWaitFailure) && ProbeWaitFailure && IsBrowserOperationBusy {`r`n        ProbeWaitFailure := false`r`n        throw Error(""fixture wait preparation failure"")`r`n    }")
-Rewrite 'src/ui/ui_runtime.ahk' 'RefreshOperationControls() {' ('RefreshOperationControls() {' + "`r`n    global ProbeEditorBeginFailure`r`n    if IsSet(ProbeEditorBeginFailure) && ProbeEditorBeginFailure && ActiveEditorDialog {`r`n        ProbeEditorBeginFailure := false`r`n        throw Error(""fixture editor begin failure"")`r`n    }")
-Rewrite 'src/ui/management/management_dialogs.ahk' '        view.SetFont("s10","Yu Gothic UI")' ('        view.SetFont("s10","Yu Gothic UI")' + "`r`n        if IsSet(ProbeEditorConstructionFailure) && ProbeEditorConstructionFailure {`r`n            global ProbeEditorConstructionHwnd := view.Hwnd`r`n            throw Error(""fixture editor construction failure"")`r`n        }")
-Rewrite 'src/ui/management/management_dialogs.ahk' '    view.OnEvent("Close",Close), view.OnEvent("Escape",Close)' ('    view.OnEvent("Close",Close), view.OnEvent("Escape",Close)' + "`r`n    ProbeEditorBuild(view)")
-Rewrite 'src/ui/management/management_dialogs.ahk' '    view.OnEvent("Close",Close),view.OnEvent("Escape",Close)' ('    view.OnEvent("Close",Close),view.OnEvent("Escape",Close)' + "`r`n    ProbeEditorBuild(view)")
-Rewrite 'src/ui/shortcut_manager.ahk' '    viewport := PanelViewport(view,680,780)' ('    viewport := PanelViewport(view,680,780)' + "`r`n    ProbeEditorBuild(view,viewport)")
-Rewrite 'src/ui/panel_viewport.ahk' '            OnMessage(0x115,this.ScrollHandler)' ('            OnMessage(0x115,this.ScrollHandler)' + "`r`n            ProbeViewportRegistration(this)")
-Rewrite 'src/ui/diagnostics.ahk' '    view.BackColor := "F5F7FA"' ('    view.BackColor := "F5F7FA"' + "`r`n    ProbeDiagnosticConstruction(view)")
-Rewrite 'src/ui/diagnostics.ahk' 'ReadDiagnosticSnapshot() {' ('ReadDiagnosticSnapshot() {' + "`r`n    if IsSet(ProbeDiagnosticFailure) && ProbeDiagnosticFailure = ""snapshot""`r`n        throw Error(""fixture diagnostic snapshot failure"")")
-Rewrite 'src/ui/help_view.ahk' '        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' ('        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' + "`r`n    ProbeInfoDialogBuild(view)")
-Rewrite 'src/ui/reaction_feedback.ahk' '    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' ('    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' + "`r`n    ProbeInfoDialogBuild(details)")
-Rewrite 'src/ui/window_presenter.ahk' 'PresentWindow(view, options := "", layout := 0, activate := true) {' ('PresentWindow(view, options := "", layout := 0, activate := true) {' + "`r`n    if IsSet(ProbeInfoFailure) && ProbeInfoFailure = ""show"" && view.Hwnd = ProbeInfoHwnd`r`n        throw Error(""fixture info show failure"")")
-Rewrite 'src/ui/diagnostics.ahk' '        copyButton.OnEvent("Click", CopySnapshot)' ('        copyButton.OnEvent("Click", CopySnapshot)' + "`r`n        global ProbeDiagnosticCopy := CopySnapshot, ProbeDiagnosticCopyButton := copyButton")
-Rewrite 'src/ui/diagnostics.ahk' '            operation.Text := next.Operation' ('            operation.Text := next.Operation' + "`r`n        ProbeDiagnosticPaint()")
-Rewrite 'src/ui/diagnostics.ahk' 'A_Clipboard := BuildDiagnosticReport(snapshot)' 'ProbeDiagnosticReport(BuildDiagnosticReport(snapshot))'
-Rewrite 'src/ui/shortcut_manager.ahk' '        try SaveShortcutMap(draft)' ("        try {`r`n            SaveShortcutMap(draft)`r`n            ProbeShortcutSaved(""keys"")`r`n        }")
-Rewrite 'src/ui/shortcut_manager.ahk' '            SaveShortcutItemAssignments(itemState.ProfileId,itemState.Ids[first.Value],itemState.Ids[second.Value])' ('            SaveShortcutItemAssignments(itemState.ProfileId,itemState.Ids[first.Value],itemState.Ids[second.Value])' + "`r`n            ProbeShortcutSaved(""items"")")
+Edit-TestSource $release 'src/ui/reaction_feedback.ahk' '            text := view.AddText("w360 r6", "")' ('            text := view.AddText("w360 r6", "")'+"`r`n            ProbeOverlayConstruction(view)")
+Edit-TestSource $release 'src/ui/palette/palette_view.ahk' '            for row in rows' '            for row in rows {'
+Edit-TestSource $release 'src/ui/palette/palette_view.ahk' '                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)' ('                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)'+"`r`n                ProbeListUpdate()`r`n            }")
+Edit-TestSource $release 'src/ui/shortcut_manager.ahk' '            control.Delete(), control.Add(labels), control.Choose(choices[i])' ('            control.Delete(), control.Add(labels), control.Choose(choices[i])'+"`r`n            ProbeShortcutItems(i)")
+Edit-TestSource $release 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(x, y) {`r`n        ProbeViewport(this)")
+Edit-TestSource $release 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
+Edit-TestSource $release 'src/ui/management/management_view.ahk' '        for row in model.Rows' '        for row in model.Rows {'
+Edit-TestSource $release 'src/ui/management/management_view.ahk' '        ManagedList.ModifyCol(1,160)' ("            ProbeManagementUpdate()`r`n        }`r`n        ManagedList.ModifyCol(1,160)")
+Edit-TestSource $release 'src/ui/shortcut_manager.ahk' '        viewport.Show()' ("        if IsSet(ProbeShortcutFailure) && ProbeShortcutFailure`r`n            throw Error(""fixture shortcut presentation failure"")`r`n        viewport.Show()")
+Edit-TestSource $release 'src/ui/window_presenter.ahk' 'PresentWindow(view, options := "", layout := 0, activate := true) {' ('PresentWindow(view, options := "", layout := 0, activate := true) {' + "`r`n    if IsSet(ProbeEditorFailure) && ProbeEditorFailure && ActiveEditorDialog && ActiveEditorDialog.Window = view`r`n        throw Error(""fixture editor presentation failure"")")
+Edit-TestSource $release 'src/ui/management/management_dialogs.ahk' '    moveButton.OnEvent("Click",Move)' ('    moveButton.OnEvent("Click",Move)' + "`r`n    global ProbeCommitAction := Move")
+Edit-TestSource $release 'src/ui/management/management_dialogs.ahk' '    view.AddButton("w180 Default","連携する").OnEvent("Click",Save)' ('    view.AddButton("w180 Default","連携する").OnEvent("Click",Save)' + "`r`n    global ProbeCommitAction := Save")
+Edit-TestSource $release 'src/ui/management/management_view.ahk' 'RefreshManagement(render := 0) {' ('RefreshManagement(render := 0) {' + "`r`n    if IsSet(ProbeAfterSaveFailure) && ProbeAfterSaveFailure`r`n        throw Error(""fixture post-save refresh failure"")")
+Edit-TestSource $release 'src/ui/palette/palette_view.ahk' 'RefreshPalette() {' ('RefreshPalette() {' + "`r`n    if IsSet(ProbeShortcutRefreshFailure) && ProbeShortcutRefreshFailure`r`n        throw Error(""fixture shortcut refresh failure"")")
+Edit-TestSource $release 'src/ui/ui_runtime.ahk' 'RefreshOperationControls() {' ('RefreshOperationControls() {' + "`r`n    global ProbeWaitFailure`r`n    if IsSet(ProbeWaitFailure) && ProbeWaitFailure && IsBrowserOperationBusy {`r`n        ProbeWaitFailure := false`r`n        throw Error(""fixture wait preparation failure"")`r`n    }")
+Edit-TestSource $release 'src/ui/ui_runtime.ahk' 'RefreshOperationControls() {' ('RefreshOperationControls() {' + "`r`n    global ProbeEditorBeginFailure`r`n    if IsSet(ProbeEditorBeginFailure) && ProbeEditorBeginFailure && ActiveEditorDialog {`r`n        ProbeEditorBeginFailure := false`r`n        throw Error(""fixture editor begin failure"")`r`n    }")
+Edit-TestSource $release 'src/ui/management/management_dialogs.ahk' '        view.SetFont("s10","Yu Gothic UI")' ('        view.SetFont("s10","Yu Gothic UI")' + "`r`n        if IsSet(ProbeEditorConstructionFailure) && ProbeEditorConstructionFailure {`r`n            global ProbeEditorConstructionHwnd := view.Hwnd`r`n            throw Error(""fixture editor construction failure"")`r`n        }")
+Edit-TestSource $release 'src/ui/management/management_dialogs.ahk' '    view.OnEvent("Close",Close), view.OnEvent("Escape",Close)' ('    view.OnEvent("Close",Close), view.OnEvent("Escape",Close)' + "`r`n    ProbeEditorBuild(view)")
+Edit-TestSource $release 'src/ui/management/management_dialogs.ahk' '    view.OnEvent("Close",Close),view.OnEvent("Escape",Close)' ('    view.OnEvent("Close",Close),view.OnEvent("Escape",Close)' + "`r`n    ProbeEditorBuild(view)")
+Edit-TestSource $release 'src/ui/shortcut_manager.ahk' '    viewport := PanelViewport(view,680,780)' ('    viewport := PanelViewport(view,680,780)' + "`r`n    ProbeEditorBuild(view,viewport)")
+Edit-TestSource $release 'src/ui/panel_viewport.ahk' '            OnMessage(0x115,this.ScrollHandler)' ('            OnMessage(0x115,this.ScrollHandler)' + "`r`n            ProbeViewportRegistration(this)")
+Edit-TestSource $release 'src/ui/help_view.ahk' '        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' ('        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' + "`r`n    ProbeInfoDialogBuild(view)")
+Edit-TestSource $release 'src/ui/reaction_feedback.ahk' '    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' ('    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' + "`r`n    ProbeInfoDialogBuild(details)")
+Edit-TestSource $release 'src/ui/window_presenter.ahk' 'PresentWindow(view, options := "", layout := 0, activate := true) {' ('PresentWindow(view, options := "", layout := 0, activate := true) {' + "`r`n    if IsSet(ProbeInfoFailure) && ProbeInfoFailure = ""show"" && view.Hwnd = ProbeInfoHwnd`r`n        throw Error(""fixture info show failure"")")
+Edit-TestSource $release 'src/ui/shortcut_manager.ahk' '        try SaveShortcutMap(draft)' ("        try {`r`n            SaveShortcutMap(draft)`r`n            ProbeShortcutSaved(""keys"")`r`n        }")
+Edit-TestSource $release 'src/ui/shortcut_manager.ahk' '            SaveShortcutItemAssignments(itemState.ProfileId,itemState.Ids[first.Value],itemState.Ids[second.Value])' ('            SaveShortcutItemAssignments(itemState.ProfileId,itemState.Ids[first.Value],itemState.Ids[second.Value])' + "`r`n            ProbeShortcutSaved(""items"")")
 $tests=@'
 OnExit(StopBrowserWorker)
 global UiChecks := 0, ProbeListArmed := false, ProbeViewportArmed := false, InputCalls := 0
@@ -60,61 +49,6 @@ registered := RegisteredViewportProbe(registrationView,160,120)
 registered.Dispose(), registered := 0
 CheckUi(DeletedRegisteredViewports=2,"viewport registration can be retried on the same window and released")
 registrationView.Destroy()
-global ProbeDiagnosticFailure := "", ProbeDiagnosticHwnd := 0, ProbeDiagnosticViewport := 0
-for point in ["construction","snapshot","viewport"] {
-    ProbeDiagnosticFailure := point, ProbeDiagnosticHwnd := 0, ProbeDiagnosticViewport := 0
-    failed := false
-    try CreateDiagnosticPanel()
-    catch as failure
-        failed := failure.Message == "fixture diagnostic " point " failure"
-    CheckUi(failed,"diagnostic creation preserves the failure: " point)
-    CheckUi(ProbeDiagnosticHwnd && !DllCall("IsWindow","Ptr",ProbeDiagnosticHwnd),"failed diagnostic creation destroys its unpublished window: " point)
-    if point = "viewport"
-        CheckUi(ProbeDiagnosticViewport.Disposed,"failed diagnostic creation releases viewport callbacks")
-    ProbeDiagnosticFailure := "", ProbeDiagnosticViewport := 0
-    diagnostic := CreateDiagnosticPanel()
-    try {
-        diagnostic.Refresh.Call()
-        CheckUi(DllCall("IsWindow","Ptr",diagnostic.Window.Hwnd) && !diagnostic.Viewport.Disposed,"diagnostic creation and refresh retry after failure: " point)
-    } finally {
-        diagnostic.Viewport.Dispose()
-        diagnostic.Window.Destroy()
-    }
-}
-global ProbeDiagnosticPaintFailure := false, ProbeDiagnosticReports := [], ProbeDiagnosticPaintCopied := false, ProbeDiagnosticPaintEnabled := false
-savedOperation := LastBrowserOperation
-RecordBrowserOperation({Mode:"chat_focus",State:"focused",Duration:10})
-diagnostic := CreateDiagnosticPanel()
-try {
-    ProbeDiagnosticCopy.Call()
-    CheckUi(ProbeDiagnosticReports.Length=1 && InStr(ProbeDiagnosticReports[1],"(focused)"),"diagnostic copy starts with the completed display")
-    RecordBrowserOperation({Mode:"chat_clear",State:"cleared",Duration:20})
-    ProbeDiagnosticPaintFailure := true, failed := false, beforeCritical := A_IsCritical
-    try diagnostic.Refresh.Call()
-    catch as failure
-        failed := failure.Message == "fixture diagnostic paint failure"
-    CheckUi(failed && A_IsCritical=beforeCritical,"failed diagnostic paint preserves the cause and restores interrupt state")
-    CheckUi(!ProbeDiagnosticPaintEnabled && !ProbeDiagnosticPaintCopied,"incomplete diagnostic paint cannot be copied")
-    ProbeDiagnosticCopy.Call()
-    CheckUi(!ProbeDiagnosticCopyButton.Enabled && ProbeDiagnosticReports.Length=1,"failed diagnostic paint keeps copying unavailable")
-    ProbeDiagnosticPaintFailure := false
-    diagnostic.Refresh.Call()
-    ProbeDiagnosticCopy.Call()
-    CheckUi(ProbeDiagnosticCopyButton.Enabled && ProbeDiagnosticReports.Length=2 && InStr(ProbeDiagnosticReports[2],"(cleared)"),"successful retry publishes and enables the new diagnostic report")
-    ProbeDiagnosticFailure := "snapshot", failed := false
-    try diagnostic.Refresh.Call()
-    catch as failure
-        failed := failure.Message == "fixture diagnostic snapshot failure"
-    ProbeDiagnosticCopy.Call()
-    CheckUi(failed && ProbeDiagnosticCopyButton.Enabled && ProbeDiagnosticReports.Length=3
-        && ProbeDiagnosticReports[3]==ProbeDiagnosticReports[2],"failed diagnostic acquisition preserves the last complete display and report")
-} finally {
-    ProbeDiagnosticFailure := "", ProbeDiagnosticPaintFailure := false
-    diagnostic.Viewport.Dispose()
-    diagnostic.Window.Destroy()
-    ProbeDiagnosticCopy := 0, ProbeDiagnosticCopyButton := 0
-    LastBrowserOperation := savedOperation
-}
 global ProbeInfoFailure := "", ProbeInfoHwnd := 0
 for open in [Help,ShowReactionDetails] {
     for point in ["build","show"] {
@@ -306,6 +240,24 @@ PaletteViewport.SetOffset(0,0)
 CheckUi(!ProbeViewportArmed && PaletteViewport.PendingResize && IsObject(PaletteViewport.PendingOffset),"nested updates are queued")
 PaletteViewport.FlushUpdates()
 CheckUi(!PaletteViewport.Updating && !PaletteViewport.PendingResize && !PaletteViewport.PendingOffset,"queued updates drain")
+previousCritical := A_IsCritical
+Critical("On")
+try {
+    ProbeViewportArmed := true
+    PaletteViewport.SetOffset(0,0)
+    PaletteViewport.SetOffset(30,40)
+    PaletteViewport.FlushUpdates()
+    CheckUi(PaletteViewport.X=30 && PaletteViewport.Y=40,"new scrolling supersedes an older queued position")
+    PaletteViewport.Updating := true
+    PaletteViewport.Resize()
+    PaletteViewport.SetOffset(30,40)
+    PaletteViewport.Updating := false
+    ProbeViewportArmed := true
+    PaletteViewport.FlushUpdates()
+    CheckUi(PaletteViewport.X=10 && PaletteViewport.Y=20,"scrolling requested during layout supersedes the earlier queued position")
+    PaletteViewport.FlushUpdates()
+    CheckUi(!PaletteViewport.PendingResize && !PaletteViewport.PendingOffset,"reentrant layout requests finish without replaying old positions")
+} finally Critical(previousCritical)
 PaletteViewport.Updating := true
 PaletteViewport.SetOffset(10,20)
 PaletteViewport.SetOffset(20,30)
@@ -471,19 +423,6 @@ class RegisteredViewportProbe extends PanelViewport {
         DeletedRegisteredViewports++
     }
 }
-ProbeDiagnosticReport(report) {
-    ProbeDiagnosticReports.Push(report)
-}
-ProbeDiagnosticPaint() {
-    global ProbeDiagnosticPaintCopied, ProbeDiagnosticPaintEnabled
-    if !IsSet(ProbeDiagnosticPaintFailure) || !ProbeDiagnosticPaintFailure
-        return
-    ProbeDiagnosticPaintEnabled := ProbeDiagnosticCopyButton.Enabled
-    count := ProbeDiagnosticReports.Length
-    ProbeDiagnosticCopy.Call()
-    ProbeDiagnosticPaintCopied := ProbeDiagnosticReports.Length != count
-    throw Error("fixture diagnostic paint failure")
-}
 ProbeInfoDialogBuild(view) {
     global ProbeInfoHwnd
     if !IsSet(ProbeInfoFailure) || ProbeInfoFailure = ""
@@ -492,18 +431,8 @@ ProbeInfoDialogBuild(view) {
     if ProbeInfoFailure = "build"
         throw Error("fixture info build failure")
 }
-ProbeDiagnosticConstruction(view) {
-    global ProbeDiagnosticHwnd
-    ProbeDiagnosticHwnd := view.Hwnd
-    if IsSet(ProbeDiagnosticFailure) && ProbeDiagnosticFailure = "construction"
-        throw Error("fixture diagnostic construction failure")
-}
 ProbeViewportRegistration(viewport) {
-    global ProbeRegisteredViewport, ProbeDiagnosticViewport
-    if IsSet(ProbeDiagnosticFailure) && ProbeDiagnosticFailure = "viewport" {
-        ProbeDiagnosticViewport := viewport
-        throw Error("fixture diagnostic viewport failure")
-    }
+    global ProbeRegisteredViewport
     if IsSet(ProbeViewportRegistrationFailure) && ProbeViewportRegistrationFailure {
         ProbeRegisteredViewport := viewport
         throw Error("fixture viewport registration failure")

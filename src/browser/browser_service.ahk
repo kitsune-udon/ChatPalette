@@ -10,12 +10,14 @@ BrowserNames() {
 }
 
 NativeIsBrowser(hwnd) {
+    return BrowserNames().Has(ReadBrowserProcessName(hwnd))
+}
+ReadBrowserProcessName(hwnd) {
     if !hwnd
-        return false
-    try name := StrLower(WinGetProcessName("ahk_id " hwnd))
+        return ""
+    try return StrLower(WinGetProcessName("ahk_id " hwnd))
     catch TargetError
-        return false
-    return BrowserNames().Has(name)
+        return ""
 }
 
 RequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extra := "") {
@@ -31,17 +33,15 @@ NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extr
         waitView := CreateWorkerWait(mode)
         BeginWorkerWait(waitView)
         started := AppClockMs()
-        ready := true
+        reply := 0
         if InStr(mode,"reaction_") = 1 {
-            try ready := PrepareReactionRegistrations(hwnd)
-            catch
-                ready := false
+            try EnsureReactionRegistrations(hwnd)
+            catch as failure
+                reply := {State:"sync_failed",Author:"",Channel:"",Video:"",Detail:failure.Message}
         }
-        reply := ready ? SendWorkerRequest(hwnd, mode, expectedVideo, extra)
-            : {State:"sync_failed",Author:"",Channel:"",Video:""}
-        ; Display-only queries must not erase the operation the user is investigating.
-        if mode != "reaction_status"
-            RecordBrowserOperation({Mode:mode, State:reply.State, Window:hwnd, Duration:Round(AppClockMs()-started)})
+        if !reply
+            reply := SendWorkerRequest(hwnd, mode, expectedVideo, extra)
+        RecordBrowserOperation({Mode:mode, State:reply.State, Window:hwnd, Duration:Round(AppClockMs()-started)})
         return reply
     } finally {
         ; Release the request and restore its windows before another owner can enter.

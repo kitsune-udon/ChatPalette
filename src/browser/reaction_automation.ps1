@@ -23,7 +23,7 @@ function Get-ReactionInvoker($Target) {
     return $null
 }
 
-function Get-ReactionTokens($Element) {
+function Get-ReactionCapture($Element) {
     $invokeCondition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::IsInvokePatternAvailableProperty, $true)
     $buttonCondition = New-Object System.Windows.Automation.PropertyCondition(
@@ -50,7 +50,7 @@ function Get-ReactionTokens($Element) {
         $selected += ,$record
         $tokens += @{name=$record.Name; id=$record.Id; class=$record.Class; type=$record.Type}
     }
-    $script:ReactionDiagnostic = "操作対象=$($records.Count)、識別=$($selected.Count)/5、不足=$($missing -join ',')、重複=$($ambiguous -join ',')"
+    $diagnostic = "操作対象=$($records.Count)、識別=$($selected.Count)/5、不足=$($missing -join ',')、重複=$($ambiguous -join ',')"
     # Diagnostics only: inspect names near the already recognized controls.
     # Geometry is never used to select or click an unknown reaction.
     $nearby = @($records | Select-Object -First 40)
@@ -80,9 +80,9 @@ function Get-ReactionTokens($Element) {
         $name.Substring(0,[Math]::Min(80,$name.Length))
     })
     $nameText = $names -join ' | '
-    $script:ReactionDiagnostic += '、近くのボタン名=[' + $nameText.Substring(0,[Math]::Min(700,$nameText.Length)) + ']'
-    if (!(Test-ReactionTokens $tokens)) { return $null }
-    return $tokens
+    $diagnostic += '、近くのボタン名=[' + $nameText.Substring(0,[Math]::Min(700,$nameText.Length)) + ']'
+    if (!(Test-ReactionTokens $tokens)) { $tokens = $null }
+    return @{Tokens=$tokens; Detail=$diagnostic}
 }
 
 function Select-ReactionRecords($Records, $Plan) {
@@ -111,9 +111,8 @@ function Select-ReactionRecords($Records, $Plan) {
             }
         }
     }
-    $script:ReactionLookupDiagnostic = '登録したボタンを直接検索: ' + ($diagnostics -join ' / ')
-    if ($selected.Count -ne 5) { return $null }
-    return @{Elements=$selected}
+    if ($selected.Count -ne 5) { $selected = $null }
+    return @{Elements=$selected; Detail=('登録したボタンを直接検索: ' + ($diagnostics -join ' / '))}
 }
 
 function New-ReactionLookupCondition($Plan) {
@@ -139,7 +138,7 @@ function Find-RegisteredReactions([long]$WindowHandle, $Plan) {
             try {
                 $cachedRecords = @(foreach ($control in $entry.Elements) { Get-ReactionRecord $control })
                 $cached = Select-ReactionRecords $cachedRecords $plan
-                if ($null -ne $cached) {
+                if ($cached.Elements) {
                     $belongsToWindow = $true
                     foreach ($element in $cached.Elements) {
                         if (!(Test-ElementWindow $element $WindowHandle)) { $belongsToWindow = $false; break }
@@ -151,7 +150,7 @@ function Find-RegisteredReactions([long]$WindowHandle, $Plan) {
         $script:ReactionElementCache.Remove($WindowHandle)
     }
     $group = Find-ReactionGroupInWindow $WindowHandle $plan
-    if ($null -ne $group) {
+    if ($group.Elements) {
         if ($script:ReactionElementCache.Count -ge 8) { $script:ReactionElementCache.Clear() }
         $script:ReactionElementCache[$WindowHandle] = @{Elements=$group.Elements; Plan=$plan}
     }
@@ -195,8 +194,9 @@ function Register-ReactionSelectors($Request, $Reply) {
     $tokens = $null
     $diagnostics = @()
     for ($depth = 0; $depth -lt 7 -and $null -ne $element; $depth++) {
-        $tokens = Get-ReactionTokens $element
-        $diagnostics += "階層${depth}: $script:ReactionDiagnostic"
+        $capture = Get-ReactionCapture $element
+        $tokens = $capture.Tokens
+        $diagnostics += "階層${depth}: $($capture.Detail)"
         if ($null -ne $tokens) { break }
         $element = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($element)
     }
@@ -225,9 +225,9 @@ function Invoke-ReactionRequest($Request) {
         $browser = Get-BrowserProcessName ([long]$Request.Window)
         if (-not $script:BrowserReactionSelectors.ContainsKey($browser)) { $reply.State = 'not_registered'; return $reply }
         $group = Find-RegisteredReactions ([long]$Request.Window) $script:BrowserReactionSelectors[$browser]
-        if ($null -eq $group) {
+        if (!$group.Elements) {
             $reply.State = 'menu_closed'
-            $reply.Detail = $script:ReactionLookupDiagnostic
+            $reply.Detail = $group.Detail
             return $reply
         }
         if ($Request.Mode -eq 'reaction_check') { $reply.State = 'ready'; return $reply }

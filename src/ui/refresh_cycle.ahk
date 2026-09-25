@@ -8,6 +8,8 @@ class RefreshCycle {
             this.Pending := true
             return false
         }
+        ; This refresh fulfills any previously queued refresh of the same screen.
+        SetTimer(this.Callback,0)
         this.Active := true
         return true
     }

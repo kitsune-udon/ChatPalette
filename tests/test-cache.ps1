@@ -17,14 +17,14 @@ $elements = @(foreach ($i in 1..5) {
 })
 $script:ReactionElementCache[123L] = @{Plan=$plan;Elements=$elements}
 $result = Find-RegisteredReactions 123 $plan
-if ($null -eq $result -or $result.Elements.Count -ne 5) { throw 'valid cache not reused' }
+if ($null -eq $result.Elements -or $result.Elements.Count -ne 5) { throw 'valid cache not reused' }
 $elements[2].Current.IsOffscreen = $true
 $records = @(foreach ($element in $elements) { Get-ReactionRecord $element })
-if ($null -ne (Select-ReactionRecords $records $plan)) { throw 'hidden cached control accepted' }
+if ($null -ne (Select-ReactionRecords $records $plan).Elements) { throw 'hidden cached control accepted' }
 $elements[2].Current.IsOffscreen = $false
 $elements[2].Current.Name = 'replaced'
 $records = @(foreach ($element in $elements) { Get-ReactionRecord $element })
-if ($null -ne (Select-ReactionRecords $records $plan)) { throw 'changed cached identity accepted' }
+if ($null -ne (Select-ReactionRecords $records $plan).Elements) { throw 'changed cached identity accepted' }
 'PASS: cached lookup, hidden control and changed identity checks'
 $replacementTokens = @($tokens | ForEach-Object { $_.Clone() })
 $replacementTokens[0].name = 'new-name'
@@ -35,7 +35,7 @@ if ($plan.Tokens[0].name -ne 'reaction1' -or $nextPlan.Tokens[0].name -ne 'new-n
 'PASS: owned registration plans and independent replacement'
 
 $script:SearchCount = 0
-$script:SearchResult = $null
+$script:SearchResult = @{Elements=$null;Detail='fresh scan found no group'}
 $script:WrongElement = 0
 function Find-ReactionGroupInWindow([long]$WindowHandle, $plan) {
     $script:SearchCount++
@@ -51,30 +51,30 @@ function Reset-TestCache {
 }
 Reset-TestCache
 $result = Find-RegisteredReactions 123 $plan
-if ($null -eq $result -or $script:SearchCount -ne 0) { throw 'Valid references were rescanned' }
+if ($null -eq $result.Elements -or $script:SearchCount -ne 0) { throw 'Valid references were rescanned' }
 foreach ($property in 'IsOffscreen','IsEnabled','Name') {
     Reset-TestCache
     $old = $elements[2].Current.$property
     $elements[2].Current.$property = switch ($property) { 'IsOffscreen' {$true} 'IsEnabled' {$false} 'Name' {'changed'} }
     $result = Find-RegisteredReactions 123 $plan
-    if ($null -ne $result -or $script:SearchCount -ne 1 -or $script:ReactionElementCache.ContainsKey(123L)) { throw "Invalid cache retained: $property" }
+    if ($null -ne $result.Elements -or $result.Detail -ne 'fresh scan found no group' -or $script:SearchCount -ne 1 -or $script:ReactionElementCache.ContainsKey(123L)) { throw "Invalid cache retained: $property" }
     $elements[2].Current.$property = $old
 }
 Reset-TestCache
 $script:WrongElement = 5
 $result = Find-RegisteredReactions 123 $plan
-if ($null -ne $result -or $script:SearchCount -ne 1) { throw 'Wrong-window non-first element accepted' }
+if ($null -ne $result.Elements -or $script:SearchCount -ne 1) { throw 'Wrong-window non-first element accepted' }
 $script:WrongElement = 0
 Reset-TestCache
 $elements[2] | Add-Member ScriptMethod GetUpdatedCache { throw 'Stale element' } -Force
 $result = Find-RegisteredReactions 123 $plan
-if ($null -ne $result -or $script:SearchCount -ne 1) { throw 'Stale element not invalidated' }
+if ($null -ne $result.Elements -or $script:SearchCount -ne 1) { throw 'Stale element not invalidated' }
 $elements[2] | Add-Member ScriptMethod GetUpdatedCache { param($request) return [pscustomobject]@{Cached=$this.Current} } -Force
 Reset-TestCache
-$script:SearchResult = @{Elements=$elements}
+$script:SearchResult = @{Elements=$elements;Detail='fresh scan found all reactions'}
 $replacement = New-ReactionPlan $tokens
 $result = Find-RegisteredReactions 123 $replacement
-if ($null -eq $result -or $script:SearchCount -ne 1) { throw 'Re-registration did not refresh references' }
+if ($null -eq $result.Elements -or $result.Detail -ne 'fresh scan found all reactions' -or $script:SearchCount -ne 1) { throw 'Re-registration did not refresh references and its diagnostic' }
 $null = Find-RegisteredReactions 123 $replacement
 if ($script:SearchCount -ne 1) { throw 'Refreshed references not reused' }
 'PASS: reference revalidation, invalidation, full ownership and fallback refresh'

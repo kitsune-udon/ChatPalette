@@ -2,11 +2,8 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$repositoryPath = Join-Path $release 'src\settings\settings_repository.ahk'
-$repositorySource = [IO.File]::ReadAllText($repositoryPath)
 $repositoryAnchor = 'this.Db := SqliteConnection(path,create)'
-if (!$repositorySource.Contains($repositoryAnchor)) { throw 'Repository connection injection point missing' }
-[IO.File]::WriteAllText($repositoryPath,$repositorySource.Replace($repositoryAnchor,$repositoryAnchor + "`r`n        global ProbeRepositoryConnection := this.Db"),[Text.UTF8Encoding]::new($true))
+Edit-TestSource $release 'src/settings/settings_repository.ahk' $repositoryAnchor ($repositoryAnchor + "`r`n        global ProbeRepositoryConnection := this.Db")
 $tests = @'
 #Requires AutoHotkey v2.0
 #Include %A_ScriptDir%\src\app\app_modules.ahk

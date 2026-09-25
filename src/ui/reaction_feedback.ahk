@@ -1,12 +1,9 @@
 ﻿RenderReactionStatus() {
-    static updating := false
-    if updating {
-        SetTimer(RenderReactionStatus,-1)
+    static cycle := RefreshCycle(RenderReactionStatus)
+    if !cycle.Begin()
         return
-    }
-    updating := true
     try RenderLatestReactionStatus()
-    finally updating := false
+    finally cycle.End()
 }
 
 RenderLatestReactionStatus() {
@@ -18,7 +15,6 @@ RenderLatestReactionStatus() {
         SetTimer(RenderReactionStatus,-Ceil(remaining))
         return
     }
-    SetTimer(RenderReactionStatus,0)
     lastRenderedAt := AppClockMs(), lastPhase := phase
     message := snapshot.Message
     SetTimer(HideFinishedReactionProgress, 0)
@@ -35,8 +31,6 @@ RenderLatestReactionStatus() {
         RenderReactionOverlay(snapshot)
     if final
         SetTimer(HideFinishedReactionProgress, -4000)
-    if snapshot != ReactionExecutionStatus
-        SetTimer(RenderReactionStatus,-1)
 }
 
 
@@ -110,7 +104,7 @@ BuildReactionDetails(result, details) {
 }
 
 
-ReactionNotice(state, detail := "", job := 0) {
+ReactionNotice(reply, job := 0) {
     static messages := Map(
         "registered", "リアクションボタンを設定しました。「② 送らずに確認」で試せます。",
         "ready", "5種類のリアクションを検出できました。送信はしていません。",
@@ -127,7 +121,8 @@ ReactionNotice(state, detail := "", job := 0) {
     if !job && ActiveReactionJob
         job := ActiveReactionJob
     suffix := job && job.Mode = "reaction_send" ? " 操作済み " job.Completed " / " job.Total " 回で停止。" : ""
-    message := messages.Get(state, messages["unavailable"]) suffix
-    if SetReactionStatus(message, true,detail,job,state)
+    message := messages.Get(reply.State, messages["unavailable"]) suffix
+    detail := reply.HasOwnProp("Detail") ? reply.Detail : ""
+    if SetReactionStatus(message, true,detail,job,reply.State)
         ShowStatusTip(message,4000)
 }

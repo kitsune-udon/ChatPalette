@@ -4,11 +4,7 @@ $ErrorActionPreference = 'Stop'
 $release = New-TestRuntime
 
 # Fail one rollback move only in the isolated runtime.
-$lifecycle = Join-Path $release 'src\app\app_lifecycle.ahk'
-$source = [IO.File]::ReadAllText($lifecycle)
-$anchor = 'try FileMove(pair[2],pair[1],false)'
-if (!$source.Contains($anchor)) { throw 'Reset rollback injection point missing' }
-[IO.File]::WriteAllText($lifecycle,$source.Replace($anchor,'try ProbeResetRestore(pair)'),[Text.UTF8Encoding]::new($true))
+Edit-TestSource $release 'src/app/app_lifecycle.ahk' 'try FileMove(pair[2],pair[1],false)' 'try ProbeResetRestore(pair)'
 $tests = @'
 OnExit(StopBrowserWorker)
 global ProbeRollbackFailure := false
