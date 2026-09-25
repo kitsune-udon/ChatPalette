@@ -89,7 +89,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`CodexS
 | 実キーの経路 | [test-page-hotkeys.ps1](../../tests/test-page-hotkeys.ps1) | 登録した実キーからのフォーカス・クリア・表示要求と、保留経由の単一入力 |
 | 文字入力 | [test-input.ps1](../../tests/test-input.ps1) | チャット・コメントの分類、フォーカスと入力欄の同一性、対象外の拒否 |
 | メモリキャッシュ | [test-storage.ps1](../../tests/test-storage.ps1) | メモリキャッシュの再利用・期限・件数・失敗後の再取得と登録更新 |
-| ブラウザー診断の出力 | [test-browser-report.ps1](../../tests/test-browser-report.ps1) | 診断出力先の解決・作成、失敗記録、既存レポートの保護。実ブラウザー操作なし |
+| ブラウザー診断の出力 | [test-browser-report.ps1](../../tests/test-browser-report.ps1) | 不正な引数の拒否、診断出力先の解決・作成、失敗記録、既存レポートの保護。実ブラウザー操作なし |
 | テスト実行 | [test-runner.ps1](../../tests/test-runner.ps1) | テスト選択と隔離、成否の記録、子プロセス・環境の後始末、AHKの未処理例外 |
 | 配布 | [test-release.ps1](../../tests/test-release.ps1) | 必須ファイルの欠落・同名フォルダーの拒否、収録範囲・個人データ除外・ハッシュ、圧縮と公開の失敗時処理、上書き防止 |
 
@@ -181,6 +181,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.
 ```
 
 `-PageKind`を省略するとページ種類を自動判定し、指定すると期待する種類との一致も検査します。出力先の親フォルダーは自動作成し、相対パスはPowerShellの現在位置から解決します。既存レポートは上書きしません。再確認には別のファイル名を指定してください。
+
+`-List`は候補の一覧表示専用です。`-Exercise`・対象ハンドル・出力先との併用は、画面へのアクセス前にエラーになります。
 
 | 結果 | 意味・次の確認 |
 |---|---|

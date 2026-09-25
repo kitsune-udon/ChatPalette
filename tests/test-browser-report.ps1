@@ -5,6 +5,19 @@ $runtime=New-TestRuntime
 New-Item -ItemType Directory -Path (Join-Path $runtime 'scripts') | Out-Null
 $checker=Join-Path $runtime 'scripts\check-browser.ps1'
 Copy-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\check-browser.ps1') -Destination $checker
+# Invalid combinations must fail at binding, before observing a desktop or creating a report.
+$checkerBytes=[IO.File]::ReadAllBytes($checker)
+try {
+    Edit-TestSource $runtime 'scripts/check-browser.ps1' "Add-Type -AssemblyName UIAutomationClient" "throw 'Unexpected browser inspection'"
+    foreach ($arguments in @(@{List=$true;Exercise=$true},
+        @{List=$true;WindowHandle=-1;OutputPath=(Join-Path $runtime 'invalid.json')},
+        @{WindowHandle=-1;OutputPath=(Join-Path $runtime 'invalid.json');Exercize=$true})) {
+        $rejected=$false
+        try { & $checker @arguments | Out-Null }
+        catch [Management.Automation.ParameterBindingException] { $rejected=$true }
+        if (!$rejected -or (Test-Path -LiteralPath (Join-Path $runtime 'invalid.json'))) { throw 'Invalid browser check arguments were not rejected before execution' }
+    }
+} finally { [IO.File]::WriteAllBytes($checker,$checkerBytes) }
 # Change PowerShell's location without changing the process working directory.
 $entry=Join-Path $runtime 'probe.ps1'
 [IO.File]::WriteAllText($entry,@'
@@ -55,4 +68,4 @@ function Find-ReactionLauncher { return $null }
     $report=[IO.File]::ReadAllText($path) | ConvertFrom-Json
     if ($report.Error -or $report.ChatDetected -isnot [bool] -or $report.ChatDetected -ne ($state -eq 'ok')) { throw "Chat detection state $state was misreported" }
 }
-Write-Output 'PASS: report paths, overwrite protection and chat discovery outcomes'
+Write-Output 'PASS: argument rejection, report paths, overwrite protection and chat discovery outcomes'

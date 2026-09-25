@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory=$true,ParameterSetName="List")][switch]$List,
     [Parameter(Mandatory=$true,ParameterSetName="Inspect")][long]$WindowHandle,
     [Parameter(ParameterSetName="Inspect")][ValidateSet('Auto','Watch','Popout')][string]$PageKind="Auto",
-    [switch]$Exercise,
+    [Parameter(ParameterSetName="Inspect")][switch]$Exercise,
     [Parameter(Mandatory=$true,ParameterSetName="Inspect")][string]$OutputPath
 )
 $ErrorActionPreference='Stop'
