@@ -1,5 +1,15 @@
 ﻿$ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
+$script:checks = 0
+function Assert($condition, [string]$label) {
+    if (!$condition) {
+        # Adapted properties and product catch blocks can absorb exceptions.
+        # The runner also checks stderr, so a failed expectation stays fatal.
+        [Console]::Error.WriteLine("FAIL: $label at $($MyInvocation.ScriptName):$($MyInvocation.ScriptLineNumber)")
+        throw $label
+    }
+    $script:checks++
+}
 function New-TestRuntime {
     $base = if ($env:HELPER_TEST_ROOT) { $env:HELPER_TEST_ROOT } else { Join-Path $PSScriptRoot '.tmp' }
     $path = Join-Path $base ([guid]::NewGuid().ToString('N'))

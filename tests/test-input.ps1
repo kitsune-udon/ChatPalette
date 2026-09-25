@@ -5,8 +5,6 @@ $release = New-TestRuntime
 if (!(Get-Command Test-ElementWindow -ErrorAction SilentlyContinue)) { throw 'Standalone input target lacks window validation' }
 if (Get-Variable BrowserReactionSelectors -Scope Script -ErrorAction SilentlyContinue) { throw 'Input target initialized reaction registration' }
 . (Join-Path $release 'src\browser\browser_worker.ps1') -Library
-$script:checks = 0
-function Assert($value, $label) { if (!$value) { throw $label }; $script:checks++ }
 function Field([string]$Id, [string]$Name = '') {
     return @{Id=$Id; Name=$Name; Class=''; Type=50004; Focused=$true; Enabled=$true; Hidden=$false; Editable=$true}
 }
@@ -81,8 +79,8 @@ $record = Get-InputRecord $patternless $true
 Assert (!(Get-YouTubeInputKind @($record,$document))) 'Edit without evidence of writability rejected'
 $ancestor = TextField $false 'parent' 'style-scope ytd-comment-simplebox-renderer'
 $ancestor.Current.PSObject.Properties.Remove('Name')
-$ancestor.Current | Add-Member ScriptProperty Name { throw 'Ancestor text must not be queried' }
-$ancestor | Add-Member ScriptMethod TryGetCurrentPattern { throw 'Ancestor edit patterns must not be queried' } -Force
+$ancestor.Current | Add-Member ScriptProperty Name { Assert $false 'Ancestor text must not be queried' }
+$ancestor | Add-Member ScriptMethod TryGetCurrentPattern { Assert $false 'Ancestor edit patterns must not be queried' } -Force
 $structural = Get-InputRecord $ancestor $false
 Assert ($structural.Id -eq 'parent' -and !$structural.ContainsKey('Name')) 'ancestry fetches structure only'
 $record = Get-InputRecord (TextField $false 'contenteditable-root' 'style-scope yt-formatted-string') $true
@@ -232,7 +230,7 @@ function Read-BrowserVideoId($WindowHandle) { return $script:video }
 function Get-FocusedYouTubeInput($WindowHandle) { if ($script:kind) { return @{Kind=$script:kind;Element="original"} } }
 function Test-FocusedInputIdentity($VerifiedElement, $WindowHandle) { return $VerifiedElement -eq $script:focusedId -and !!$script:kind }
 $script:focusedId = "original"
-function Fetch-Metadata($Video) { throw 'Input verification must not fetch metadata' }
+function Fetch-Metadata($Video) { Assert $false 'Input verification must not fetch metadata' }
 function Verify($video) { Invoke-WorkerRequest @{Mode='verify_input'; Seq=1; Window=123; Video=$video} }
 Assert ((Verify '').State -eq 'ok') 'manual mode still verifies target'
 Assert ((Verify 'abcdefghijk').Detail -eq 'comment') 'comment verification result'

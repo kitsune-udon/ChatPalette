@@ -11,8 +11,6 @@ if (($pageSource.Split(@($parentRead),[StringSplitOptions]::None)).Count -ne 2) 
 . (Join-Path $release 'src\browser\browser_worker.ps1') -Library
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-$script:checks=0
-function Assert($value,$label) { if (!$value) { throw "FAIL: $label" }; $script:checks++ }
 $document=@{Id='';Class='';Type=50030}
 $chat=@{Id='';Class='yt-live-chat-renderer';Type=50033}
 function Launcher([string]$Id='',[string]$Name='') { return @{Id=$Id;Name=$Name;Class='';Type=50000;Enabled=$true;Hidden=$false} }
@@ -56,7 +54,7 @@ Assert (!(Test-ReactionLauncher @($heart,$collapsed,$chat,$document))) 'individu
 # Selection uses validated field snapshots, without querying the live elements.
 function Candidate($Field) {
     $element=[pscustomobject]@{}
-    $element | Add-Member ScriptProperty Current { throw 'Selection must not reread UI Automation properties' }
+    $element | Add-Member ScriptProperty Current { Assert $false 'Selection must not reread UI Automation properties' }
     return @{Element=$element;Field=$Field}
 }
 $collapsedField=Launcher '' '❤'
@@ -173,8 +171,8 @@ function Get-ReactionHoverPoint($Target) {
     return @{X=20;Y=30}
 }
 function Move-PagePointer($Point) { $script:hoverCalls++; return $true }
-function Get-ReactionInvoker($Target) { throw 'Page actions must never invoke a reaction' }
-function Fetch-Metadata($Video) { throw 'Page actions must never fetch metadata' }
+function Get-ReactionInvoker($Target) { Assert $false 'Page actions must never invoke a reaction' }
+function Fetch-Metadata($Video) { Assert $false 'Page actions must never fetch metadata' }
 function Request($Mode,$Expected='') {
     $script:reads=0
     return Invoke-WorkerRequest @{Mode=$Mode;Window=123;Seq=1;Video=$Expected}

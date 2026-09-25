@@ -35,6 +35,56 @@ $retained=@(Get-ChildItem -LiteralPath $base -Directory)
 if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Failed named run did not retain evidence or restore its environment' }
 $stderr=Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'
 if (!(Test-Path -LiteralPath $stderr) -or [IO.File]::ReadAllText($stderr) -notmatch 'fixture failure') { throw 'Failed test stderr was not retained' }
+# A callback or adapted property may swallow exceptions and even exit statements.
+# Failure evidence must survive that boundary, and finally blocks must still run.
+foreach ($kind in @('stderr','assertion','callback-assertion','property-assertion','method-assertion','caught')) {
+    $source=@'
+# Test-Session: Headless
+. (Join-Path $PSScriptRoot 'support.ps1')
+. (Join-Path $PSScriptRoot '..\src\browser\page_actions.ps1')
+if ($script:checks -ne 0) { throw 'Assertion count was not reset' }
+Assert $true 'first check'
+if ($script:checks -ne 1) { throw 'Successful assertion was not counted' }
+try {
+'@ + "`r`n" + $(switch ($kind) {
+        'stderr' { "[Console]::Error.WriteLine('PowerShell fixture failure')" }
+        'assertion' { "Assert `$false 'PowerShell fixture failure'" }
+        'callback-assertion' { @'
+function Test-ReactionForeground { Assert $false 'PowerShell fixture failure' }
+$null=Invoke-PageAction @{Seq=1;Window=123;Mode='chat_focus'}
+'@ }
+        'property-assertion' { @'
+$target=[pscustomobject]@{}
+$target | Add-Member ScriptProperty Current { Assert $false 'PowerShell fixture failure' }
+$null=$target.Current
+'@ }
+        'method-assertion' { @'
+$target=[pscustomobject]@{}
+$target | Add-Member ScriptMethod Read { Assert $false 'PowerShell fixture failure' }
+try { $null=$target.Read() } catch { }
+'@ }
+        'caught' { "try { throw 'injected failure' } catch { }" }
+    }) + @'
+
+} finally { [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'probe-cleanup.txt'),[string]$script:checks) }
+'@
+    [IO.File]::WriteAllText($headless,$source,[Text.UTF8Encoding]::new($true))
+    $cleanup=Join-Path $fixture 'probe-cleanup.txt'
+    if (Test-Path -LiteralPath $cleanup) { Remove-Item -LiteralPath $cleanup }
+    $before=@(Get-ChildItem -LiteralPath $base -Directory | Select-Object -ExpandProperty FullName)
+    $failed=$false
+    try { & $runner -Name 'test-alpha.ps1' -WarningAction SilentlyContinue | Out-Null } catch { $failed=$true }
+    if ([IO.File]::ReadAllText($cleanup) -ne '1') { throw "PowerShell $kind lost cleanup or counted a failed assertion" }
+    $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
+    if ($kind -eq 'caught') {
+        if ($failed -or $retained.Count) { throw 'A caught injected exception failed the test' }
+    } else {
+        if (!$failed -or $retained.Count -ne 1) { throw "PowerShell $kind failure was swallowed" }
+        $stderr=[IO.File]::ReadAllText((Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'))
+        if ($stderr -notmatch 'PowerShell fixture failure') { throw "PowerShell $kind failure evidence was lost" }
+        if ($kind -ne 'stderr' -and $stderr -notmatch 'test-alpha\.ps1:\d+') { throw 'Assertion caller was not recorded' }
+    }
+}
 # Benchmark options use the same binding boundary as the test runner.
 foreach ($benchmark in @('benchmark-storage.ps1','benchmark-ui.ps1')) {
     $benchmarkPath=Join-Path $fixture $benchmark
@@ -148,4 +198,4 @@ ExitApp(0)
         }
     }
 }
-Write-Output 'PASS: exact-name and group selection, side-effect-free listing, cleanup, failure evidence, environment restoration, process exit/timeout ownership and unhandled AHK errors'
+Write-Output 'PASS: test selection, cleanup, failure evidence, process ownership and PowerShell/AHK assertion failures'

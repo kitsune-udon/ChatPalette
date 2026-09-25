@@ -28,7 +28,7 @@ try {
         $process = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $testName) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
         $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000
         Get-Content -LiteralPath $out,$err
-        if ($exitCode -ne 0) { throw "Failed: $testName" }
+        if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName" }
     }
     $completed = $true
     $selection = if ($Name) { $Name } else { $Group }

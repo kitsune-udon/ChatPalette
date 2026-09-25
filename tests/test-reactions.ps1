@@ -3,8 +3,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 . "$release\src\browser\browser_worker.ps1" -Library
-$script:checks = 0
-function Assert($condition, $label) { if (-not $condition) { throw "FAIL: $label" }; $script:checks++ }
 $script:video = 'abcdefghijk'
 $script:foreground = $true
 $script:menu = $true
@@ -95,7 +93,7 @@ $script:containerPropertyReads = 0
 $fakeGroup = [pscustomobject]@{}
 $fakeGroup | Add-Member ScriptProperty Current {
     $script:containerPropertyReads++
-    throw 'Capture must not read unused container properties'
+    Assert $false 'Capture must not read unused container properties'
 }
 $fakeGroup | Add-Member ScriptMethod FindAll { param($scope,$condition) return $script:fakeButtons }
 Assert ($null -ne (Get-ReactionCapture $fakeGroup).Tokens) 'registered five-button structure is recognized'
