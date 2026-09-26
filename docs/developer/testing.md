@@ -134,7 +134,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | フォーカス後の保留入力 | [test-focused-input.ps1](../../tests/test-focused-input.ps1) | 1件だけの保留、期限とキー解放、対象変更時の中止、保留状態の解放 |
 | ページ操作キー | [test-page-shortcuts.ps1](../../tests/test-page-shortcuts.ps1) | クリア前の再検証、操作競合と編集画面からの操作の拒否 |
 | ページ操作の所有 | [test-page-action-ownership.ps1](../../tests/test-page-action-ownership.ps1) | 受付から結果通知までの所有、交代後の結果保護、クリア直前のタイマー割り込みと例外時の復帰。前面・通信・入力を代替処理にするHeadless検査 |
-| キー管理画面 | [test-shortcut-manager.ps1](../../tests/test-shortcut-manager.ps1) | キーの変更・競合・保存と復元、対象別の弾幕割当 |
+| キー登録と保存 | [test-shortcut-bindings.ps1](../../tests/test-shortcut-bindings.ps1) | 起動時の登録、キー交換、保存失敗・登録失敗からの復元。キー登録を代替処理にし、実DBを使うHeadless検査。画面・ワーカー・アプリ初期化は不要 |
+| キー管理画面 | [test-shortcut-manager.ps1](../../tests/test-shortcut-manager.ps1) | 画面からのキー変更・競合・保存と失敗時の下書き保持、対象別の弾幕割当、未保存変更の破棄確認 |
 | 実キーの経路 | [test-page-hotkeys.ps1](../../tests/test-page-hotkeys.ps1) | 登録した実キーからのフォーカス・クリア・表示要求と、保留経由の単一入力 |
 | 文字入力 | [test-input.ps1](../../tests/test-input.ps1) | チャット・コメントの分類、フォーカスと入力欄の同一性、対象外の拒否 |
 | メモリキャッシュ | [test-storage.ps1](../../tests/test-storage.ps1) | メモリキャッシュの再利用・期限・件数・失敗後の再取得と登録更新 |
