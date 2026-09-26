@@ -37,7 +37,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
 
 明示したAutoHotkeyが存在しない場合、引数が不正な場合、対象テストがない場合はエラーになります。別のインストール先や全テストへ切り替えません。
 
-Desktop区分は通常の操作用デスクトップで実行します。`CodexSandboxDesktop`などの隔離デスクトップでは、ウィンドウが表示・有効でも前面確認が成立しません。`foreground_owned=0`だけでは、手操作の介入と隔離環境を区別できません。前面確認で停止した場合は実行先のデスクトップも確認し、通常デスクトップでの実行に必要な権限を得てから再実行します。
+Desktop区分は通常の操作用デスクトップで実行します。`RequireTestWindowActive`の失敗ログには、実行先の`desktop`と、そこが利用者の入力を受け取るデスクトップかを示す`receives_input`が含まれます。判定にはWindowsの[GetUserObjectInformationW（UOI_IO）](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getuserobjectinformationw)を使います。`receives_input=0`なら、`CodexSandboxDesktop`など通常の操作先と異なる環境で実行していないか確認し、必要な権限を得てから通常デスクトップで再実行します。`unavailable(番号)`は情報取得失敗のWin32エラーです。これらは失敗後の観測であり、`receives_input=1`や`foreground_owned=0`だけで手操作の介入や失敗原因を断定しません。
 
 ランナーは直下の`test-*.ps1`を名前順に検出し、各テストを別のWindows PowerShellプロセスで実行します。区分の正本は各ファイル先頭の`Test-Session`で、未分類はエラーです。支援・計測スクリプトには`test-`を付けません。各テストの終了コードが0でも、標準エラーへの出力があれば失敗とします。実行中のファイル名と成功したテスト群数を表示し、ランナーの終了コード0と最後の`PASS`で全選択テストの成功を確認します。
 

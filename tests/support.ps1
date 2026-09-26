@@ -87,10 +87,22 @@ RequireTestWindowActive(hwnd) {
     foreground := DllCall("GetForegroundWindow","Ptr"), foregroundPid := 0
     DllCall("GetWindowThreadProcessId","Ptr",foreground,"UInt*",&foregroundPid)
     owner := DllCall("GetWindow","Ptr",hwnd,"UInt",4,"Ptr")
+    ; Observe this thread's desktop without opening or switching another desktop.
+    desktop := DllCall("GetThreadDesktop","UInt",DllCall("GetCurrentThreadId"),"Ptr")
+    DllCall("GetUserObjectInformationW","Ptr",desktop,"Int",2,"Ptr",0,"UInt",0,"UInt*",&bytes := 0)
+    desktopName := "unavailable(" A_LastError ")"
+    if bytes {
+        name := Buffer(bytes)
+        desktopName := DllCall("GetUserObjectInformationW","Ptr",desktop,"Int",2,"Ptr",name,"UInt",bytes,"Ptr",0)
+            ? StrGet(name,"UTF-16") : "unavailable(" A_LastError ")"
+    }
+    inputDesktop := DllCall("GetUserObjectInformationW","Ptr",desktop,"Int",6,"Int*",&receivesInput := 0,"UInt",4,"Ptr",0)
+        ? receivesInput : "unavailable(" A_LastError ")"
     throw Error("Test window did not become active: exists=" DllCall("IsWindow","Ptr",hwnd)
         . " visible=" DllCall("IsWindowVisible","Ptr",hwnd) " enabled=" DllCall("IsWindowEnabled","Ptr",hwnd)
         . " owner_enabled=" (owner ? DllCall("IsWindowEnabled","Ptr",owner) : "none")
-        . " foreground_owned=" (foregroundPid=DllCall("GetCurrentProcessId")))
+        . " foreground_owned=" (foregroundPid=DllCall("GetCurrentProcessId"))
+        . " desktop=" desktopName " receives_input=" inputDesktop)
 }
 '@
     [IO.File]::WriteAllText($entry, $preamble + "`r`n" + $Source, [Text.UTF8Encoding]::new($true))

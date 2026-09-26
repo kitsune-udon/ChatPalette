@@ -392,6 +392,8 @@ Invoke-AppFixture -Body @'
             failureMessage := failure.Message
         Assert(InStr(failureMessage,"Test window did not become active: " target.Expected)
             && InStr(failureMessage,"foreground_owned=1"),target.Name ": failure identifies the actual window state")
+        Assert(RegExMatch(failureMessage," desktop=(?!unavailable\()[^\r\n]+ receives_input=1$"),
+            target.Name ": failure identifies the desktop receiving user input")
         Assert(WinActive("ahk_id " anchor.Hwnd),target.Name ": waiting never activates a different window")
     }
     hidden.Destroy(), disabled.Destroy(), anchor.Destroy()
