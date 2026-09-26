@@ -44,7 +44,7 @@ try {
             } finally { $env:PSModulePath = $modulePath }
             try { $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000 }
             finally { Get-Content -LiteralPath $out,$err -Encoding UTF8 }
-            if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName" }
+            if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName (exit $exitCode)" }
             $completed = $true
         } finally {
             $resolved = (Resolve-Path -LiteralPath $runRoot).Path

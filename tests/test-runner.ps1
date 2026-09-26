@@ -95,7 +95,7 @@ try {
     try { & $runner -Name 'test-alpha.ps1' -WarningAction SilentlyContinue | ForEach-Object { $observed.Add([string]$_) } }
     catch { $failure=$_.Exception.Message }
     $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
-    if ($failure -ne 'Failed: check-source.ps1' -or $observed.Contains('RUN: test-alpha.ps1') -or $retained.Count -ne 1) { throw 'Source failure did not stop before the selected tests' }
+    if ($failure -ne 'Failed: check-source.ps1 (exit 1)' -or $observed.Contains('RUN: test-alpha.ps1') -or $retained.Count -ne 1) { throw 'Source failure did not stop before the selected tests' }
     if ([IO.File]::ReadAllText((Join-Path $retained[0].FullName 'check-source.ps1.stderr.txt')) -notmatch 'fixture source failure') { throw 'Source failure lost its diagnostic evidence' }
     if ($env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'Source failure changed the caller environment' }
 } finally { [IO.File]::WriteAllText($sourceCheck,$sourceProbe,[Text.UTF8Encoding]::new($true)) }
@@ -123,7 +123,7 @@ if (!(Test-Path -LiteralPath (Join-Path $failedRoot 'failed-copy.txt')) -or (Tes
 if ([IO.File]::ReadAllText((Join-Path $failedRoot 'test-beta.ps1.stderr.txt')) -notmatch 'fixture beta failure') { throw 'The later group failure lost its diagnostic output' }
 # A callback or adapted property may swallow exceptions and even exit statements.
 # Failure evidence must survive that boundary, and finally blocks must still run.
-foreach ($kind in @('stderr','assertion','callback-assertion','property-assertion','method-assertion','caught')) {
+foreach ($kind in @('exit-code','stderr','assertion','callback-assertion','property-assertion','method-assertion','caught')) {
     $source=@'
 # Test-Session: Headless
 . (Join-Path $PSScriptRoot 'support.ps1')
@@ -133,6 +133,7 @@ Assert $true 'first check'
 if ($script:checks -ne 1) { throw 'Successful assertion was not counted' }
 try {
 '@ + "`r`n" + $(switch ($kind) {
+        'exit-code' { 'exit 17' }
         'stderr' { "[Console]::Error.WriteLine('PowerShell fixture failure 日本語 🧪')" }
         'assertion' { "Assert `$false 'PowerShell fixture failure 日本語 🧪'" }
         'callback-assertion' { @'
@@ -158,15 +159,21 @@ try { $null=$target.Read() } catch { }
     $cleanup=Join-Path $fixture 'probe-cleanup.txt'
     if (Test-Path -LiteralPath $cleanup) { Remove-Item -LiteralPath $cleanup }
     $before=@(Get-ChildItem -LiteralPath $base -Directory | Select-Object -ExpandProperty FullName)
-    $failed=$false
-    try { & $runner -Name 'test-alpha.ps1' -WarningAction SilentlyContinue | Out-Null } catch { $failed=$true }
+    $failure=''
+    try { & $runner -Name 'test-alpha.ps1' -WarningAction SilentlyContinue | Out-Null } catch { $failure=$_.Exception.Message }
     if ([IO.File]::ReadAllText($cleanup) -ne '1') { throw "PowerShell $kind lost cleanup or counted a failed assertion" }
     $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
     if ($kind -eq 'caught') {
-        if ($failed -or $retained.Count) { throw 'A caught injected exception failed the test' }
+        if ($failure -or $retained.Count) { throw 'A caught injected exception failed the test' }
     } else {
-        if (!$failed -or $retained.Count -ne 1) { throw "PowerShell $kind failure was swallowed" }
+        if (!$failure -or $retained.Count -ne 1) { throw "PowerShell $kind failure was swallowed" }
         $stderr=[IO.File]::ReadAllText((Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'))
+        if ($kind -eq 'exit-code') {
+            if ($stderr -or $failure -ne 'Failed: test-alpha.ps1 (exit 17)') { throw "Silent test exit lost its status: $failure" }
+            continue
+        }
+        $expectedExit=if ($kind -eq 'assertion') { 1 } else { 0 }
+        if ($failure -ne "Failed: test-alpha.ps1 (exit $expectedExit)") { throw "PowerShell $kind failure lost its exit code: $failure" }
         if ($stderr -notmatch 'PowerShell fixture failure 日本語 🧪') { throw "PowerShell $kind failure evidence was lost" }
         if ($kind -ne 'stderr' -and $stderr -notmatch 'test-alpha\.ps1:\d+') { throw 'Assertion caller was not recorded' }
     }
