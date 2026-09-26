@@ -31,12 +31,7 @@ EnsureWorkerRunning() {
             return
         StopBrowserWorker()
         try {
-            guid := Buffer(16)
-            if DllCall("ole32\CoCreateGuid", "Ptr", guid, "Int") != 0
-                throw Error("パイプ名を作成できませんでした。")
-            guidText := Buffer(78)
-            DllCall("ole32\StringFromGUID2", "Ptr", guid, "Ptr", guidText, "Int", 39)
-            pipeName := "youtube-helper-" StrGet(guidText, "UTF-16")
+            pipeName := "youtube-helper-" NewRecordId()
             ; Duplex byte pipe, nonblocking server, local clients only, one instance.
             WorkerState.PipeHandle := DllCall("CreateNamedPipeW", "Str", "\\.\pipe\" pipeName,
                 "UInt", 0x80003, "UInt", 9, "UInt", 1, "UInt", 65536,

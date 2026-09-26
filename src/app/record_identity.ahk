@@ -1,4 +1,4 @@
-﻿; Stable IDs shared by profiles, items, and isolated temporary files.
+﻿; GUID generation shared by library records, temporary files, and worker pipes.
 NewRecordId() {
     guid := Buffer(16), text := Buffer(78)
     if DllCall("ole32\CoCreateGuid", "Ptr", guid, "Int") != 0
