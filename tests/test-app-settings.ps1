@@ -58,13 +58,6 @@ Invoke-AppFixture -Body @'
     Assert(KeyCalls.Length=2 && !KeyCalls[1].Enabled && KeyCalls[2].Enabled,"reload changes each affected binding once")
     SaveSettingsPreferences(oldPreferences,SettingsDatabasePath)
     ReloadAppSettings()
-    priorKey := ShortcutKeys["reaction"]
-    failed := false
-    conflictingKeys := CurrentShortcutMap(), conflictingKeys["reaction"] := "^!q"
-    try SaveShortcutMap(conflictingKeys)
-    catch
-        failed := true
-    Assert(failed && ShortcutKeys["reaction"]=priorKey,"duplicate key rejected transactionally")
     for interval in ReactionIntervals {
         SaveReactionDefaults(CreateReactionOptions(1,1,interval))
         Assert(LoadSettings(SettingsDatabasePath).DefaultReactionIntervalMs=interval,"interval persisted " interval)
@@ -77,92 +70,10 @@ Invoke-AppFixture -Body @'
         Assert(job.Completed=count && !ActiveReactionJob,"exact completion " count)
     }
 
-    RuntimePorts.BrowserRequest := 0
-    schemaPath := A_ScriptDir "\schema-check.db"
-    schemaState := CreateTestSettingsSnapshot()
-    schemaState.SharedDanmakuItems := [
-        {Id:"quotes-label",Name:Chr(34) "quoted label" Chr(34), Text:"  👏👏  ",Slot:0},
-        {Id:"quotes-body",Name:"quoted text", Text:Chr(34) "👏" Chr(34),Slot:0},
-        {Id:"single-quotes",Name:"single quotes", Text:"'👏'",Slot:0}]
-    OpenSettingsRepository(schemaPath).SaveAll(schemaState)
-    roundTrip := LoadSettings(schemaPath)
-    for i, expected in schemaState.SharedDanmakuItems {
-        Assert(roundTrip.SharedDanmakuItems[i].Name == expected.Name, "database preserves label quotes")
-        Assert(roundTrip.SharedDanmakuItems[i].Text == expected.Text, "database preserves literal text and spaces")
-    }
-    longText := ""
-    Loop 35000
-        longText .= "👏"
-    for length in [32767, 65534, 70000] {
-        expected := SubStr(longText, 1, length - Mod(length, 2))
-        schemaState.SharedDanmakuItems := [{Id:"long-shared",Name:"long",Text:expected,Slot:0}]
-        schemaState.Profiles[1].Items := [{Id:"long-profile",Name:"long",Text:expected,Slot:0}]
-        OpenSettingsRepository(schemaPath).SaveAll(schemaState)
-        actual := LoadSettings(schemaPath)
-        Assert(actual.SharedDanmakuItems[1].Text == expected, "long shared text round-trip " length)
-        Assert(actual.Profiles[1].Items[1].Text == expected, "long profile text round-trip " length)
-    }
     LastReactionResult.Detail := "previous failure"
     completedJob := CreateReactionJob({Window:123,Total:1})
     ActiveReactionJob := completedJob
-    RuntimePorts.BrowserRequest := (*) => {State:"operated"}
     RunReactionSendLoop(completedJob)
     RuntimePorts.BrowserRequest := 0
     Assert(LastReactionResult.Detail = "" && InStr(LastReactionResult.Message, "完了"), "success clears previous failure detail")
-    savedRoundTrip := FileRead(schemaPath,"RAW")
-    schemaState.SharedDanmakuItems[1].Text := "first`nsecond"
-    rejected := false
-    try OpenSettingsRepository(schemaPath).SaveAll(schemaState)
-    catch
-        rejected := true
-    Assert(rejected && SameFileBytes(FileRead(schemaPath,"RAW"),savedRoundTrip) && !FileExist(schemaPath ".new"), "multiline text cannot corrupt persisted database")
-    schemaState.SharedDanmakuItems[1].Text := "👏"
-    bulkState := CreateTestSettingsSnapshot()
-    bulkState.Profiles := [], bulkState.InputProfileId := ""
-    Loop 50 {
-        bulkProfile := {Name:"配信者" A_Index,Channel:"/channel/fixture" A_Index,Id:NewRecordId(),Items:[]}
-        Loop 10
-            bulkProfile.Items.Push({Id:NewRecordId(),Name:"弾幕" A_Index,Text:"  👏" Chr(34) "引用符" Chr(34) "👏  ",Slot:0})
-        bulkState.Profiles.Push(bulkProfile)
-    }
-    OpenSettingsRepository(schemaPath).SaveAll(bulkState)
-    bulkRead := LoadSettings(schemaPath)
-    Assert(bulkRead.Profiles.Length = 50, "bulk save retains all sections")
-    for i, profile in bulkRead.Profiles {
-        Assert(profile.Name == bulkState.Profiles[i].Name && profile.Items.Length = 10, "bulk save retains author and count")
-        for j, item in profile.Items
-            Assert(item.Text == bulkState.Profiles[i].Items[j].Text, "bulk save preserves unicode quotes and spaces")
-    }
-    diskBeforeLock := LoadSettings(schemaPath)
-    blocker := SqliteConnection(schemaPath)
-    blocker.Exec("BEGIN IMMEDIATE")
-    failed := false
-    try OpenSettingsRepository(schemaPath).SaveAll(schemaState)
-    catch
-        failed := true
-    finally {
-        blocker.Exec("ROLLBACK"), blocker.Close()
-    }
-    Assert(failed && LoadSettings(schemaPath).Profiles.Length=diskBeforeLock.Profiles.Length,"competing writer preserves database")
-    ReactionCounts.Push(7)
-    ReactionIntervals.Push(75)
-    try {
-        schemaState.DefaultReactionCount := 7
-        schemaState.DefaultReactionIntervalMs := 75
-        OpenSettingsRepository(schemaPath).SaveAll(schemaState)
-        schemaRead := LoadSettings(schemaPath)
-        Assert(schemaRead.DefaultReactionCount = 7 && schemaRead.DefaultReactionIntervalMs = 75, "store accepts options from shared schema")
-        Assert(SettingOptionLabels(ReactionCounts, "回")[-1] = "7回" && SettingOptionLabels(ReactionIntervals, " ms")[-1] = "75 ms", "UI labels follow shared schema")
-    } finally {
-        ReactionCounts.Pop()
-        ReactionIntervals.Pop()
-        CloseSettingsStore()
-        FileDelete(schemaPath)
-    }
-
-'@ -Helpers @'
-SameFileBytes(left,right) {
-    return left.Size=right.Size && (!left.Size || DllCall("msvcrt\memcmp","Ptr",left,"Ptr",right,"UPtr",left.Size,"CDecl Int")=0)
-}
-
 '@

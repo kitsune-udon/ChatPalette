@@ -96,12 +96,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | ライブラリ操作 | [test-app-library.ps1](../../tests/test-app-library.ps1) | 弾幕・配信者・割当・Undoの確定、保存失敗時の保全、チャンネル連携 |
 | 入力対象の確定 | [test-input-context.ps1](../../tests/test-input-context.ps1) | 自動判別の結果を画面更新と独立して保持。判別・保存の失敗時は入力計画を作らず、手動・共通入力も検証。画面・ブラウザー操作なし |
 | 入力計画 | [test-app-input-plan.ps1](../../tests/test-app-input-plan.ps1) | IDと本文の固定、並べ替え・管理画面からの復帰後の選択保持、入力前のパレット表示・前面確認、送信直前の再検証、対象変更時の中止、部分入力を再送しないこと |
-| 設定往復（画面操作不要） | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定の独立保存、キーの巻き戻し、競合・Unicode・長文の保持 |
+| 設定のアプリ連携（画面操作不要） | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定の独立保存と公開、キーの巻き戻し、リアクション設定と実行結果の反映 |
 | 通信・実行 | [test-app-worker.ps1](../../tests/test-app-worker.ps1) | 実パイプ通信、起動・終了・再起動の資源所有、失敗時の復旧、登録同期と操作制限の解除 |
 | ワーカーの終了失敗 | [test-worker-cleanup.ps1](../../tests/test-worker-cleanup.ps1) | 終了を確認できない場合のハンドル所有・再入拒否・明示的な復旧。11の故障ケースをそれぞれ新しいプロセスで実行し、ケース名を記録する |
 | ワーカー単体の寿命 | [test-worker-lifetime.ps1](../../tests/test-worker-lifetime.ps1) | パイプ切断・通知イベント欠落・接続先不在での終了とハンドル解放。実ワーカーを使い、画面・キー・ブラウザー操作を要しないHeadless検査 |
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
-| SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、バックアップと復旧 |
+| SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、バックアップと復旧。Unicode・長文・複数配信者の保存往復は独立した合成データで確認し、アプリ初期化を要しない |
 | 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 実DBとパイプ通信を使い、登録の検証・保存・同期を画面操作不要で確認。中止・同期失敗時のデータと理由を保全し、再同期まで操作を拒否 |
 | 登録状態の表示 | [test-registration-display.ps1](../../tests/test-registration-display.ps1) | DBを直接読み、通信・操作制限・診断更新を行わないこと。読み取り失敗と回復も非表示コントロールで確認するHeadless検査 |
 | 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面・キー解放は代替処理を使うHeadless検査 |
