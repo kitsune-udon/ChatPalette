@@ -4,17 +4,17 @@ $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot -Parent
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $project 'dist' }
 . (Join-Path $PSScriptRoot 'release-files.ps1')
-$version = Get-ReleaseVersion $project
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
-$zipPath = Join-Path $output "ChatPalette-$version.zip"
-if (Test-Path -LiteralPath $zipPath) { throw 'Release archive already exists. Use a new version or output directory.' }
 $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
 $payload = Join-Path $stage 'files'
 $temporaryZip = Join-Path $stage 'release.zip'
 try {
     New-Item -ItemType Directory -Path $payload -Force | Out-Null
     Copy-ReleaseFiles $project $payload
+    $version = Get-ReleaseVersion $payload
+    $zipPath = Join-Path $output "ChatPalette-$version.zip"
+    if (Test-Path -LiteralPath $zipPath) { throw 'Release archive already exists. Use a new version or output directory.' }
     # ZIP names and checksums share one relative-path representation.
     $entries = @(Get-ChildItem -LiteralPath $payload -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
         [pscustomobject]@{Path=$_.FullName; Name=$_.FullName.Substring($payload.Length + 1).Replace('\','/')}

@@ -6,10 +6,6 @@ if (!$OutputDirectory) { $OutputDirectory=Join-Path $project 'dist' }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $output=(Resolve-Path -LiteralPath $OutputDirectory).Path
 . (Join-Path $PSScriptRoot 'release-files.ps1')
-$version=Get-ReleaseVersion $project
-$zip=Join-Path $output "ChatPalette-$version.zip"
-$report=Join-Path $output "ChatPalette-$version.validation.json"
-if ((Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath $report)) { throw 'Release output exists; choose a new directory.' }
 $stage=Join-Path (Join-Path $project 'tests\.tmp') ('v-'+[guid]::NewGuid().ToString('N').Substring(0,16))
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 $completed=$false
@@ -17,6 +13,10 @@ $temporaryReport=Join-Path $output ('validation-'+[guid]::NewGuid().ToString('N'
 try {
     # Freeze the allowlisted inputs once. Validate and package exactly this copy.
     Copy-ReleaseFiles $project $stage
+    $version=Get-ReleaseVersion $stage
+    $zip=Join-Path $output "ChatPalette-$version.zip"
+    $report=Join-Path $output "ChatPalette-$version.validation.json"
+    if ((Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath $report)) { throw 'Release output exists; choose a new directory.' }
     $inputHashes=@{}
     foreach($file in @(Get-ReleaseFiles $stage)) { $inputHashes[$file.FullName]=(Get-FileHash -LiteralPath $file.FullName).Hash }
     & (Join-Path $stage 'scripts\check-source.ps1') -ProjectRoot $stage

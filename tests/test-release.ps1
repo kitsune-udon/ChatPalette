@@ -222,4 +222,39 @@ try {
     [IO.File]::WriteAllBytes($verifierPath,$verifierBytes)
     [IO.File]::WriteAllBytes($runnerPath,$runnerSource)
 }
-Write-Output 'PASS: release contents, privacy exclusions, checksums, compression recovery, report publication and concurrent overwrite protection.'
+# VERSION belongs to the captured inputs, including an edit just before copying.
+try {
+    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath)`r`n# Isolated snapshot fixture: no nested tests.`r`n",[Text.UTF8Encoding]::new($true))
+    foreach ($script in @('build-release.ps1','verify-release.ps1')) {
+        $entry=Join-Path $release ('scripts\'+$script)
+        $entryBytes=[IO.File]::ReadAllBytes($entry)
+        $snapshotOutput=Join-Path $release ('snap-'+$script.Substring(0,1))
+        $copyStep=if ($script -eq 'build-release.ps1') { '    Copy-ReleaseFiles $project $payload' }
+            else { '    Copy-ReleaseFiles $project $stage' }
+        $editVersion=@'
+    [IO.File]::WriteAllText((Join-Path $project 'VERSION'),"99.99.100-snapshot`n",[Text.UTF8Encoding]::new($false))
+'@
+        try {
+            Edit-TestSource $release ('scripts\'+$script) $copyStep ($editVersion+"`r`n"+$copyStep)
+            & $entry -OutputDirectory $snapshotOutput | Out-Null
+            $snapshotZip=Join-Path $snapshotOutput 'ChatPalette-99.99.100-snapshot.zip'
+            if (!(Test-Path -LiteralPath $snapshotZip)) { throw 'Archive name does not follow the captured VERSION' }
+            $archive=[IO.Compression.ZipFile]::OpenRead($snapshotZip)
+            try {
+                $reader=[IO.StreamReader]::new($archive.GetEntry('VERSION').Open())
+                try { $capturedVersion=$reader.ReadToEnd().Trim() } finally { $reader.Dispose() }
+                if ($capturedVersion -cne '99.99.100-snapshot') { throw 'Archive contents do not match its version' }
+            } finally { $archive.Dispose() }
+            if ($script -eq 'verify-release.ps1') {
+                $record=[IO.File]::ReadAllText((Join-Path $snapshotOutput 'ChatPalette-99.99.100-snapshot.validation.json')) | ConvertFrom-Json
+                if ($record.Version -cne $capturedVersion -or $record.Archive -cne [IO.Path]::GetFileName($snapshotZip)) {
+                    throw 'Validation report does not follow the captured VERSION'
+                }
+            }
+        } finally {
+            [IO.File]::WriteAllBytes($entry,$entryBytes)
+            [IO.File]::WriteAllBytes($versionFile,$originalVersion)
+        }
+    }
+} finally { [IO.File]::WriteAllBytes($runnerPath,$runnerSource) }
+Write-Output 'PASS: release snapshots, contents, privacy exclusions, checksums, compression recovery, report publication and concurrent overwrite protection.'

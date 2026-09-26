@@ -91,7 +91,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`CodexS
 | メモリキャッシュ | [test-storage.ps1](../../tests/test-storage.ps1) | メモリキャッシュの再利用・期限・件数・失敗後の再取得と登録更新 |
 | ブラウザー診断の出力 | [test-browser-report.ps1](../../tests/test-browser-report.ps1) | 不正な引数の拒否、診断出力先の解決・作成、失敗記録、既存レポートの保護。実ブラウザー操作なし |
 | テスト実行 | [test-runner.ps1](../../tests/test-runner.ps1) | テスト選択と隔離、子プロセス・環境の後始末、PowerShell・AHKの判定失敗と呼び出し位置、例外が捕捉された場合の失敗記録 |
-| 配布 | [test-release.ps1](../../tests/test-release.ps1) | 必須ファイルの欠落・同名フォルダーの拒否、収録範囲・個人データ除外・ハッシュ、圧縮と公開の失敗時処理、上書き防止 |
+| 配布 | [test-release.ps1](../../tests/test-release.ps1) | 必須ファイルの欠落・同名フォルダーの拒否、収録範囲・個人データ除外・ハッシュ、コピーした版番号とZIP・検証記録の一致、圧縮と公開の失敗時処理、上書き防止 |
 
 ## 失敗したとき
 
