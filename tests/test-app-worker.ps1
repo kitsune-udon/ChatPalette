@@ -5,25 +5,11 @@ $release = New-TestRuntime
 $launch = '            if !DllCall("CreateProcessW", "Str", executable'
 Edit-TestSource $release 'src/browser/worker_client.ahk' $launch ('            executable := ProbeWorkerExecutable(executable)' + "`r`n" + $launch)
 Invoke-AppFixture -Runtime $release -Body @'
-    global WorkerLaunchFailure := true, FailedStartHandles := []
-    priorCritical := A_IsCritical, startupFailed := false
-    Critical(19)
-    try EnsureWorkerRunning()
-    catch as failure {
-        startupFailed := failure is OSError
-        startupCause := failure.Message
-    }
-    Assert(startupFailed && FailedStartHandles.Length=2,"native process launch fails after pipe and notification creation")
-    Assert(!IsWorkerRunning() && !WorkerState.ProcessId && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle,"failed startup releases all worker ownership")
-    for handle in FailedStartHandles
-        Assert(!DllCall("GetHandleInformation","Ptr",handle,"UInt*",&flags:=0),"failed startup closes its native handle")
-    Assert(A_IsCritical=19,"failed startup restores caller interruption state")
-    Critical(priorCritical)
-    for entry in ["transport","browser"] {
-        reply := entry="transport" ? NativeSendWorkerRequest(123,"verify_input") : NativeRequestBrowserOperation(123,"verify_input")
-        Assert(reply.State="unavailable" && reply.HasOwnProp("Detail") && reply.Detail==startupCause,entry ": startup failure preserves its cause in the reply")
-        Assert(!WorkerState.RequestActive && !IsBrowserOperationBusy && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle,entry ": startup failure releases request gates and all created resources")
-    }
+    global WorkerLaunchFailure := true
+    reply := NativeRequestBrowserOperation(123,"verify_input")
+    Assert(reply.State="unavailable" && reply.HasOwnProp("Detail") && reply.Detail==OSError(2).Message,"browser operation reports its startup failure")
+    Assert(!WorkerState.RequestActive && !IsBrowserOperationBusy && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle,"startup failure releases request gates and all created resources")
+    Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"startup failure restores the application window")
     WorkerLaunchFailure := false
     identityWindow := Gui(), identityHwnd := identityWindow.Hwnd
     Assert(!NativeIsBrowser(identityHwnd),"native identity rejects an existing non-browser window")
@@ -178,12 +164,7 @@ AdvancingTransportClock() {
     return now
 }
 ProbeWorkerExecutable(executable) {
-    global FailedStartHandles
-    if WorkerLaunchFailure {
-        FailedStartHandles := [WorkerState.PipeHandle,WorkerState.SignalHandle]
-        return A_ScriptDir "\missing-worker.exe"
-    }
-    return executable
+    return WorkerLaunchFailure ? A_ScriptDir "\missing-worker.exe" : executable
 }
 CancelDuringFixtureWait() {
     global StoppedWhileWaiting := IsBrowserOperationBusy

@@ -1,6 +1,51 @@
 ﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
+# Native startup and transport faults do not require settings or application windows.
+$startup = New-TestRuntime
+$launch = '            if !DllCall("CreateProcessW", "Str", executable'
+Edit-TestSource $startup 'src/browser/worker_client.ahk' $launch ('            executable := ProbeWorkerExecutable(executable)' + "`r`n" + $launch)
+Invoke-AhkTest -Runtime $startup -Source @'
+#Requires AutoHotkey v2.0
+#Include %A_ScriptDir%\src\app\app_modules.ahk
+global WorkerLaunchFailure := true, FailedStartHandles := []
+OnExit(StopBrowserWorker)
+priorCritical := A_IsCritical, startupFailed := false
+Critical(19)
+try EnsureWorkerRunning()
+catch as failure {
+    startupFailed := failure is OSError
+    startupCause := failure.Message
+}
+Assert(startupFailed && FailedStartHandles.Length=2,"native process launch fails after pipe and notification creation")
+Assert(!IsWorkerRunning() && !WorkerState.ProcessId && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle,"failed startup releases all worker ownership")
+for handle in FailedStartHandles
+    Assert(!DllCall("GetHandleInformation","Ptr",handle,"UInt*",&flags:=0),"failed startup closes its native handle")
+Assert(A_IsCritical=19,"failed startup restores caller interruption state")
+Critical(priorCritical)
+reply := NativeSendWorkerRequest(0,"fixture_no_action")
+Assert(reply.State="unavailable" && reply.HasOwnProp("Detail") && reply.Detail==startupCause,"transport preserves the native startup failure in its reply")
+Assert(!WorkerState.RequestActive && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle,"startup failure releases the request gate and all created resources")
+WorkerLaunchFailure := false
+reply := NativeSendWorkerRequest(0,"fixture_no_action")
+Assert(reply.State="unavailable" && reply.Detail="" && IsWorkerRunning() && WorkerState.Sequence=1,"explicit retry receives a non-operating reply from a fresh worker without replay")
+Assert(DllCall("GetProcessId","Ptr",WorkerState.ProcessHandle,"UInt")=WorkerState.ProcessId,"retry owns the exact worker process")
+handles := [WorkerState.ProcessHandle,WorkerState.PipeHandle,WorkerState.SignalHandle]
+StopBrowserWorker()
+for handle in handles
+    Assert(!DllCall("GetHandleInformation","Ptr",handle,"UInt*",&flags:=0),"retry cleanup closes each owned native handle")
+Assert(!FileExist(A_ScriptDir "\data") && !IsSet(PaletteWindow),"startup fault and retry need no settings or application window")
+FileAppend("PASS: " Checks " worker startup and retry checks; no application startup`n","*")
+ExitApp()
+ProbeWorkerExecutable(executable) {
+    global FailedStartHandles
+    if WorkerLaunchFailure {
+        FailedStartHandles := [WorkerState.PipeHandle,WorkerState.SignalHandle]
+        return A_ScriptDir "\missing-worker.exe"
+    }
+    return executable
+}
+'@
 # The connection owns worker lifetime, including an owner that disappears without shutdown.
 $pipeRuntime = New-TestRuntime
 $workerEntry = Join-Path $pipeRuntime 'src\browser\browser_worker.ps1'
