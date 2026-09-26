@@ -1,12 +1,8 @@
 ﻿; Pure presentation builders: no controls, timers, globals or browser calls.
 BuildPaletteContext(profiles, profile, autoMode, detectionMessage) {
-    choices := [], index := 0
-    for i, entry in profiles {
-        choices.Push({Id:entry.Id,Name:entry.Name})
-        if profile && entry.Id == profile.Id
-            index := i
-    }
-    return {Choices:choices, Choice:index,
+    index := profile ? FindProfileIndexById(profiles,profile.Id) : 0
+    ; Published profiles are immutable; SyncProfileChoices owns the displayed snapshot.
+    return {Choices:profiles, Choice:index,
         Context:"弾幕の入力対象：" (profile ? profile.Name : "共通の弾幕のみ")
             . "`n" (autoMode ? detectionMessage : "手動選択：下の欄で配信者を選べます。")}
 }
@@ -21,9 +17,8 @@ BuildPaletteItems(profile, sharedItems, query, keys) {
 }
 BuildManagementPresentation(profiles, sharedItems, editId, keys) {
     index := FindProfileIndexById(profiles,editId), profile := index ? profiles[index] : 0
-    choices := [{Id:"",Name:"共通の弾幕"}]
-    for entry in profiles
-        choices.Push({Id:entry.Id,Name:entry.Name})
+    choices := profiles.Clone()
+    choices.InsertAt(1,{Id:"",Name:"共通の弾幕"})
     id := profile ? profile.Id : ""
     return {Choices:choices, Choice:index+1, ProfileId:id,
         Content:BuildManagedContent(profile ? profile.Items : sharedItems,id,keys),

@@ -54,6 +54,25 @@ model := BuildPaletteContext(modelProfiles,0,true,"未検出")
 Assert(model.Choice=0 && InStr(model.Context,"共通の弾幕のみ"),"unmatched profile does not appear selected")
 model := BuildPaletteContext(modelProfiles,modelProfiles[1],false,"")
 Assert(model.Choice=1 && InStr(model.Context,"配信者"),"manual selection uses its stable identity")
+; Choices borrow immutable profiles until the control captures labels and IDs.
+choiceProfiles := [{Id:"case",Name:"同名",Channel:"",Items:[]},{Id:"CASE",Name:"同名",Channel:"",Items:[]}]
+oldContext := BuildPaletteContext(choiceProfiles,choiceProfiles[2],false,"")
+oldManagement := BuildManagementPresentation(choiceProfiles,[],"CASE",modelKeys)
+Assert(oldContext.Choice=2 && oldManagement.Choice=3,"equal labels retain case-sensitive profile identity")
+Assert(choiceProfiles.Length=2 && choiceProfiles[1].Id=="case" && oldManagement.Choices[1].Id="",
+    "management prepends shared choice without changing published profiles")
+choiceProfiles := choiceProfiles.Clone(), choiceProfiles[2] := choiceProfiles[2].Clone()
+choiceProfiles[2].Name := "変更後", choiceProfiles.RemoveAt(1)
+nextContext := BuildPaletteContext(choiceProfiles,choiceProfiles[1],false,"")
+nextManagement := BuildManagementPresentation(choiceProfiles,[],"CASE",modelKeys)
+Assert(oldContext.Choices.Length=2 && oldContext.Choices[2].Id=="CASE" && oldContext.Choices[2].Name="同名",
+    "prior palette choices survive committed rename and removal")
+Assert(oldManagement.Choices.Length=3 && oldManagement.Choices[3].Id=="CASE" && oldManagement.Choices[3].Name="同名",
+    "prior management choices survive committed rename and removal")
+Assert(nextContext.Choice=1 && nextManagement.Choice=2 && nextContext.Choices[1].Name="変更後"
+    && nextManagement.Choices[2].Name="変更後","refresh observes the new label and shifted position for the same ID")
+Assert(BuildPaletteContext([],0,false,"").Choices.Length=0 && BuildManagementPresentation([],[],"",modelKeys).Choices.Length=1,
+    "empty library has no palette profile and only the shared management choice")
 model := BuildManagementPresentation(modelProfiles,shared,"deleted-profile",modelKeys)
 Assert(model.ProfileId="" && model.Choice=1 && ManagedCellText(model.Content,1,4)="s1","deleted editing target falls back to shared items")
 Assert(ManagedCellText(model.Content,1,1)="共通" && ManagedCellText(model.Content,1,2)="shared" && ManagedCellText(model.Content,1,3)="Ctrl+Shift+F12","management resolves displayed values and captured shared keys")
