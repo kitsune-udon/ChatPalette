@@ -16,11 +16,14 @@ for count in [1000,10000,100000] {
         items.Push({Id:"item-" A_Index,Name:"name" A_Index,Text:"synthetic text " A_Index,Slot:0})
     state := {Profiles:[],SharedDanmakuItems:items}
     base := BuildLibraryStoragePlan(state,Map())
-    for operation in ["edit","swap","undo","validate"] {
+    for operation in ["edit","swap","undo","reverse","validate"] {
         draftItems := items.Clone(), middle := count//2
         if operation = "edit" {
             draftItems[middle] := items[middle].Clone()
             draftItems[middle].Text := "edited"
+        } else if operation = "reverse" {
+            Loop count
+                draftItems[A_Index] := items[count-A_Index+1]
         } else if operation != "validate" {
             draftItems[middle] := items[middle+1], draftItems[middle+1] := items[middle]
         }

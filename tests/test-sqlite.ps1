@@ -45,6 +45,37 @@ try {
     Assert(rows.Length=1 && rows[1][1]=="Ω","failed decoding resets the statement and clears every binding before reuse")
     Assert(reuse.Scalar("SELECT hex(value) FROM sample WHERE id=6")=="70726566697800737566666978","read rejection preserves all stored bytes")
 } finally reuse.Close()
+; Reordering must keep distinct 64-bit ranks distinct without a floating-point sort.
+rankStore := SettingsRepository(A_ScriptDir "\exact-ranks.db",true)
+try {
+    rankState := CreateDefaultSettings()
+    rankState.SharedDanmakuItems := [{Id:"rank-left",Name:"left",Text:"left",Slot:0},{Id:"rank-right",Name:"right",Text:"right",Slot:0}]
+    rankStore.SaveAll(rankState)
+    rankStore.Db.Exec("UPDATE items SET position=9007199254740992 WHERE id='rank-left'; UPDATE items SET position=9007199254740993 WHERE id='rank-right'")
+    original := rankStore.Load()
+    reordered := original.Clone(), reordered.SharedDanmakuItems := [original.SharedDanmakuItems[2],original.SharedDanmakuItems[1]]
+    rankStore.SaveAll(reordered)
+    VerifySettingsRoundTrip(reordered,rankStore.Load())
+    Assert(true,"reordering neighboring ranks above float precision survives reload")
+    rankStore.SaveAll(original)
+    VerifySettingsRoundTrip(original,rankStore.Load())
+    Assert(true,"restoring the prior item order also preserves exact ranks")
+    rankStore.SaveLibrary(reordered,"")
+    VerifySettingsRoundTrip(reordered,rankStore.Load())
+    Assert(true,"incremental save preserves the same exact-rank reorder")
+    ; Insert at the front, so map insertion order differs from the saved item sequence.
+    inserted := reordered.Clone(), inserted.SharedDanmakuItems := reordered.SharedDanmakuItems.Clone()
+    inserted.SharedDanmakuItems.InsertAt(1,{Id:"rank-new",Name:"new",Text:"new",Slot:0})
+    rankStore.SaveLibrary(inserted,"")
+    mixed := inserted.Clone(), mixed.SharedDanmakuItems := [inserted.SharedDanmakuItems[3],inserted.SharedDanmakuItems[2],inserted.SharedDanmakuItems[1]]
+    rankStore.SaveLibrary(mixed,"")
+    VerifySettingsRoundTrip(mixed,rankStore.Load())
+    Assert(true,"reorder after insertion uses saved logical order instead of map insertion order")
+    mixed.SharedDanmakuItems := [mixed.SharedDanmakuItems[3],mixed.SharedDanmakuItems[1]]
+    rankStore.SaveLibrary(mixed,"")
+    VerifySettingsRoundTrip(mixed,rankStore.Load())
+    Assert(true,"reorder with deletion uses only surviving ranks")
+} finally rankStore.Close()
 ; Failed reads cannot publish a new comparison baseline before the transaction succeeds.
 snapshotStore := SettingsRepository(A_ScriptDir "\snapshot-publication.db",true)
 snapshotState := CreateDefaultSettings()

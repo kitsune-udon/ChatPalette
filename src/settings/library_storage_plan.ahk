@@ -48,18 +48,19 @@ BuildScopeStorageDelta(items, old, force := false) {
             end--, oldEnd--
     }
     ; Whole-scope reconciliation already has the complete index and item sequence.
-    previous := old ? old.Rows : Map(), changedItems := items
+    previous := old ? old : {Rows:Map(),Items:[]}, changedItems := items
     if !old
-        previous.CaseSense := "On"
+        previous.Rows.CaseSense := "On"
     if old && (first > 1 || oldEnd < old.Items.Length) {
-        previous := Map(), previous.CaseSense := "On", changedItems := []
+        previous := {Rows:Map(),Items:[]}, previous.Rows.CaseSense := "On", changedItems := []
         Loop Max(0,oldEnd-first+1) {
-            id := old.Items[first+A_Index-1].Id
-            previous[id] := old.Rows[id]
+            item := old.Items[first+A_Index-1]
+            previous.Items.Push(item)
+            previous.Rows[item.Id] := old.Rows[item.Id]
         }
         Loop Max(0,end-first+1) {
             item := items[first+A_Index-1]
-            if item.HasOwnProp("Id") && old.Rows.Has(item.Id) && !previous.Has(item.Id)
+            if item.HasOwnProp("Id") && old.Rows.Has(item.Id) && !previous.Rows.Has(item.Id)
                 throw Error("弾幕の識別子が重複しています。")
             changedItems.Push(item)
         }
@@ -68,11 +69,11 @@ BuildScopeStorageDelta(items, old, force := false) {
     boundary := old && oldEnd < old.Items.Length ? old.Rows[old.Items[oldEnd+1].Id].Position : 0
     updated := BuildItemStorageRows(changedItems,previous,force,preceding,boundary)
     if !updated {
-        previous := old.Rows
+        previous := old
         updated := BuildItemStorageRows(items,previous,force)
     }
     result := {Rows:updated, TextBytes:old && !force ? old.TextBytes : 0, Changed:[], Deleted:[]}
-    for id, row in previous {
+    for id, row in previous.Rows {
         if !force
             result.TextBytes -= StorageRowBytes(row)
         if !updated.Has(id)
@@ -80,11 +81,11 @@ BuildScopeStorageDelta(items, old, force := false) {
     }
     for id, row in updated {
         result.TextBytes += StorageRowBytes(row)
-        if !previous.Has(id) || !SameStoredItem(row,previous[id])
+        if !previous.Rows.Has(id) || !SameStoredItem(row,previous.Rows[id])
             result.Changed.Push(id)
     }
     ; Full reconciliation already owns the complete map; merge only partial ranges.
-    if old && previous != old.Rows {
+    if old && previous != old {
         result.Rows := old.Rows.Clone()
         for id in result.Deleted
             result.Rows.Delete(id)
@@ -107,7 +108,7 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
             throw Error("弾幕の識別子がありません。")
         if rows.Has(item.Id)
             throw Error("弾幕の識別子が重複しています。")
-        priorRow := previous.Get(item.Id,0)
+        priorRow := previous.Rows.Get(item.Id,0)
         sameItem := priorRow && priorRow.Item = item
         if force || !sameItem {
             ValidateSettingsText(item.Name,"弾幕名",true)
@@ -130,14 +131,15 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
             existing.Push(item.Id)
         }
     }
-    ; Sorted available ranks preserve gaps on deletion and only swap two ranks on up/down.
+    ; The saved item sequence already orders ranks exactly; map insertion order does not.
     if !ordered {
-        ranks := ""
-        for id in existing
-            ranks .= rows[id].Position "`n"
-        sorted := StrSplit(RTrim(Sort(ranks,"N"),"`n"),"`n")
+        ranks := []
+        for item in previous.Items {
+            if rows.Has(item.Id)
+                ranks.Push(previous.Rows[item.Id].Position)
+        }
         for i, id in existing
-            SetStorageRowPosition(rows,id,Integer(sorted[i]))
+            SetStorageRowPosition(rows,id,ranks[i])
     }
     ; Existing rows already have ranks; only additions need gap allocation.
     if existing.Length = items.Length

@@ -237,7 +237,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.
 
 | 計測 | 範囲と既定条件 | 引数 |
 |---|---|---|
-| `benchmark-storage.ps1` | 合成データ1千・1万・10万件の編集・隣接交換・Undo・全件検証で、保存計画の計算時間を測る。ウォームアップ1回後の7回の中央値と最大値。SQL取得・DB書き込み・描画・ブラウザー操作は含まない | `-Repeats`は1以上。`-SourceRoot`で同じモジュール構成の比較対象を指定可能 |
+| `benchmark-storage.ps1` | 合成データ1千・1万・10万件の編集・隣接交換・Undo・全件逆順・全件検証で、保存計画の計算時間を測る。ウォームアップ1回後の7回の中央値と最大値。SQL取得・DB書き込み・描画・ブラウザー操作は含まない | `-Repeats`は1以上。`-SourceRoot`で同じモジュール構成の比較対象を指定可能 |
 | `benchmark-ui.ps1` | 隔離DBの合成データ1千・1万件で設定読み込み・実際のパレット描画・検索・管理一覧の全件更新を測る。ウォームアップ1回後の3回の中央値と最大値 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9 |
 
 ```powershell
