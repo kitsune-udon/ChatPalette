@@ -81,11 +81,7 @@ RunPageAction(action, hwnd, releaseBinding := "") {
         }
         if action = "chat_clear" && result.State = "focused" {
             stage := "クリア前の確認"
-            if !result.HasOwnProp("Detail") || result.Detail = "" {
-                result := {State:"wrong_input"}
-                return false
-            }
-            result := RequestBrowserOperation(hwnd,"verify_chat",result.Video,"FocusToken=" result.Detail)
+            result := VerifyChatFocus(hwnd,result)
             if result.State = "ok" {
                 if !CanContinuePageAction(operation) {
                     result := {State:"cancelled"}

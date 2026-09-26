@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'app-fixture.ps1')
 Invoke-AppFixture -Body @'
     global PageCalls := [], ClearCalls := 0, PageForeground := true, PageFailure := "", PageSwitch := false
-    global FocusFailure := "", PageFocusToken := "clear-proof", PageTargetChanged := false
+    global FocusFailure := "", PageFocusToken := "clear-proof", PageTargetChanged := false, VerifiedVideo := "abcdefghijk"
     RuntimePorts.BrowserRequest := PageRequest
     RuntimePorts.Foreground := (hwnd) => PageForeground && hwnd=123
     RuntimePorts.ClearChat := () => CountClear()
@@ -15,6 +15,12 @@ Invoke-AppFixture -Body @'
     Assert(LastBrowserOperation.Mode="chat_clear" && LastBrowserOperation.State="cleared" && LastBrowserOperation.Stage="クリアキー送信","diagnostics describe complete clear action")
     Assert(PageCalls[2].Mode="verify_chat" && PageCalls[2].Video="abcdefghijk","clear pins video from focus result")
     Assert(PageCalls[2].Extra="FocusToken=clear-proof","clear pins the exact element from focus result")
+    for video in ["ABCDEFGHIJK", ""] {
+        VerifiedVideo := video, PageCalls := []
+        Assert(!RunPageAction("chat_clear",123) && ClearCalls=1 && PageCalls.Length=2,"successful verification with another or missing video never deletes")
+        Assert(LastBrowserOperation.State="changed","mismatched verification is reported as a target change")
+    }
+    VerifiedVideo := "abcdefghijk"
     PageTargetChanged := true
     Assert(!RunPageAction("chat_clear",123) && ClearCalls=1,"another chat in the same video is not cleared")
     PageTargetChanged := false, PageFocusToken := "", PageCalls := []
@@ -65,7 +71,7 @@ PageRequest(hwnd,mode,video,extra) {
             return {State:"wrong_input",Video:video}
         if PageSwitch
             PageForeground := false
-        return {State:PageFailure!="" ? PageFailure : "ok",Video:video}
+        return {State:PageFailure!="" ? PageFailure : "ok",Video:VerifiedVideo}
     }
     return {State:"hovered",Video:"abcdefghijk"}
 }

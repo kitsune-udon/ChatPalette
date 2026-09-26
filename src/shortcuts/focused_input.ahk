@@ -28,6 +28,7 @@ CompleteFocusedDanmaku(focus,result) {
             return cancelled
         if !CanContinueFocusedDanmaku(focus)
             return cancelled
+        ; Reject a missing proof before resolving or saving an automatic profile selection.
         if !result.HasOwnProp("Detail") || result.Detail = ""
             return cancelled
         context := ResolveInputContext(pending.Scope,focus.Window)
@@ -36,8 +37,8 @@ CompleteFocusedDanmaku(focus,result) {
         plan := PlanShortcutInput(pending.Library,context,pending.Slot)
         if !CanContinueFocusedDanmaku(focus)
             return cancelled
-        verified := RequestBrowserOperation(focus.Window,"verify_chat",result.Video,"FocusToken=" result.Detail)
-        if verified.State != "ok" || !(verified.Video == result.Video)
+        verified := VerifyChatFocus(focus.Window,result)
+        if verified.State != "ok"
             return cancelled
         ; The sender checks continuation after its final item validation.
         return SendPlannedDanmaku(plan,focus)

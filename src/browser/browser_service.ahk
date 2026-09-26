@@ -69,3 +69,13 @@ NativeVerifyInputTarget(hwnd, expectedVideo) {
     result := RequestBrowserOperation(hwnd, "verify_input", expectedVideo)
     return result.State = "ok" && (expectedVideo = "" || result.Video == expectedVideo)
 }
+
+; Clear and queued input consume the same focus proof and require the same video.
+VerifyChatFocus(hwnd, focus) {
+    if focus.Video = "" || !focus.HasOwnProp("Detail") || focus.Detail = ""
+        return {State:"wrong_input"}
+    result := RequestBrowserOperation(hwnd,"verify_chat",focus.Video,"FocusToken=" focus.Detail)
+    if result.State = "ok" && !(result.Video == focus.Video)
+        return {State:"changed"}
+    return result
+}

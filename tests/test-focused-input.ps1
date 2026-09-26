@@ -27,10 +27,12 @@ Invoke-AppFixture -Body @'
         Assert(!ActivePageAction && !IsBrowserOperationBusy,"deadline decision releases focus ownership: " Scenario)
     }
     RuntimePorts.Clock := 0
-    for scenarioName in ["failure","throw","expired","release_failed","changed_video","changed_field","expired_after_verify","background","background_after_verify","edited","editor","reaction","send_unknown"] {
+    for scenarioName in ["failure","throw","expired","release_failed","changed_video","changed_field","missing_token","verified_video_changed","verified_video_empty","expired_after_verify","background","background_after_verify","edited","editor","reaction","send_unknown"] {
         Scenario := scenarioName, Sent := [], Calls := [], ForegroundOk := true
         Assert(!RunPageAction("chat_focus",123) && !Sent.Length,"rejected input has no effect: " Scenario)
         Assert(!ActivePageAction && !IsBrowserOperationBusy,"failed operation releases ownership: " Scenario)
+        if Scenario="missing_token"
+            Assert(Calls.Length=1,"missing proof prevents target resolution as well as verification")
         if Scenario="send_unknown"
             Assert(LastBrowserOperation.State="unknown","uncertain input is not reported as safely cancelled")
         ActiveEditorDialog := false, ActiveReactionJob := 0
@@ -82,7 +84,7 @@ QueueRequest(hwnd,mode,video,extra) {
                 Assert(!QueueFocusedDanmaku(QueueScope,1,123),"non-focus page action cannot queue")
             if Scenario="throw"
                 throw Error("synthetic failure")
-            return {State:Scenario="failure" ? "focus_failed" : "focused",Video:"abcdefghijk",Detail:"proof"}
+            return {State:Scenario="failure" ? "focus_failed" : "focused",Video:"abcdefghijk",Detail:Scenario="missing_token" ? "" : "proof"}
         } finally IsBrowserOperationBusy := false
     }
     if mode="browser_context"
@@ -101,7 +103,7 @@ QueueRequest(hwnd,mode,video,extra) {
                     break
                 }
         }
-        return {State:Scenario="changed_field" ? "wrong_input" : "ok",Video:video}
+        return {State:Scenario="changed_field" ? "wrong_input" : "ok",Video:Scenario="verified_video_changed" ? "ABCDEFGHIJK" : (Scenario="verified_video_empty" ? "" : video)}
     }
     throw Error("Unexpected request")
 }
