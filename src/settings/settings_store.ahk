@@ -14,7 +14,9 @@ OpenSettingsRepository(path) {
     return ActiveSettingsRepository
 }
 LoadSettings(path) {
-    try return OpenSettingsRepository(path).Load()
+    ; Opening owns prior connections and constructor rollback; only undo a failed read here.
+    repository := OpenSettingsRepository(path)
+    try return repository.Load()
     catch as failure {
         try CloseSettingsStore()
         catch as closeFailure

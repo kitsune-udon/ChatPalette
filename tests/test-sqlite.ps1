@@ -455,6 +455,27 @@ FileMove(recoveryPath,recoveryPath ".bad",false)
 FileMove(recoveryPath ".good",recoveryPath,false)
 VerifySettingsRoundTrip(recoveryState,LoadSettings(recoveryPath))
 Assert(true,"repaired database reloads in the same process")
+; Opening owns the old connection; a failed switch must not trigger read cleanup.
+previousRepository := ActiveSettingsRepository, previousBaseline := previousRepository.Saved
+switchPath := A_ScriptDir "\switch-after-close.db", caught := 0
+previousRepository.Db.DefineProp("Close",{Call:RejectSettingsClose})
+try {
+    try LoadSettings(switchPath)
+    catch as failure
+        caught := failure
+} finally previousRepository.Db.DeleteProp("Close")
+Assert(previousRepository.Db.ProbeCloseCalls=1,
+    "failed connection switch closes the prior connection only once; calls=" previousRepository.Db.ProbeCloseCalls)
+Assert(caught && caught.Message="settings close probe failure","failed opening is returned without a second cleanup error")
+Assert(ActiveSettingsRepository=previousRepository && previousRepository.Db.Handle && previousRepository.Saved=previousBaseline,
+    "failed connection switch retains the current repository and its saved baseline")
+Assert(!FileExist(switchPath),"failed connection switch does not create the requested database")
+switched := LoadSettings(switchPath)
+Assert(!previousRepository.Db.Handle && ActiveSettingsRepository.Path==switchPath,
+    "explicit switch retry closes the previous connection and publishes the new owner")
+VerifySettingsRoundTrip(CreateDefaultSettings(),switched)
+VerifySettingsRoundTrip(recoveryState,LoadSettings(recoveryPath))
+Assert(true,"switch retry preserves both the new defaults and the previous database")
 CloseSettingsStore()
 FileAppend("PASS: " Checks " SQLite storage, delta, failure and recovery checks; no application startup`n","*")
 ExitApp()
