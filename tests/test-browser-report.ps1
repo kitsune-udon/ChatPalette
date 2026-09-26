@@ -55,7 +55,7 @@ Edit-TestSource $runtime 'scripts/check-browser.ps1' $rootRead '([pscustomobject
 foreach ($state in @('ok','chat_missing','chat_ambiguous')) {
     $fixture=@'
 function Get-Process { return [pscustomobject]@{ProcessName='brave';MainModule=[pscustomobject]@{FileVersionInfo=[pscustomobject]@{FileVersion='test'}}} }
-function Test-ReactionForeground { return $true }
+function Test-BrowserForeground { return $true }
 function Read-BrowserVideoId { return '' }
 $script:AddressBarCache=@{}
 function Find-ChatInput { return @{State='__STATE__';Element=__ELEMENT__} }

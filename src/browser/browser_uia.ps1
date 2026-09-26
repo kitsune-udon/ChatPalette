@@ -5,6 +5,10 @@ function Get-BrowserProcessName([long]$WindowHandle) {
     return (Get-Process -Id $root.Current.ProcessId).ProcessName
 }
 
+function Test-BrowserForeground([long]$WindowHandle) {
+    return Test-ElementWindow ([System.Windows.Automation.AutomationElement]::FocusedElement) $WindowHandle
+}
+
 function Test-ElementWindow($Element, [long]$WindowHandle) {
     if ($null -eq $Element -or $WindowHandle -le 0) { return $false }
     if (!$script:WindowWalkers.ContainsKey($WindowHandle)) {

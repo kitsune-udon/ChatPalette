@@ -18,7 +18,7 @@ $script:invoker | Add-Member ScriptMethod Invoke {
 }
 function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
-function Test-ReactionForeground([long]$WindowHandle) { return $script:foreground }
+function Test-BrowserForeground([long]$WindowHandle) { return $script:foreground }
 function Get-ReactionInvoker($Target) { return $script:invoker }
 function Find-RegisteredReactions([long]$WindowHandle, $Plan) {
     if ($script:switchDuringLookup) { $script:foreground = $false }

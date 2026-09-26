@@ -72,7 +72,7 @@ try {
         'stderr' { "[Console]::Error.WriteLine('PowerShell fixture failure')" }
         'assertion' { "Assert `$false 'PowerShell fixture failure'" }
         'callback-assertion' { @'
-function Test-ReactionForeground { Assert $false 'PowerShell fixture failure' }
+function Test-BrowserForeground { Assert $false 'PowerShell fixture failure' }
 $null=Invoke-PageAction @{Seq=1;Window=123;Mode='chat_focus'}
 '@ }
         'property-assertion' { @'

@@ -7,10 +7,6 @@ $script:ReactionPropertyRequest = $null
 $script:ReactionElementCache = @{}
 $script:ReactionAliases = @('heart|ハート|[❤♥]', 'smil|grin|happy|笑|😀|😁|😄|😊', 'party|celebrat|tada|お祝い|祝|🎉', 'surpris|shock|astonish|flushed|open[_ -]?mouth|\bwow\b|驚|びっくり|赤面|赤らめ|😮|😲|😯|😳', '100|hundred|perfect|💯')
 
-function Test-ReactionForeground([long]$WindowHandle) {
-    return Test-ElementWindow ([System.Windows.Automation.AutomationElement]::FocusedElement) $WindowHandle
-}
-
 function Get-ReactionInvoker($Target) {
     $pattern = $null
     if ($Target.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) { return $pattern }
@@ -232,7 +228,7 @@ function Invoke-ReactionRequest($Request) {
         if ($Request.Mode -notin @('reaction_check','reaction_send') -or
             ($Request.Mode -eq 'reaction_send' -and $Request.Reaction -notmatch '^[1-5]$')) { return $reply }
         # Both checking and sending must still refer to the context that was searched.
-        if (-not (Test-ReactionForeground ([long]$Request.Window))) {
+        if (-not (Test-BrowserForeground ([long]$Request.Window))) {
             $reply.State = 'wrong_window'; return $reply
         }
         if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
@@ -244,7 +240,7 @@ function Invoke-ReactionRequest($Request) {
             $reply.State = 'unsupported'; return $reply
         }
         # UIA lookups may outlive a foreground switch. Check again at the action boundary.
-        if (-not (Test-ReactionForeground ([long]$Request.Window))) {
+        if (-not (Test-BrowserForeground ([long]$Request.Window))) {
             $reply.State = 'wrong_window'; return $reply
         }
         # Never retry after invocation, even if the provider throws or the pipe breaks.

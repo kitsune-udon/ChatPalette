@@ -20,7 +20,7 @@ function Invoke-FixtureRequest($Request) {
 }
 function Read-BrowserVideoId([long]$WindowHandle) { return 'abcdefghijk' }
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
-function Test-ReactionForeground([long]$WindowHandle) { return $true }
+function Test-BrowserForeground([long]$WindowHandle) { return $true }
 $script:fakeTarget = [pscustomobject]@{ Current=[pscustomobject]@{IsOffscreen=$false; IsEnabled=$true} }
 $script:fakeInvoke = [pscustomobject]@{}
 $script:fakeInvoke | Add-Member ScriptMethod Invoke { }

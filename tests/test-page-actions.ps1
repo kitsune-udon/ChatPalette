@@ -143,7 +143,7 @@ $script:chatFailure=''
 $script:focusCalls=0; $script:hoverCalls=0; $script:missing=$false; $script:kind='chat'; $script:throwOnFocus=$false
 $script:finalVideo='abcdefghijk'; $script:reads=0; $script:loseDuringPoint=$false
 function Read-BrowserVideoId($WindowHandle) { $script:reads++; if ($script:reads -gt 1) { return $script:finalVideo }; return $script:video }
-function Test-ReactionForeground($WindowHandle) { return $script:foreground }
+function Test-BrowserForeground($WindowHandle) { return $script:foreground }
 function Test-ElementWindow($Element,$WindowHandle) { return $script:belongs }
 function Find-ChatInput($WindowHandle) {
     if ($script:chatFailure) { return @{State=$script:chatFailure;Element=$null} }

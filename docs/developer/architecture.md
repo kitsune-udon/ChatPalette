@@ -290,6 +290,8 @@ DBがない場合、`CreateDefaultSettings`が空のライブラリと標準設�
 
 ## 通信と障害
 
+ワーカー側の前面確認は`browser_uia.ps1`の`Test-BrowserForeground`を共用します。現在フォーカスされているUIA要素が対象ウィンドウに属するかを既存の`Test-ElementWindow`で確認し、チャット操作・リアクション・ブラウザー診断から同じ入口を使います。特定機能の登録状態には依存しません。
+
 パイプ・通知・プロセスのハンドルと要求番号は`worker_client.ahk`の`WorkerState`がまとめて所有します。生存確認は通信と診断で同じ`IsWorkerRunning`を使い、PIDは保持したプロセスハンドルから取得して通信相手の照合に使います。登録サービスは`IsWorkerRegistrationCurrent`／`MarkWorkerRegistrationCurrent`／`InvalidateWorkerRegistration`を通じて同期状態を扱います。
 
 起動は`CreateProcessW`が返したプロセスハンドルを保持し、不要なスレッドハンドルを直ちに閉じます。終了したプロセスのPIDは再利用され得るため、停止対象をPIDから開き直しません（[Windowsのプロセス識別とハンドルの仕様](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_information)）。起動・終了は`Critical`区間で所有を更新します。`EnsureWorkerRunning`は残っているプロセスの終了を確認してから新規作成を始め、起動途中の失敗では新規作成した資源を解放します。起動前の終了処理は新規作成の巻き戻し対象に含めません。`NativeSendWorkerRequest`は起動例外を応答の`Detail`へ残して受付を解除し、同じ失敗で後始末を再度呼びません。終了時はパイプを閉じて250ms待ち、残っている場合だけ同じハンドルのプロセスを終了して最大2秒待ちます。終了を確認してハンドルを閉じ、確認できなければエラーにしてプロセスハンドルを保持し、次の後始末で再試行できるようにします。

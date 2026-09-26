@@ -97,12 +97,12 @@ function Focus-ChatElement($Target) { $Target.SetFocus() }
 function Wait-ChatFocus($Target, [long]$WindowHandle, [string]$Video) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     do {
-        if (!(Test-ReactionForeground $WindowHandle)) { return 'wrong_window' }
+        if (!(Test-BrowserForeground $WindowHandle)) { return 'wrong_window' }
         $focusedInput = Get-FocusedYouTubeInput $WindowHandle
         if ($null -ne $focusedInput -and $focusedInput.Kind -eq 'chat' -and
             [System.Windows.Automation.Automation]::Compare($Target,$focusedInput.Element)) {
             if ((Read-BrowserVideoId $WindowHandle) -cne $Video) { return 'changed' }
-            if (!(Test-ReactionForeground $WindowHandle)) { return 'wrong_window' }
+            if (!(Test-BrowserForeground $WindowHandle)) { return 'wrong_window' }
             if (Test-FocusedInputIdentity $Target $WindowHandle) { return 'focused' }
             return 'focus_failed'
         }
@@ -137,7 +137,7 @@ function Invoke-PageAction($Request) {
     $window = [long]$Request.Window
     if ($Request.Mode -eq 'chat_focus') { $script:FocusedChat = $null }
     try {
-        if (!(Test-ReactionForeground $window)) { $reply.State='wrong_window'; return $reply }
+        if (!(Test-BrowserForeground $window)) { $reply.State='wrong_window'; return $reply }
         $video = Read-BrowserVideoId $window
         $reply.Video = $video
         if (!$video) { return $reply }
@@ -150,7 +150,7 @@ function Invoke-PageAction($Request) {
             $records = @(Get-YouTubeInputRecords $target $window)
             if ((Get-YouTubeInputKind $records) -ne 'chat') { $reply.State='chat_missing'; return $reply }
             if ((Read-BrowserVideoId $window) -cne $video) { $reply.State='changed'; return $reply }
-            if (!(Test-ReactionForeground $window)) { $reply.State='wrong_window'; return $reply }
+            if (!(Test-BrowserForeground $window)) { $reply.State='wrong_window'; return $reply }
             $reply.State='unknown'
             Focus-ChatElement $target
             $reply.State = Wait-ChatFocus $target $window $video
@@ -170,7 +170,7 @@ function Invoke-PageAction($Request) {
             $reply.State='unsupported'; return $reply
         }
         if ((Read-BrowserVideoId $window) -cne $video) { $reply.State='changed'; return $reply }
-        if (!(Test-ReactionForeground $window)) { $reply.State='wrong_window'; return $reply }
+        if (!(Test-BrowserForeground $window)) { $reply.State='wrong_window'; return $reply }
         $reply.State='unknown'
         # Hover only: clicking a heart can itself send a reaction.
         if (Move-PagePointer $point) { $reply.State='hovered' }

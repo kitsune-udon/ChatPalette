@@ -107,7 +107,7 @@ function Invoke-WorkerRequest($Request) {
         $focusedInput = Get-FocusedYouTubeInput $window
         if ($null -eq $focusedInput -or ($Request.Mode -eq 'verify_chat' -and $focusedInput.Kind -ne 'chat')) { $reply.State = 'wrong_input'; return $reply }
         if ($Request.Mode -eq 'verify_chat') {
-            if ($focus.Video -cne $video -or !(Test-ReactionForeground $window) -or
+            if ($focus.Video -cne $video -or !(Test-BrowserForeground $window) -or
                 ![System.Windows.Automation.Automation]::Compare($focus.Element,$focusedInput.Element)) {
                 $reply.State = 'wrong_input'; return $reply
             }

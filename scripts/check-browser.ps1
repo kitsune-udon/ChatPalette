@@ -36,7 +36,7 @@ try {
     if ($process.ProcessName -notin @('chrome','msedge','brave','firefox','opera','vivaldi')) { throw 'Unsupported browser process' }
     $report.Browser=$process.ProcessName
     $report.BrowserVersion=$process.MainModule.FileVersionInfo.FileVersion
-    $report.Foreground=Test-ReactionForeground $WindowHandle
+    $report.Foreground=Test-BrowserForeground $WindowHandle
     $report.VideoDetected=[bool](Read-BrowserVideoId $WindowHandle)
     $report.AddressDetected=$script:AddressBarCache.ContainsKey($WindowHandle)
     if ($report.VideoDetected) {
