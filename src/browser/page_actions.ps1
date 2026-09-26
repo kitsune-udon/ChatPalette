@@ -42,20 +42,20 @@ function Test-ReactionLauncher($Records) {
         ($kind -eq 'collapsed' -and $context -match '\bcollapsed-button\b')
 }
 function Get-ReactionLauncherRecords($Target, [long]$WindowHandle) {
-    $records = @()
     $element = $Target
-    for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
-        $info = $element.Current
-        $record = @{Id=$info.AutomationId; Class=$info.ClassName; Type=$info.ControlType.Id}
-        # Only the candidate needs a label and interaction state; ancestry is structural.
-        if ($depth -eq 0) {
-            $record.Name=$info.Name; $record.Enabled=$info.IsEnabled; $record.Hidden=$info.IsOffscreen
+    return @(
+        for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
+            $info = $element.Current
+            $record = @{Id=$info.AutomationId; Class=$info.ClassName; Type=$info.ControlType.Id}
+            # Only the candidate needs a label and interaction state; ancestry is structural.
+            if ($depth -eq 0) {
+                $record.Name=$info.Name; $record.Enabled=$info.IsEnabled; $record.Hidden=$info.IsOffscreen
+            }
+            $record
+            if ($record.Type -eq 50030 -or $info.NativeWindowHandle -eq $WindowHandle) { break }
+            $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
         }
-        $records += $record
-        if ($record.Type -eq 50030 -or $info.NativeWindowHandle -eq $WindowHandle) { break }
-        $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
-    }
-    return $records
+    )
 }
 function Find-ReactionLauncher([long]$WindowHandle) {
     $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)

@@ -63,16 +63,16 @@ function Test-FocusedInputIdentity($VerifiedElement, [long]$WindowHandle) {
 }
 
 function Get-YouTubeInputRecords($Target, [long]$WindowHandle) {
-    $records = @()
     $element = $Target
-    for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
-        $record = Get-InputRecord $element ($depth -eq 0)
-        $records += $record
-        # Links can expose TextPattern. Reject non-editable targets before walking
-        # a long live-chat ancestry, using the same record returned to classification.
-        if ($depth -eq 0 -and (!$record.Enabled -or $record.Hidden -or !$record.Editable)) { break }
-        if ($record.Type -eq 50030 -or $element.Current.NativeWindowHandle -eq $WindowHandle) { break }
-        $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
-    }
-    return $records
+    return @(
+        for ($depth = 0; $depth -lt 45 -and $null -ne $element; $depth++) {
+            $record = Get-InputRecord $element ($depth -eq 0)
+            $record
+            # Links can expose TextPattern. Reject non-editable targets before walking
+            # a long live-chat ancestry, using the same record returned to classification.
+            if ($depth -eq 0 -and (!$record.Enabled -or $record.Hidden -or !$record.Editable)) { break }
+            if ($record.Type -eq 50030 -or $element.Current.NativeWindowHandle -eq $WindowHandle) { break }
+            $element = [System.Windows.Automation.TreeWalker]::RawViewWalker.GetParent($element)
+        }
+    )
 }
