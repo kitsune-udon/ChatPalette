@@ -1,7 +1,6 @@
 ﻿; Shared option values and defaults. No GUI or runtime-controller dependencies.
 global ReactionCounts := [1, 10, 100, 1000, 10000]
 global ReactionIntervals := [0, 25, 50, 100, 150, 200, 250, 500, 1000]
-global ReactionDefaults := {Choice: 1, Count: 1, Interval: 200}
 
 SettingOptionLabels(values, suffix) {
     labels := []
@@ -31,6 +30,6 @@ global ReactionNames := ["❤️ ハート", "😁 笑顔", "🎉 お祝い", "�
 
 CreateDefaultSettings() {
     return {Profiles:[], SharedDanmakuItems:[], InputProfileId:"", AutoMode:1,
-        DefaultReactionKind:ReactionDefaults.Choice, DefaultReactionCount:ReactionDefaults.Count,
-        DefaultReactionIntervalMs:ReactionDefaults.Interval, ShortcutKeys:DefaultShortcutKeys()}
+        DefaultReactionKind:1, DefaultReactionCount:1,
+        DefaultReactionIntervalMs:200, ShortcutKeys:DefaultShortcutKeys()}
 }
