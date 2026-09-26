@@ -153,11 +153,45 @@ foreach ($scenario in @('success','failure','exit-code','source-edit','source-ad
     Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'stdout.txt') -Raw -Encoding UTF8) -match 'guest-output 日本語 🧪') "$scenario preserves stdout"
     Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'artifacts\failed-case\evidence.txt') -Raw).Trim() -eq 'evidence') "$scenario collects evidence before completion"
     Assert (!(Test-Path -LiteralPath (Join-Path $outputRoot 'result.pending.json'))) "$scenario publishes completion atomically"
+    if ($scenario -eq 'success') { Assert ($result.Error -ceq '') 'Successful guest reports no error' }
     if ($scenario -eq 'failure') {
         Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'stderr.txt') -Raw -Encoding UTF8) -match 'guest-failure 日本語 🧪') 'Failure preserves stderr'
     }
     if ($scenario -like 'source-*') {
-        Assert ($result.Error -eq 'Validated source changed during Sandbox tests') "$scenario rejects success after mutation of the tested source"
+        Assert ($result.Error.StartsWith("Validated source changed during Sandbox tests`n")) "$scenario rejects success after mutation of the tested source"
     }
+}
+# Guest preparation and evidence collection run outside the child test wrapper.
+# The same error text must still identify each failing call site.
+$guestPath = Join-Path $runtime 'tests\sandbox-guest.ps1'
+$guestSource = [IO.File]::ReadAllText($guestPath)
+[IO.File]::WriteAllText((Join-Path $inputRoot 'project\tests\run.ps1'),$probe,[Text.UTF8Encoding]::new($true))
+foreach ($scenario in @('prepare','collect','both')) {
+    $fault = "throw 'guest boundary failure 日本語'"
+    $source = $guestSource
+    if ($scenario -in @('prepare','both')) {
+        $anchor = 'Copy-Item -LiteralPath (Join-Path $InputRoot ''project'') -Destination $WorkRoot -Recurse'
+        $source = $source.Replace($anchor,($anchor + "`r`n    New-Item -ItemType Directory -Path (Join-Path `$WorkRoot 'tests\.tmp\partial-copy') | Out-Null`r`n    " + $fault))
+    }
+    if ($scenario -in @('collect','both')) {
+        $anchor = 'Copy-Item -LiteralPath $artifacts -Destination (Join-Path $OutputRoot ''artifacts'') -Recurse'
+        $source = $source.Replace($anchor,$fault)
+    }
+    [IO.File]::WriteAllText($guestPath,$source,[Text.UTF8Encoding]::new($true))
+    try {
+        $outputRoot = Join-Path $runtime ($scenario + '-boundary-results')
+        New-Item -ItemType Directory -Path $outputRoot | Out-Null
+        & $guestPath -InputRoot $inputRoot -OutputRoot $outputRoot -WorkRoot (Join-Path $runtime ($scenario + '-boundary-work'))
+        $result = Get-Content -LiteralPath (Join-Path $outputRoot 'result.json') -Raw | ConvertFrom-Json
+        Assert ($result.ExitCode -eq 1) "$scenario guest boundary failure cannot report success"
+        $lines = @(Select-String -LiteralPath $guestPath -SimpleMatch $fault | Select-Object -ExpandProperty LineNumber)
+        Assert ($lines.Count -eq $(if ($scenario -eq 'both') { 2 } else { 1 })) "$scenario injects the intended guest boundaries"
+        Assert ([regex]::Matches($result.Error,'guest boundary failure 日本語').Count -eq $lines.Count) "$scenario preserves every original error message"
+        foreach ($line in $lines) {
+            # PowerShell localizes the word before the line number (for example line or 行).
+            Assert ($result.Error -match ([regex]::Escape($guestPath) + ': [^\r\n\d]*' + $line + '(?:\r?\n|$)')) "$scenario identifies the failing guest boundary at line $line"
+        }
+        Assert (!(Test-Path -LiteralPath (Join-Path $outputRoot 'result.pending.json'))) "$scenario publishes its failure result atomically"
+    } finally { [IO.File]::WriteAllText($guestPath,$guestSource,[Text.UTF8Encoding]::new($true)) }
 }
 Write-Output "PASS: $script:checks Sandbox packaging and guest handoff checks (no VM launched)"

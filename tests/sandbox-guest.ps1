@@ -28,12 +28,12 @@ $selection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'sandbox-selectio
     if ($exitCode -ne 0 -or (Get-Item -LiteralPath $stderr).Length -gt 0) { throw "Test runner failed (exit $exitCode)." }
     if ($inputManifest -cne (Get-ReleaseManifest $WorkRoot)) { throw 'Validated source changed during Sandbox tests' }
     $result.ExitCode = 0
-} catch { $result.Error = $_.Exception.Message }
+} catch { $result.Error = "$($_.Exception.Message)`n$($_.ScriptStackTrace)" }
 finally {
     try {
         $artifacts = Join-Path $WorkRoot 'tests\.tmp'
         if (Test-Path -LiteralPath $artifacts) { Copy-Item -LiteralPath $artifacts -Destination (Join-Path $OutputRoot 'artifacts') -Recurse }
-    } catch { $result.ExitCode = 1; $result.Error += " Artifact collection failed: $($_.Exception.Message)" }
+    } catch { $result.ExitCode = 1; $result.Error += "`nArtifact collection failed: $($_.Exception.Message)`n$($_.ScriptStackTrace)" }
     # Publish only after logs are closed and evidence has been collected.
     $pending = Join-Path $OutputRoot 'result.pending.json'
     $result | ConvertTo-Json | Set-Content -LiteralPath $pending -Encoding UTF8
