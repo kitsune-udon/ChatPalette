@@ -125,7 +125,11 @@ $probe=Join-Path $runtime 'process-probe.ps1'
 param([string]$Mode)
 [Console]::Out.WriteLine('probe stdout')
 [Console]::Error.WriteLine('probe stderr')
-if ($Mode -in @('timeout','invalid-timeout')) { Start-Sleep -Seconds 30 }
+if ($Mode -eq 'tree') {
+    $child=Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$PSCommandPath+'"'),'-Mode','descendant' -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $PSScriptRoot 'descendant.stdout.txt') -RedirectStandardError (Join-Path $PSScriptRoot 'descendant.stderr.txt')
+    [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'descendant.txt'),($child.Id.ToString()+','+$child.StartTime.ToUniversalTime().Ticks.ToString()))
+}
+if ($Mode -in @('timeout','invalid-timeout','tree','descendant')) { Start-Sleep -Seconds 30 }
 if ($Mode -eq 'failure') { exit 17 }
 exit 0
 '@,[Text.UTF8Encoding]::new($true))
@@ -165,6 +169,34 @@ foreach ($mode in @('success','failure','timeout','invalid-timeout')) {
             try { if ($live.StartTime -eq $probeStarted -and !$live.HasExited) { $live.Kill(); $live.WaitForExit() } }
             finally { $live.Dispose() }
         }
+    }
+}
+# A timed-out test must not leave its worker behind or stop unrelated instances.
+$tree=$null; $descendant=$null; $sibling=$null
+try {
+    $sibling=Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$probe+'"'),'-Mode','descendant' -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtime 'sibling.stdout.txt') -RedirectStandardError (Join-Path $runtime 'sibling.stderr.txt')
+    $null=$sibling.Handle
+    $tree=Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$probe+'"'),'-Mode','tree' -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $runtime 'tree.stdout.txt') -RedirectStandardError (Join-Path $runtime 'tree.stderr.txt')
+    $null=$tree.Handle
+    $treeHandle=$tree.SafeHandle
+    $identityPath=Join-Path $runtime 'descendant.txt'
+    $deadline=[DateTime]::UtcNow.AddSeconds(10)
+    while (!(Test-Path -LiteralPath $identityPath) -and !$tree.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+    $identity=[IO.File]::ReadAllText($identityPath).Split(',')
+    $descendant=Get-Process -Id ([int]$identity[0])
+    $null=$descendant.Handle
+    if ($descendant.StartTime.ToUniversalTime().Ticks -ne [long]$identity[1]) { throw 'Descendant identity changed before the timeout probe' }
+    $failure=''
+    try { $null=Wait-TestProcess -Process $tree -TimeoutMs 100 } catch { $failure=$_.Exception.Message }
+    if ($failure -notmatch '^Test process timed out after 100ms' -or !$treeHandle.IsClosed) { throw 'Process tree timeout lost its error or root handle cleanup' }
+    if (!$descendant.WaitForExit(5000)) { throw 'Timed-out test left its descendant running' }
+    if ($sibling.HasExited) { throw 'Test timeout stopped an unrelated instance of the same executable' }
+} finally {
+    foreach ($owned in @($tree,$descendant,$sibling)) {
+        if (!$owned) { continue }
+        if ($owned -eq $tree -and $treeHandle.IsClosed) { continue }
+        try { if (!$owned.HasExited) { $owned.Kill(); $owned.WaitForExit() } }
+        finally { $owned.Dispose() }
     }
 }
 # Unhandled AHK failures must reach stderr and the process exit code, even from timers.

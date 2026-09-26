@@ -48,7 +48,9 @@ function Wait-TestProcess {
     } finally {
         try {
             if (!$Process.HasExited) {
-                $Process.Kill()
+                # Keep the root handle open while terminating only this test's process tree.
+                & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $Process.Id /T /F | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "Could not stop test process tree (PID $($Process.Id))." }
                 $Process.WaitForExit()
             }
         } finally { $Process.Dispose() }
