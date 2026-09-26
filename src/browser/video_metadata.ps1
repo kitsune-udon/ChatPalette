@@ -1,5 +1,5 @@
 ﻿$script:Videos = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
-$script:Failures = [Collections.Generic.Dictionary[string,datetime]]::new([StringComparer]::Ordinal)
+$script:Failures = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
 
 function Get-ChannelKey([string]$AuthorUrl) {
     $uri = $null
@@ -17,7 +17,7 @@ function Trim-Cache {
         if ($age -ge 12 -or $age -lt 0) { $null = $script:Videos.Remove($key) }
     }
     foreach ($key in @($script:Failures.Keys)) {
-        $age = ($now - $script:Failures[$key]).TotalSeconds
+        $age = ($now - $script:Failures[$key].Time).TotalSeconds
         if ($age -ge 5 -or $age -lt 0) { $null = $script:Failures.Remove($key) }
     }
     if ($script:Videos.Count -gt 128) {
@@ -37,12 +37,12 @@ function Fetch-Metadata([string]$Video) {
 function Resolve-Video([string]$Video) {
     Trim-Cache
     if ($script:Videos.ContainsKey($Video)) { return $script:Videos[$Video] }
-    if ($script:Failures.ContainsKey($Video)) { return $null }
+    if ($script:Failures.ContainsKey($Video)) { throw $script:Failures[$Video].Error }
     try { $metadata = Fetch-Metadata $Video }
     catch {
         if ($script:Failures.Count -ge 128) { $script:Failures.Clear() }
-        $script:Failures[$Video] = [DateTime]::UtcNow
-        return $null
+        $script:Failures[$Video] = @{Time=[DateTime]::UtcNow; Error=$_}
+        throw
     }
     $script:Videos[$Video] = $metadata
     Trim-Cache

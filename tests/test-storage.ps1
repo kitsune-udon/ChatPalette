@@ -28,6 +28,11 @@ function Fetch-Metadata($Video) {
     if ($Video -ceq 'failure0000' -and !$script:metadataRecovered) { throw 'fake failure' }
     return @{Author='fixture'; Channel='/channel/test'; Time=[DateTime]::UtcNow}
 }
+function Assert-MetadataFailure {
+    $failure=$null
+    try { $null=Resolve-Video 'failure0000' } catch { $failure=$_ }
+    Assert ($null -ne $failure -and $failure.Exception.Message -eq 'fake failure') 'Metadata lookup retains the original failure, including during retry suppression'
+}
 function Get-RuntimeFileSnapshot {
     return @(Get-ChildItem -LiteralPath $release -File -Recurse | Sort-Object FullName | ForEach-Object { $_.FullName + ':' + (Get-FileHash -LiteralPath $_.FullName).Hash })
 }
@@ -41,21 +46,21 @@ if ($script:fetches -ne 2) { throw 'Expired entry not refetched' }
 $script:Videos['abcdefghijk'].Time=[DateTime]::UtcNow.AddHours(1)
 $null=Resolve-Video 'abcdefghijk'
 if ($script:fetches -ne 3) { throw 'Future entry retained' }
-$null=Resolve-Video 'failure0000'
-$null=Resolve-Video 'failure0000'
+Assert-MetadataFailure
+Assert-MetadataFailure
 if ($script:fetches -ne 4) { throw 'Failure retry not suppressed' }
-$script:Failures['failure0000']=[DateTime]::UtcNow.AddSeconds(-6)
-$null=Resolve-Video 'failure0000'
+$script:Failures['failure0000'].Time=[DateTime]::UtcNow.AddSeconds(-6)
+Assert-MetadataFailure
 if ($script:fetches -ne 5) { throw 'Failure retry not released' }
-$script:Failures['failure0000']=[DateTime]::UtcNow.AddHours(1)
-$null=Resolve-Video 'failure0000'
+$script:Failures['failure0000'].Time=[DateTime]::UtcNow.AddHours(1)
+Assert-MetadataFailure
 if ($script:fetches -ne 6) { throw 'Clock rollback kept failure retry suppressed' }
-$script:Failures['expired0000']=[DateTime]::UtcNow.AddSeconds(-6)
-$script:Failures['future00000']=[DateTime]::UtcNow.AddHours(1)
-$script:Failures['recent00000']=[DateTime]::UtcNow
+$script:Failures['expired0000']=@{Time=[DateTime]::UtcNow.AddSeconds(-6)}
+$script:Failures['future00000']=@{Time=[DateTime]::UtcNow.AddHours(1)}
+$script:Failures['recent00000']=@{Time=[DateTime]::UtcNow}
 $null=Resolve-Video 'abcdefghijk'
 if ($script:fetches -ne 6 -or $script:Failures.ContainsKey('expired0000') -or $script:Failures.ContainsKey('future00000') -or !$script:Failures.ContainsKey('recent00000') -or !$script:Failures.ContainsKey('failure0000')) { throw 'Cache hit did not prune invalid retry records while preserving recent failures' }
-$script:Failures['failure0000']=[DateTime]::UtcNow.AddSeconds(-6)
+$script:Failures['failure0000'].Time=[DateTime]::UtcNow.AddSeconds(-6)
 $script:metadataRecovered = $true
 $recovered=Resolve-Video 'failure0000'
 $null=Resolve-Video 'failure0000'
@@ -80,3 +85,32 @@ if ($script:ReactionElementCache.Count -ne 0 -or ![object]::ReferenceEquals($vid
 Set-ReactionRegistrationSnapshot $payload
 if ([object]::ReferenceEquals($plan,($script:BrowserReactionSelectors['fixture']))) { throw 'Registration replacement reused stale plan' }
 Write-Output 'PASS: registration invalidation and memory-only metadata caching.'
+# The real pipe reply and existing palette explanation preserve that same cause.
+$pipeRuntime=New-TestRuntime
+Write-TestWorker -Runtime $pipeRuntime -Definitions @'
+function Invoke-FixtureRequest($Request) { return Invoke-WorkerRequest $Request }
+$script:MetadataAttempts=0
+function Read-BrowserVideoId([long]$WindowHandle) { return 'failure0000' }
+function Fetch-Metadata($Video) {
+    $script:MetadataAttempts++
+    throw "fixture metadata failure $script:MetadataAttempts 日本語"
+}
+'@
+Invoke-AppTest -Runtime $pipeRuntime -Setup @'
+RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
+RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+'@ -Body @'
+try {
+    Loop 2 {
+        selected := SelectProfileFromBrowser(123)
+        Assert(!selected && DetectedChannel.State="unavailable" && DetectedChannel.Detail="fixture metadata failure 1 日本語",
+            "first lookup and suppressed retry preserve the same failure through the real pipe: " DetectedChannel.State "/" DetectedChannel.Detail)
+        Assert(InStr(DetectionMessage,DetectedChannel.Detail) && !DetectedChannel.Channel && !DetectedChannel.Author,
+            "palette explanation includes the cause without stale channel metadata")
+        Assert(!IsBrowserOperationBusy && !WorkerState.RequestActive && IsWorkerRunning(),
+            "metadata failure releases the request while keeping the worker for retry suppression")
+    }
+} finally StopBrowserWorker()
+FileAppend("PASS: " Checks " metadata failure reply and palette explanation checks; no network or browser operations`n","*")
+ExitApp()
+'@

@@ -119,7 +119,6 @@ function Invoke-WorkerRequest($Request) {
         return $reply
     }
     $metadata = Resolve-Video $video
-    if ($null -eq $metadata) { return $reply }
     if ((Read-BrowserVideoId $window) -cne $video) { $reply.State = 'changed'; return $reply }
     $reply.State = 'ok'
     $reply.Author = $metadata.Author
