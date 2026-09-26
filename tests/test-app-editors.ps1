@@ -441,3 +441,53 @@ Invoke-AppFixture -Body @'
     Assert(ActiveEditorDialog && ActiveEditorDialog.Label="弾幕の編集","explicit shared selection still opens a new item editor")
     CloseDanmakuEditor(ActiveEditorDialog.Window)
 '@
+
+# Creation, native editing and saving must preserve text accepted by storage.
+Invoke-AppFixture -TimeoutMs 60000 -Body @'
+    longText := "あ👏"
+    Loop 15
+        longText .= longText
+    longText := SubStr(longText,1,70002)
+    owner := ExecuteProfileCommand("add","",longText).ProfileId
+    ShowManagement(1)
+    for scope in ["",owner] {
+        added := ExecuteDanmakuCommand("add",scope,"",{Name:longText,Text:longText,Slot:0})
+        EditingProfileId := scope
+        RefreshManagement(), SelectManagedRow(added.Index)
+        historyBefore := LibraryHistory.Length
+        OpenDanmakuEditor(false)
+        editor := ActiveEditorDialog.Window, edits := []
+        for control in editor {
+            if control.Type="Edit"
+                edits.Push(control)
+            if control.Type="Button" && control.Text="保存"
+                saveButton := control
+        }
+        Assert(edits.Length=2 && edits[1].Value==longText && edits[2].Value==longText,"editor loads the complete long name and body")
+        Assert(!editor.IsDirty.Call(),"opening long content does not create an unsaved change")
+        suffix := "!"
+        for control in edits {
+            SendMessage(0xB1,StrLen(longText),StrLen(longText),control.Hwnd) ; EM_SETSEL: append at the end.
+            SendMessage(0xC2,1,StrPtr(suffix),control.Hwnd) ; EM_REPLACESEL: no clipboard or external input.
+            Assert(control.Value==longText suffix,"native editing preserves long content")
+        }
+        SendMessage(0xF5,0,0,saveButton.Hwnd)
+        deadline := A_TickCount+2000
+        while ActiveEditorDialog && A_TickCount<deadline
+            Sleep(10)
+        Assert(!ActiveEditorDialog && LibraryHistory.Length=historyBefore+1,"long edit commits once and closes")
+        saved := GetLibraryItems(LoadSettings(SettingsDatabasePath),scope)[added.Index]
+        Assert(saved.Name==longText suffix && saved.Text==longText suffix,"long edit persists both complete fields")
+        UndoLibraryCommand()
+        restored := GetLibraryItems(LoadSettings(SettingsDatabasePath),scope)[added.Index]
+        Assert(restored.Name==longText && restored.Text==longText,"undo restores long content without truncation")
+        RefreshManagement(), SelectManagedRow(added.Index)
+        TransferItem()
+        Assert(ActiveEditorDialog && ActiveEditorDialog.Label="弾幕の移動","long item and owner names do not prevent opening the move dialog")
+        WinClose("ahk_id " ActiveEditorDialog.Window.Hwnd)
+        deadline := A_TickCount+2000
+        while ActiveEditorDialog && A_TickCount<deadline
+            Sleep(10)
+        Assert(!ActiveEditorDialog,"long-name move dialog closes normally")
+    }
+'@

@@ -19,11 +19,12 @@ OpenDanmakuEditor(isNew) {
         original := selected ? selected.Item : {Name:"",Text:"",Slot:0}
         view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕を" (isNew ? "追加" : "編集"))
         view.SetFont("s10","Yu Gothic UI")
-        view.AddText("w420","編集対象：" ((editId = "") ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
+        ; Set stored text after creation; long values can exceed the native creation limit.
+        view.AddText("w420 r2").Text := "編集対象：" ((editId = "") ? "共通の弾幕" : FindProfileById(Profiles,editId).Name)
         view.AddText(,"弾幕名")
-        name := view.AddEdit("w420",original.Name)
+        name := view.AddEdit("w420"), name.Value := original.Name
         view.AddText(,"本文（1行）")
-        text := view.AddEdit("w420",original.Text)
+        text := view.AddEdit("w420"), text.Value := original.Text
         view.AddText(,"キーの割当 — 現在の割当を表示")
         labels := ["割当なし"], assigned := Map()
         for item in items
@@ -107,8 +108,8 @@ TransferItem(*) {
         view := Gui("+Owner" ManagementWindow.Hwnd,"弾幕の移動先")
         view.SetFont("s10","Yu Gothic UI")
         editId := selected.ProfileId, item := selected.Item, choices := []
-        view.AddText("w380 r2","移動する弾幕：" item.Name)
-        view.AddText("w380 r2","移動元：" (editId = "" ? "共通の弾幕" : FindProfileById(Profiles,editId).Name))
+        view.AddText("w380 r2").Text := "移動する弾幕：" item.Name
+        view.AddText("w380 r2").Text := "移動元：" (editId = "" ? "共通の弾幕" : FindProfileById(Profiles,editId).Name)
         view.AddText("w380 r2","移動先を選んでください。移動すると元の一覧から外れ、キーの割当も解除されます。")
         if editId != ""
             choices.Push({Id:"",Name:"共通の弾幕"})
