@@ -26,8 +26,8 @@ class SettingsRepository {
         } catch as failure {
             ; Keep the schema error even if a broken connection cannot close cleanly.
             try this.Db.Close()
-            catch {
-            }
+            catch as closeFailure
+                failure.Message .= "`n接続の終了: " closeFailure.Message
             throw failure
         }
     }

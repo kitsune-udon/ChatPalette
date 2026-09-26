@@ -16,7 +16,9 @@ OpenSettingsRepository(path) {
 LoadSettings(path) {
     try return OpenSettingsRepository(path).Load()
     catch as failure {
-        CloseSettingsStore()
+        try CloseSettingsStore()
+        catch as closeFailure
+            failure.Message .= "`n接続の終了: " closeFailure.Message
         throw failure
     }
 }

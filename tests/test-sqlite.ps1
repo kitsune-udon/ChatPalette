@@ -54,6 +54,21 @@ try {
     Assert(rows.Length=1 && rows[1][1]=="Ω","failed decoding resets the statement and clears every binding before reuse")
     Assert(reuse.Scalar("SELECT hex(value) FROM sample WHERE id=6")=="70726566697800737566666978","read rejection preserves all stored bytes")
 } finally reuse.Close()
+; The native connection constructor must preserve initialization and close failures.
+for closeFails in [false,true] {
+    OpeningCloseFails := closeFails, caught := 0
+    try {
+        try FailedOpeningConnection(A_ScriptDir "\statement-reuse.db")
+        catch as failure
+            caught := failure
+        Assert(caught=OpeningFailure && caught is ValueError && InStr(caught.Message,"opening setup probe failure"),
+            "connection initialization retains the original exception")
+        Assert(!!InStr(caught.Message,"opening close probe failure")=closeFails,
+            "connection initialization records any cleanup failure")
+        Assert(OpeningConnection.CloseCalls=1 && !!OpeningConnection.Handle=closeFails,
+            "connection initialization closes once and retains unconfirmed ownership")
+    } finally SqliteConnection.Prototype.Close.Call(OpeningConnection)
+}
 ; Cleanup failures must not replace or hide the original transaction error.
 for cleanup in ["normal","rollback","rollback-close"] {
     transactionPath := A_ScriptDir "\transaction-" cleanup ".db"
@@ -371,11 +386,26 @@ other.Close(), ReloadAppSettings()
 Assert(DefaultReactionIntervalMs=250,"reload reads external committed state")
 upgraded := SqliteConnection(backup)
 upgraded.Exec("PRAGMA user_version=999"), upgraded.Close()
-failed := false
-try SettingsRepository(backup)
-catch
-    failed := true
-Assert(failed && ProbeRepositoryConnection && !ProbeRepositoryConnection.Handle,"future schema rejection closes its connection before returning")
+closeMethod := SqliteConnection.Prototype.GetOwnPropDesc("Close")
+for closeFails in [false,true] {
+    caught := 0
+    if closeFails
+        SqliteConnection.Prototype.DefineProp("Close",{Call:RejectSettingsClose})
+    try {
+        try SettingsRepository(backup)
+        catch as failure
+            caught := failure
+    } finally SqliteConnection.Prototype.DefineProp("Close",closeMethod)
+    try {
+        Assert(caught && InStr(caught.Message,"未対応の設定形式です"),"future schema rejection retains its original reason")
+        Assert(!!InStr(caught.Message,"settings close probe failure")=closeFails,"schema rejection retains any connection cleanup failure")
+        Assert(ProbeRepositoryConnection && !!ProbeRepositoryConnection.Handle=closeFails,"schema rejection releases only confirmed closed connections")
+        if closeFails
+            Assert(ProbeRepositoryConnection.ProbeCloseCalls=1,"schema cleanup does not retry implicitly")
+    } finally {
+        ProbeRepositoryConnection.Close()
+    }
+}
 ; Crash runner: raw process exit deliberately bypasses SQLite close/OnExit.
 crashSource := '#Requires AutoHotkey v2.0`n#Include ' A_ScriptDir '\src\storage\sqlite_connection.ahk`n'
     . 'db := SqliteConnection(A_Args[1])`ndb.ConfigureStorage()`ndb.Exec("BEGIN IMMEDIATE; UPDATE preferences SET reaction_interval=500 WHERE id=1")`n'
@@ -397,6 +427,25 @@ recovery.SaveAll(recoveryState)
 recovery.Db.Backup(recoveryPath ".good")
 recovery.Db.Run("DELETE FROM preferences")
 recovery.Close()
+; The public load boundary must preserve the read error even if cleanup also fails.
+recovery := OpenSettingsRepository(recoveryPath), caught := 0
+recovery.Db.DefineProp("Close",{Call:RejectSettingsClose})
+try {
+    try LoadSettings(recoveryPath)
+    catch as failure
+        caught := failure
+} finally recovery.Db.DeleteProp("Close")
+try {
+    Assert(caught && InStr(caught.Message,"共通設定がありません") && InStr(caught.Message,"settings close probe failure"),
+        "load reports both the invalid data and connection cleanup failure")
+    Assert(InStr(caught.Stack,"ReadState"),"load cleanup preserves the original read failure location")
+    Assert(ActiveSettingsRepository=recovery && recovery.Db.Handle && recovery.Db.ProbeCloseCalls=1,
+        "failed load cleanup retains ownership for explicit retry without an implicit retry")
+    Assert(!recovery.Saved && recovery.Db.Scalar("SELECT COUNT(*) FROM preferences")=0,
+        "failed load cleanup does not publish a baseline or replace invalid data")
+} finally {
+    CloseSettingsStore()
+}
 failed := false
 try LoadSettings(recoveryPath)
 catch
@@ -436,6 +485,22 @@ TransactionFailureClose(db) {
     if db.Probe.Cleanup="rollback-close"
         throw Error("close probe failure")
     return SqliteConnection.Prototype.Close.Call(db)
+}
+RejectSettingsClose(db) {
+    db.ProbeCloseCalls := db.HasOwnProp("ProbeCloseCalls") ? db.ProbeCloseCalls+1 : 1
+    throw Error("settings close probe failure")
+}
+class FailedOpeningConnection extends SqliteConnection {
+    Exec(sql) {
+        global OpeningConnection := this, OpeningFailure := ValueError("opening setup probe failure")
+        throw OpeningFailure
+    }
+    Close() {
+        this.CloseCalls := this.HasOwnProp("CloseCalls") ? this.CloseCalls+1 : 1
+        if OpeningCloseFails
+            throw Error("opening close probe failure")
+        return super.Close()
+    }
 }
 '@
 Invoke-AhkTest -Runtime $release -Source $tests

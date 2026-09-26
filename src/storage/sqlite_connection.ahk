@@ -16,7 +16,9 @@ class SqliteConnection {
             this.Check(rc)
             this.Exec("PRAGMA busy_timeout=100")
         } catch as failure {
-            this.Close()
+            try this.Close()
+            catch as closeFailure
+                failure.Message .= "`n接続の終了: " closeFailure.Message
             throw failure
         }
     }
