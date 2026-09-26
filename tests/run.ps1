@@ -27,7 +27,7 @@ try {
             $env:HELPER_TEST_ROOT = $runRoot
             $out = Join-Path $runRoot ($testName + '.stdout.txt')
             $err = Join-Path $runRoot ($testName + '.stderr.txt')
-            $process = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $testName) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+            $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $testName) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
             $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000
             Get-Content -LiteralPath $out,$err
             if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName" }

@@ -9,7 +9,7 @@ Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run.ps1') -Destination $runner
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'support.ps1') -Destination $fixture
 $headless=Join-Path $fixture 'test-alpha.ps1'
 $desktop=Join-Path $fixture 'test-beta.ps1'
-[IO.File]::WriteAllText($headless,"# Test-Session: Headless`r`nWrite-Output 'fixture-alpha'`r`n",[Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText($headless,"# Test-Session: Headless`r`nif (`$PSVersionTable.PSEdition -ne 'Desktop' -or `$PSVersionTable.PSVersion.Major -ne 5 -or `$PSVersionTable.PSVersion.Minor -ne 1) { throw 'Tests must run in Windows PowerShell 5.1' }`r`nWrite-Output 'fixture-alpha'`r`n",[Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText($desktop,"# Test-Session: Desktop`r`nWrite-Output 'fixture-beta'`r`n",[Text.UTF8Encoding]::new($true))
 $base=Join-Path $fixture '.tmp'
 $oldRoot=$env:HELPER_TEST_ROOT
