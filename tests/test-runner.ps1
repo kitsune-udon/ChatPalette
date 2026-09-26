@@ -7,9 +7,22 @@ New-Item -ItemType Directory -Path $fixture | Out-Null
 $runner=Join-Path $fixture 'run.ps1'
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run.ps1') -Destination $runner
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'support.ps1') -Destination $fixture
+$scripts=Join-Path $runtime 'scripts'
+New-Item -ItemType Directory -Path $scripts | Out-Null
+$sourceCheck=Join-Path $scripts 'check-source.ps1'
+$sourceProbe=@'
+[IO.File]::WriteAllText((Join-Path $PSScriptRoot '..\source-ready'),'validated')
+Write-Output 'fixture-source'
+'@
+[IO.File]::WriteAllText($sourceCheck,$sourceProbe,[Text.UTF8Encoding]::new($true))
 $headless=Join-Path $fixture 'test-alpha.ps1'
 $desktop=Join-Path $fixture 'test-beta.ps1'
-[IO.File]::WriteAllText($headless,"# Test-Session: Headless`r`nif (`$PSVersionTable.PSEdition -ne 'Desktop' -or `$PSVersionTable.PSVersion.Major -ne 5 -or `$PSVersionTable.PSVersion.Minor -ne 1) { throw 'Tests must run in Windows PowerShell 5.1' }`r`nWrite-Output 'fixture-alpha'`r`n",[Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText($headless,@'
+# Test-Session: Headless
+if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Tests must run in Windows PowerShell 5.1' }
+if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\source-ready'))) { throw 'Test started before source validation' }
+Write-Output 'fixture-alpha'
+'@,[Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText($desktop,"# Test-Session: Desktop`r`nWrite-Output 'fixture-beta'`r`n",[Text.UTF8Encoding]::new($true))
 $base=Join-Path $fixture '.tmp'
 $oldRoot=$env:HELPER_TEST_ROOT
@@ -22,11 +35,14 @@ foreach ($arguments in @(@{Name='missing.ps1'},@{Name='test-beta.ps1';Group='Hea
     if (!$rejected -or (Test-Path -LiteralPath $base)) { throw 'Invalid selection started a test or created a runtime' }
 }
 $output=@(& $runner -Name 'test-alpha.ps1')
+if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Named run did not validate source exactly once' }
 if ($output -notcontains 'fixture-alpha' -or $output -contains 'fixture-beta' -or ($output -join "`n") -notmatch 'PASS: test-alpha\.ps1 / 1 test groups') { throw 'Named run did not execute exactly the selected test' }
 if (@(Get-ChildItem -LiteralPath $base -Directory).Count -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Successful named run did not clean up or restore its environment' }
 $output=@(& $runner -Group Desktop)
+if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Desktop selection skipped or repeated source validation' }
 if ($output -notcontains 'fixture-beta' -or $output -contains 'fixture-alpha' -or ($output -join "`n") -notmatch 'PASS: Desktop / 1 test groups') { throw 'Group selection changed' }
 $output=@(& $runner)
+if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Default run skipped or repeated source validation' }
 if ($output -notcontains 'fixture-alpha' -or $output -notcontains 'fixture-beta' -or ($output -join "`n") -notmatch 'PASS: All / 2 test groups') { throw 'Default run did not execute every test' }
 [IO.File]::WriteAllText($headless,"# Test-Session: Headless`r`nthrow 'fixture failure'`r`n",[Text.UTF8Encoding]::new($true))
 $failed=$false
@@ -35,6 +51,20 @@ $retained=@(Get-ChildItem -LiteralPath $base -Directory)
 if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Failed named run did not retain evidence or restore its environment' }
 $stderr=Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'
 if (!(Test-Path -LiteralPath $stderr) -or [IO.File]::ReadAllText($stderr) -notmatch 'fixture failure') { throw 'Failed test stderr was not retained' }
+# Source failure stops before any selected test starts; listing still remains read-only.
+try {
+    [IO.File]::WriteAllText($sourceCheck,"throw 'fixture source failure'",[Text.UTF8Encoding]::new($true))
+    $before=@(Get-ChildItem -LiteralPath $base -Directory | Select-Object -ExpandProperty FullName)
+    $listed=@(& $runner -Name 'test-alpha.ps1' -List)
+    if ($listed.Count -ne 1 -or $listed[0] -ne 'test-alpha.ps1') { throw 'Listing ran source validation' }
+    $failure=''; $observed=[Collections.Generic.List[string]]::new()
+    try { & $runner -Name 'test-alpha.ps1' -WarningAction SilentlyContinue | ForEach-Object { $observed.Add([string]$_) } }
+    catch { $failure=$_.Exception.Message }
+    $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
+    if ($failure -ne 'Failed: check-source.ps1' -or $observed.Contains('RUN: test-alpha.ps1') -or $retained.Count -ne 1) { throw 'Source failure did not stop before the selected tests' }
+    if ([IO.File]::ReadAllText((Join-Path $retained[0].FullName 'check-source.ps1.stderr.txt')) -notmatch 'fixture source failure') { throw 'Source failure lost its diagnostic evidence' }
+    if ($env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Source failure changed the caller environment' }
+} finally { [IO.File]::WriteAllText($sourceCheck,$sourceProbe,[Text.UTF8Encoding]::new($true)) }
 # Earlier successful groups must be gone before the next group starts.
 [IO.File]::WriteAllText($headless,@'
 # Test-Session: Headless

@@ -19,7 +19,6 @@ try {
     if ((Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath $report)) { throw 'Release output exists; choose a new directory.' }
     $inputHashes=@{}
     foreach($file in @(Get-ReleaseFiles $stage)) { $inputHashes[$file.FullName]=(Get-FileHash -LiteralPath $file.FullName).Hash }
-    & (Join-Path $stage 'scripts\check-source.ps1') -ProjectRoot $stage
     $runner=Join-Path $stage 'tests\run.ps1'
     & $runner -AutoHotkeyPath $AutoHotkeyPath
     # Tests may alter only their isolated runtimes. Compare staged inputs with initial manifest.

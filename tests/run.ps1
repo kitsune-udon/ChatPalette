@@ -11,15 +11,16 @@ $tests = @($tests | Where-Object {
 if (!$tests.Count) { throw 'No matching test scripts found. Use -List to inspect available names.' }
 if ($List) { $tests.Name; return }
 . (Join-Path $PSScriptRoot 'support.ps1')
+$checks = @((Get-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\check-source.ps1'))) + $tests
 $base = Join-Path $PSScriptRoot '.tmp'
 $oldRoot = $env:HELPER_TEST_ROOT
 $oldAhk = $env:AHK_EXE
 try {
     if ($AutoHotkeyPath) { $env:AHK_EXE = $AutoHotkeyPath }
-    foreach ($test in $tests) {
+    foreach ($test in $checks) {
         $testName = $test.Name
         Write-Output "RUN: $testName"
-        # Each group owns its artifacts; keep paths short for nested release checks.
+        # Each check owns its artifacts; keep paths short for nested release checks.
         $runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N').Substring(0,16))
         New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
         $completed = $false
@@ -27,7 +28,7 @@ try {
             $env:HELPER_TEST_ROOT = $runRoot
             $out = Join-Path $runRoot ($testName + '.stdout.txt')
             $err = Join-Path $runRoot ($testName + '.stderr.txt')
-            $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $testName) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+            $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $test.FullName + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
             try { $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000 }
             finally { Get-Content -LiteralPath $out,$err }
             if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName" }
