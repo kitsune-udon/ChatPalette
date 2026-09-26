@@ -15,13 +15,8 @@ InstallApplicationShortcuts()
 ; Keep only app actions; standard reload/pause/suspend bypass application ownership.
 A_TrayMenu.Delete()
 A_TrayMenu.Add("ChatPaletteを開く", ShowPalette)
-A_TrayMenu.Add("使い方", Help)
-A_TrayMenu.Add("診断情報", ShowDiagnostics)
-A_TrayMenu.Add("ショートカットを管理", (*) => ShowShortcutManager())
-A_TrayMenu.Add("弾幕・設定をバックアップ", ExportSettingsBackup)
 A_TrayMenu.Add()
-A_TrayMenu.Add("アプリを再起動", RestartApplication)
-A_TrayMenu.Add("終了", (*) => ExitApp())
+AddApplicationMenuItems(A_TrayMenu)
 A_TrayMenu.Default := "ChatPaletteを開く"
 UpdateTray()
 if startupMode = "--smoke"

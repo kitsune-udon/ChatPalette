@@ -239,3 +239,14 @@ ConfirmEditorDiscard(view,message := "未保存の変更を破棄して閉じま
         return RuntimePorts.ConfirmDiscard.Call(message)
     return MsgBox(message,"未保存の変更","YesNo Default2 Icon? Owner" view.Hwnd) = "Yes"
 }
+
+; The tray and palette expose the same application actions and labels.
+AddApplicationMenuItems(menu) {
+    menu.Add("使い方", Help)
+    menu.Add("ショートカットを管理", (*) => ShowShortcutManager())
+    menu.Add("診断情報", ShowDiagnostics)
+    menu.Add("弾幕・設定をバックアップ", ExportSettingsBackup)
+    menu.Add()
+    menu.Add("アプリを再起動", RestartApplication)
+    menu.Add("終了", (*) => ExitApp())
+}

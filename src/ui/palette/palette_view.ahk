@@ -108,9 +108,8 @@ OpenPaletteMenu(*) {
     popup.Add("リアクションの標準設定", (*) => ShowManagement(2))
     popup.Add("操作・サポート", (*) => ShowManagement(3))
     popup.Add("リアクションの実行結果", ShowReactionDetails)
-    popup.Add("ショートカットを管理", (*) => ShowShortcutManager())
-    popup.Add("診断情報", ShowDiagnostics)
-    popup.Add("終了", (*) => ExitApp())
+    popup.Add()
+    AddApplicationMenuItems(popup)
     popup.Show()
 }
 
