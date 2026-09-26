@@ -21,7 +21,7 @@ BrowserResultInfo(state) {
         "save_failed","登録情報を保存できませんでした", "sync_failed","登録情報を同期できませんでした")
     static advice := Map("chat_missing","チャットの表示と入力可能な状態を確認してください。",
         "invalid_text","弾幕を編集し、タブ・改行などの制御文字を取り除いてください。",
-        "chat_ambiguous","操作する欄をクリックしてください。", "focus_failed","入力欄をクリックしてください。",
+        "chat_ambiguous","操作する欄をクリックし、手動で入力・編集してください。", "focus_failed","入力欄をクリックしてください。",
         "wrong_input","入力欄をクリックしてやり直してください。", "unsupported","YouTube側の操作対象を確認してください。",
         "unknown","自動では再実行しません。", "unavailable","YouTubeの動画ページを最前面にしてやり直してください。")
     summary := states.Get(state,"不明な結果：" state)
