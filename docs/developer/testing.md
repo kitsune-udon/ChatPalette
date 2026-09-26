@@ -57,7 +57,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | ライブラリ操作 | [test-app-library.ps1](../../tests/test-app-library.ps1) | 弾幕・配信者・割当・Undoの確定、保存失敗時の保全、チャンネル連携 |
 | 入力対象の確定 | [test-input-context.ps1](../../tests/test-input-context.ps1) | 自動判別の結果を画面更新と独立して保持。判別・保存の失敗時は入力計画を作らず、手動・共通入力も検証。画面・ブラウザー操作なし |
 | 入力計画 | [test-app-input-plan.ps1](../../tests/test-app-input-plan.ps1) | IDと本文の固定、並べ替え・管理画面からの復帰後の選択保持、入力前のパレット表示・前面確認、送信直前の再検証、対象変更時の中止、部分入力を再送しないこと |
-| 設定往復 | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定の独立保存、キーの巻き戻し、競合・Unicode・長文の保持 |
+| 設定往復（画面操作不要） | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定の独立保存、キーの巻き戻し、競合・Unicode・長文の保持 |
 | 通信・実行 | [test-app-worker.ps1](../../tests/test-app-worker.ps1) | 実パイプ通信、起動・終了・再起動の資源所有、失敗時の復旧、登録同期と操作制限の解除 |
 | ワーカー単体の寿命 | [test-worker-lifetime.ps1](../../tests/test-worker-lifetime.ps1) | パイプ切断・通知イベント欠落・接続先不在での終了とハンドル解放。実ワーカーを使い、画面・キー・ブラウザー操作を要しないHeadless検査 |
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
