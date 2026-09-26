@@ -92,32 +92,35 @@ function Invoke-WorkerRequest($Request) {
     if ($Request.Mode -eq 'verify_chat') {
         $focus = $script:FocusedChat
         $script:FocusedChat = $null # Only chat verification consumes the one-use proof, even on failure.
-        if (!$Request.FocusToken -or $null -eq $focus -or $focus.Token -cne $Request.FocusToken -or
-            $focus.Window -ne [long]$Request.Window) { $reply.State = 'wrong_input'; return $reply }
     }
-    $video = Read-BrowserVideoId ([long]$Request.Window)
+    $window = [long]$Request.Window
+    if ($Request.Mode -eq 'verify_chat') {
+        if (!$Request.FocusToken -or $null -eq $focus -or $focus.Token -cne $Request.FocusToken -or
+            $focus.Window -ne $window) { $reply.State = 'wrong_input'; return $reply }
+    }
+    $video = Read-BrowserVideoId $window
     $reply.Video = $video
     if (-not $video) { return $reply }
     if ($Request.Mode -eq 'browser_context') { $reply.State = 'ok'; return $reply }
     if ($Request.Mode -in @('verify_input','verify_chat')) {
         if ($Request.Video -and $video -cne $Request.Video) { $reply.State = 'changed'; return $reply }
-        $focusedInput = Get-FocusedYouTubeInput ([long]$Request.Window)
+        $focusedInput = Get-FocusedYouTubeInput $window
         if ($null -eq $focusedInput -or ($Request.Mode -eq 'verify_chat' -and $focusedInput.Kind -ne 'chat')) { $reply.State = 'wrong_input'; return $reply }
         if ($Request.Mode -eq 'verify_chat') {
-            if ($focus.Video -cne $video -or !(Test-ReactionForeground ([long]$Request.Window)) -or
+            if ($focus.Video -cne $video -or !(Test-ReactionForeground $window) -or
                 ![System.Windows.Automation.Automation]::Compare($focus.Element,$focusedInput.Element)) {
                 $reply.State = 'wrong_input'; return $reply
             }
         }
-        if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
-        if (!(Test-FocusedInputIdentity $focusedInput.Element ([long]$Request.Window))) { $reply.State = 'wrong_input'; return $reply }
+        if ((Read-BrowserVideoId $window) -cne $video) { $reply.State = 'changed'; return $reply }
+        if (!(Test-FocusedInputIdentity $focusedInput.Element $window)) { $reply.State = 'wrong_input'; return $reply }
         $reply.State = 'ok'
         $reply.Detail = $focusedInput.Kind
         return $reply
     }
     $metadata = Resolve-Video $video
     if ($null -eq $metadata) { return $reply }
-    if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
+    if ((Read-BrowserVideoId $window) -cne $video) { $reply.State = 'changed'; return $reply }
     $reply.State = 'ok'
     $reply.Author = $metadata.Author
     $reply.Channel = $metadata.Channel

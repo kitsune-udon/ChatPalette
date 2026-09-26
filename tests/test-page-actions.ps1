@@ -239,6 +239,10 @@ Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=7;Video='abcde
 $script:kind='chat'; $script:reads=0
 Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=8;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'failed verification also consumes the token'
 # Chat verification has one meaning: consume the exact focus proof, including failures.
+$focused=Request 'chat_focus'; $script:reads=0; $invalidWindow=$false
+try { Invoke-WorkerRequest @{Mode='verify_chat';Window='invalid';Seq=9;Video='abcdefghijk';FocusToken=$focused.Detail} | Out-Null }
+catch { $invalidWindow=$true }
+Assert ($invalidWindow -and $null -eq $script:FocusedChat -and $script:reads -eq 0) 'window conversion failure consumes the proof before browser inspection'
 foreach ($tokenForm in @('missing','empty')) {
     $focused=Request 'chat_focus'
     $request=@{Mode='verify_chat';Window=123;Seq=9;Video='abcdefghijk'}
