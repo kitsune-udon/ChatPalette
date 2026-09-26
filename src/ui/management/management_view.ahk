@@ -115,9 +115,15 @@ RenderManagement() {
     ManagementChannel.Text := model.Channel
     position := BeginListRefresh(ManagedList,4)
     try {
-        ManagedList.Delete()
-        for row in model.Rows
-            ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)
+        existingRows := ManagedList.GetCount()
+        for i,row in model.Rows {
+            if i <= existingRows
+                ManagedList.Modify(i,"",row.Name,row.Text,row.Key,row.ItemId)
+            else
+                ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)
+        }
+        Loop Max(0,existingRows-model.Rows.Length)
+            ManagedList.Delete(existingRows-A_Index+1)
     } finally {
         EndListRefresh(ManagedList,position,4)
     }

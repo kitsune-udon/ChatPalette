@@ -7,8 +7,7 @@ Edit-TestSource $release 'src/ui/palette/palette_view.ahk' '            for row 
 Edit-TestSource $release 'src/ui/palette/palette_view.ahk' '                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)' ('                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)'+"`r`n                ProbeListUpdate()`r`n            }")
 Edit-TestSource $release 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(x, y) {`r`n        ProbeViewport(this)")
 Edit-TestSource $release 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
-Edit-TestSource $release 'src/ui/management/management_view.ahk' '        for row in model.Rows' '        for row in model.Rows {'
-Edit-TestSource $release 'src/ui/management/management_view.ahk' '            ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)' ('            ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)' + "`r`n            ProbeManagementUpdate()`r`n        }")
+Edit-TestSource $release 'src/ui/management/management_view.ahk' '                ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)' ('                ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)' + "`r`n            ProbeManagementUpdate()")
 Edit-TestSource $release 'src/ui/panel_viewport.ahk' '            OnMessage(0x115,this.ScrollHandler)' ('            OnMessage(0x115,this.ScrollHandler)' + "`r`n            ProbeViewportRegistration(this)")
 Edit-TestSource $release 'src/ui/help_view.ahk' '        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' ('        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' + "`r`n    ProbeInfoDialogBuild(view)")
 Edit-TestSource $release 'src/ui/reaction_feedback.ahk' '    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' ('    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' + "`r`n    ProbeInfoDialogBuild(details)")
@@ -94,6 +93,16 @@ global ProbeManagementArmed := true
 RefreshManagement()
 Assert(!ProbeManagementArmed && !ManagementRefresh.Active && !ActiveEditorDialog,"management defers nested refresh and blocks editing")
 Assert(SharedDanmakuItems.Length=2 && ManagedList.GetCount()=2,"management refresh cannot delete or undo data")
+ManagedList.Add("","obsolete","obsolete","","obsolete-id")
+global ProbeManagementFailure := true
+failed := false
+try RefreshManagement()
+catch as failure
+    failed := failure.Message == "fixture management update failure"
+Assert(failed && !ManagementRefresh.Active,"failed row replacement releases the management guard")
+Assert(SharedDanmakuItems.Length=2 && ManagedList.GetCount()=3,"failed refresh preserves data even before excess rows are removed")
+RefreshManagement()
+Assert(ManagedList.GetCount()=2 && ManagedList.GetText(2,4)==SharedDanmakuItems[2].Id && !ManagementRefresh.Active,"retry repairs the incomplete list without duplicating rows")
 PresentWindow(PaletteWindow,"w260 h300",ResizePalette)
 ProbeViewportArmed := true
 PaletteViewport.SetOffset(0,0)
@@ -180,6 +189,11 @@ ProbeListUpdate() {
     Assert(PaletteRows.Length=1 && PaletteRefresh.Pending,"old snapshot retained until publish; nested refresh deferred")
 }
 ProbeManagementUpdate() {
+    global ProbeManagementFailure
+    if IsSet(ProbeManagementFailure) && ProbeManagementFailure {
+        ProbeManagementFailure := false
+        throw Error("fixture management update failure")
+    }
     global ProbeManagementArmed
     if !IsSet(ProbeManagementArmed) || !ProbeManagementArmed
         return

@@ -70,7 +70,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 順序操作 | [test-management-order.ps1](../../tests/test-management-order.ps1) | 上下移動後の保存順・選択・スクロールの保持 |
 | 一覧表示 | [test-list-visibility.ps1](../../tests/test-list-visibility.ps1) | タブ切替・再表示と一覧の表示状態 |
 | 小さい画面 | [test-viewports.ps1](../../tests/test-viewports.ps1) | 狭い画面での配置・スクロール・フォーカス追従、監視とオブジェクトの解放 |
-| UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の画面・一覧公開、再入防止、最新のスクロール要求の保持、情報画面とviewportの構築失敗からの復旧 |
+| UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の画面・一覧公開、再入防止、管理行の更新失敗からの復旧、最新のスクロール要求の保持、情報画面とviewportの構築失敗からの復旧 |
 | 編集画面の生成・終了 | [test-editor-lifecycle.ps1](../../tests/test-editor-lifecycle.ps1) | 構築・表示・終了の失敗時の資源解放、親画面の保全、不完全な弾幕候補の保存抑止、古い編集画面からの解除拒否 |
 | 編集保存と画面更新 | [test-editor-commit.ps1](../../tests/test-editor-commit.ps1) | 保存後の描画失敗と未保存変更の区別、古い選択による別項目の操作抑止、保存中に届いた次の編集の保持 |
 | 親画面の操作制限 | [test-window-suspension.ps1](../../tests/test-window-suspension.ps1) | 通信待ち・編集の準備と復旧、元の有効状態と対象画面の保持、部分的な復旧失敗・入れ子・割り込み時の所有 |
@@ -82,7 +82,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | カウントダウン | [test-reaction-countdown.ps1](../../tests/test-reaction-countdown.ps1) | 待機・登録再試行・通知中の交代と中止、古いタイマーの抑止 |
 | リアクション開始 | [test-reaction-start.ps1](../../tests/test-reaction-start.ps1) | 開始途中の交代と中止、後続ジョブへのタイマー・結果の誤反映防止 |
 | 結果の公開 | [test-reaction-results.ps1](../../tests/test-reaction-results.ps1) | 操作制限の解除・結果描画中に交代しても、実行中または終了済みの後続ジョブの状態・結果・通知を維持 |
-| 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 未変更データの共有、差分編集、同値保存・非表示更新・同値描画の抑制 |
+| 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 未変更データの共有、差分編集、同値保存・非表示更新・同値描画の抑制、管理行の再利用・増減と選択・スクロールの保持 |
 | 検索・選択肢 | [test-search-scheduling.ps1](../../tests/test-search-scheduling.ps1) | 検索の集約、古い結果による操作の拒否、選択肢の再利用とIDの追従 |
 | 時間制御 | [test-timing.ps1](../../tests/test-timing.ps1) | 送信間隔・中止・単調増加時計、タイマー精度と実行ジョブの解放 |
 | リアクション検出 | [test-reactions.ps1](../../tests/test-reactions.ps1) | 5種類の識別、登録情報の妥当性、一括取得の整合性、操作直前の対象確認 |

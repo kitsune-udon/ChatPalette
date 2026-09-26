@@ -138,18 +138,18 @@ FixtureResolveChannel(hwnd) {
 '@
 Invoke-AppTest -Runtime $release -Body $tests -Setup 'RuntimePorts.BrowserIdentity := FixtureIsBrowser, RuntimePorts.ResolveChannel := FixtureResolveChannel'
 
-# Each initial tab gets a fresh application; observe actual ListView rebuild calls.
+# Each initial tab gets a fresh application; count complete management renders.
 foreach ($page in @(1,2,3)) {
     $initialRuntime=New-TestRuntime
-    Edit-TestSource $initialRuntime 'src/ui/management/management_view.ahk' '    ManagedList.ModifyCol(4,0)' ('    ManagedList.ModifyCol(4,0)' + "`r`n    ManagedList.DefineProp(""Delete"",{Call:CountManagementRebuild})")
+    Edit-TestSource $initialRuntime 'src/ui/management/management_view.ahk' 'RenderManagement() {' ("RenderManagement() {`r`n    CountManagementRender()")
     $initialTests=@'
-global ManagementRebuilds := 0
+global ManagementRenders := 0
 AutoMode := false
 Loop 3
     ExecuteDanmakuCommand("add","","",{Name:"item" A_Index,Text:"body" A_Index,Slot:0})
 firstPage := INITIAL_PAGE
 ShowManagement(firstPage)
-Assert(ManagementRebuilds=1,"first display rebuilds management once; actual=" ManagementRebuilds)
+Assert(ManagementRenders=1,"first display renders management once; actual=" ManagementRenders)
 Assert(ManagementTabs.Value=firstPage && DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd),"first display opens the requested tab")
 Assert(ManagedList.GetCount()=3 && ManagedList.GetText(3,4)==SharedDanmakuItems[3].Id,"first display contains the complete current library")
 ManagementTabs.Choose(1)
@@ -161,18 +161,39 @@ ManagementWindow.Hide()
 ExecuteDanmakuCommand("edit","",SharedDanmakuItems[2].Id,{Name:"updated",Text:"updated body",Slot:0})
 ExecuteDanmakuCommand("add","","",{Name:"new item",Text:"new body",Slot:0})
 ShowManagement(Mod(firstPage,3)+1)
-Assert(ManagementRebuilds=2,"reopening performs one fresh rebuild")
+Assert(ManagementRenders=2,"reopening performs one fresh render")
 ManagementTabs.Choose(1)
 Assert(ManagedList.GetCount()=4 && ManagedList.GetText(2,1)="updated" && ManagedList.GetText(4,2)="new body","reopening reflects changes made while hidden")
 Assert(ManagedList.GetNext()=3 && ManagedList.GetText(3,4)==selected && ManagementItemButtons[5].Enabled && ManagementItemButtons[6].Enabled,"reopening preserves selected identity and refreshes move actions")
 Sleep(30)
-Assert(ManagementRebuilds=2,"initial and reopened displays leave no redundant deferred rebuild")
+Assert(ManagementRenders=2,"initial and reopened displays leave no redundant deferred render")
+SharedDanmakuItems := [SharedDanmakuItems[4],SharedDanmakuItems[3]]
+RefreshManagement()
+Assert(ManagedList.GetCount()=2 && ManagedList.GetText(1,4)==SharedDanmakuItems[1].Id,"shrinking removes trailing rows and replaces the first row")
+Assert(ManagedList.GetNext()=2 && ManagedList.GetText(2,4)==selected,"selection follows identity after shrinking and reordering")
+SharedDanmakuItems := [{Id:"case-id",Name:"replacement",Text:"replacement body",Slot:1},{Id:"CASE-ID",Name:"other",Text:"other body",Slot:0}]
+ShortcutKeys["shared1"] := "^+F8"
+RefreshManagement()
+Assert(ManagedList.GetCount()=2 && ManagedList.GetText(1,1)="replacement" && ManagedList.GetText(1,2)="replacement body"
+    && ManagedList.GetText(1,3)="Ctrl+Shift+F8" && ManagedList.GetText(1,4)=="case-id","same-size replacement updates every column")
+Assert(ManagedList.GetNext()=1,"removed selection falls back to the first current row")
+SelectManagedRow(2)
+SharedDanmakuItems := [SharedDanmakuItems[2],SharedDanmakuItems[1]]
+RefreshManagement()
+Assert(ManagedList.GetNext()=1 && ManagedList.GetText(1,4)=="CASE-ID","reused rows restore identity with case-sensitive matching")
+Assert(ManagedList.GetText(1,3)="" && ManagedList.GetText(2,3)="Ctrl+Shift+F8","rewriting rows clears obsolete shortcut labels")
+SharedDanmakuItems := []
+RefreshManagement()
+Assert(ManagedList.GetCount()=0 && ManagedList.GetNext()=0 && !ManagementItemButtons[2].Enabled,"empty library clears all rows, selection and edit action")
+SharedDanmakuItems := [{Id:"after-empty",Name:"restored",Text:"restored body",Slot:0}]
+RefreshManagement()
+Assert(ManagedList.GetCount()=1 && ManagedList.GetText(1,4)=="after-empty" && ManagedList.GetNext()=1
+    && ManagementItemButtons[2].Enabled,"empty list can grow again with valid selection and actions")
 FileAppend("PASS: " Checks " management display checks for initial tab " firstPage "`n","*")
 ExitApp()
-CountManagementRebuild(control,params*) {
-    global ManagementRebuilds
-    ManagementRebuilds++
-    return Gui.ListView.Prototype.Delete.Call(control,params*)
+CountManagementRender() {
+    global ManagementRenders
+    ManagementRenders++
 }
 '@
     Invoke-AppTest -Runtime $initialRuntime -Body $initialTests.Replace('INITIAL_PAGE',[string]$page)
