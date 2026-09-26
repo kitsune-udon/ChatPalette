@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+Edit-TestSource $release 'src/browser/reaction_automation.ps1' '[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)' '$script:LookupTestRoot'
 . "$release\src\browser\browser_worker.ps1" -Library
 $script:video = 'abcdefghijk'
 $script:foreground = $true
@@ -96,9 +97,27 @@ $fakeGroup | Add-Member ScriptProperty Current {
     Assert $false 'Capture must not read unused container properties'
 }
 $fakeGroup | Add-Member ScriptMethod FindAll { param($scope,$condition) return $script:fakeButtons }
-Assert ($null -ne (Get-ReactionCapture $fakeGroup).Tokens) 'registered five-button structure is recognized'
+$initialCapture = Get-ReactionCapture $fakeGroup
+Assert ($null -ne $initialCapture.Tokens) 'registered five-button structure is recognized'
 Assert ($script:containerPropertyReads -eq 0) 'capture reads only the required button identities'
 Assert (@($script:fakeButtons | Where-Object { $_.SnapshotReads -ne 1 }).Count -eq 0) 'capture fetches one property snapshot per candidate'
+$script:LookupTestRoot = $fakeGroup
+$completeButtons = $script:fakeButtons
+$detached = [pscustomobject]@{}
+$detached | Add-Member ScriptMethod GetUpdatedCache { param($request) throw 'Detached candidate' }
+try {
+    foreach ($candidates in @(@{Items=@(); Expected=0}, @{Items=@($completeButtons[0]); Expected=0},
+        @{Items=@($detached)+$completeButtons; Expected=5})) {
+        $script:fakeButtons = $candidates.Items
+        $found = Find-ReactionGroupInWindow 123 (New-ReactionPlan $initialCapture.Tokens)
+        Assert (@($found.Elements | Where-Object { $null -ne $_ }).Count -eq $candidates.Expected) 'discovery requires all five buttons and skips detached candidates'
+        if ($candidates.Expected) {
+            for ($i=0; $i -lt 5; $i++) {
+                Assert ([object]::ReferenceEquals($found.Elements[$i],$completeButtons[$i])) 'discovery retains the registered button order and live references'
+            }
+        }
+    }
+} finally { $script:fakeButtons = $completeButtons }
 $script:changeCapturedIdentity = $true
 $stableCapture = Get-ReactionCapture $fakeGroup
 Assert ($stableCapture.Tokens.Count -eq 5 -and $stableCapture.Tokens[0].name -ceq 'heart' -and $script:fakeButtons[0].Current.Name -ceq 'changed after capture') 'classification and registered identity use the same observation'

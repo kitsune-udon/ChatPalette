@@ -162,12 +162,11 @@ function Find-ReactionGroupInWindow([long]$WindowHandle, $plan) {
     # Filter inside the provider before fetching properties across process boundaries.
     if (!$plan.ContainsKey('Condition')) { $plan.Condition = New-ReactionLookupCondition $plan }
     $condition = $plan.Condition
-    $records = @()
-    foreach ($control in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
-        try {
-            $records += Get-ReactionRecord $control
-        } catch { }
-    }
+    $records = @(
+        foreach ($control in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
+            try { Get-ReactionRecord $control } catch { }
+        }
+    )
     return Select-ReactionRecords $records $plan
 }
 
