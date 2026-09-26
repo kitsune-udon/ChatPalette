@@ -116,6 +116,11 @@ RenderManagement() {
     position := BeginListRefresh(ManagedList,4)
     try {
         existingRows := ManagedList.GetCount()
+        ; Bulk deletion is cheaper when more rows are removed than retained.
+        if existingRows > model.Rows.Length*2 {
+            ManagedList.Delete()
+            existingRows := 0
+        }
         for i,row in model.Rows {
             if i <= existingRows
                 ManagedList.Modify(i,"",row.Name,row.Text,row.Key,row.ItemId)

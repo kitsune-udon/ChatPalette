@@ -182,6 +182,18 @@ SharedDanmakuItems := [SharedDanmakuItems[2],SharedDanmakuItems[1]]
 RefreshManagement()
 Assert(ManagedList.GetNext()=1 && ManagedList.GetText(1,4)=="CASE-ID","reused rows restore identity with case-sensitive matching")
 Assert(ManagedList.GetText(1,3)="" && ManagedList.GetText(2,3)="Ctrl+Shift+F8","rewriting rows clears obsolete shortcut labels")
+retained := SharedDanmakuItems.Clone()
+Loop 6
+    SharedDanmakuItems.Push({Id:"extra-" A_Index,Name:"extra",Text:"extra body",Slot:0})
+RefreshManagement()
+SelectManagedRow(2)
+ManagementTabs.Choose(2)
+SharedDanmakuItems := retained
+RefreshManagement()
+Assert(ManagedList.GetCount()=2 && !DllCall("IsWindowVisible","Ptr",ManagedList.Hwnd),"large reduction removes excess rows while keeping the inactive tab hidden")
+ManagementTabs.Choose(1)
+Assert(ManagedList.GetNext()=2 && ManagedList.GetText(2,4)=="case-id" && ManagedList.GetText(2,3)="Ctrl+Shift+F8"
+    && DllCall("IsWindowVisible","Ptr",ManagedList.Hwnd),"large reduction preserves identity, columns and visibility on return")
 SharedDanmakuItems := []
 RefreshManagement()
 Assert(ManagedList.GetCount()=0 && ManagedList.GetNext()=0 && !ManagementItemButtons[2].Enabled,"empty library clears all rows, selection and edit action")
