@@ -22,6 +22,8 @@
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -List
 # 関係するテストを一つ実行
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Name test-sqlite.ps1
+# 関連する複数のテストをまとめて実行（配列はPowerShell式として渡す）
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/run.ps1' -Name test-input.ps1,test-page-actions.ps1"
 # 全テストを実行
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
 ```
@@ -31,11 +33,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
 | `-Group Headless` | 画面操作不要のテストを選ぶ。Windows版AutoHotkey v2・SQLite・.NET/UIAを使うため、Linux向けではない |
 | `-Group Desktop` | 操作可能なWindowsセッションが必要なテストを選ぶ。フォーカス競合を避け、他の画面操作と並行して実行しない |
 | `-Group All`（省略時） | 全テストを選ぶ |
-| `-Name test-sqlite.ps1` | ファイル名の完全一致で選ぶ。`-Group`との組み合わせも可能 |
+| `-Name test-sqlite.ps1` | ファイル名の完全一致で選ぶ。複数名は配列で指定でき、名前順に各群を一度だけ実行。`-Group`との組み合わせも可能 |
 | `-List` | 選択したテスト名だけを表示。一時フォルダーや実行用環境変数を変更しない |
 | `-AutoHotkeyPath '実行ファイルの絶対パス'` | AutoHotkeyの場所を指定。未指定なら環境変数`AHK_EXE`、それもなければ標準インストール先を使用 |
 
 明示したAutoHotkeyが存在しない場合、引数が不正な場合、対象テストがない場合はエラーになります。別のインストール先や全テストへ切り替えません。
+
+複数名の一つでも存在しないか指定グループ外なら、ソース検査やテストを始めずにエラーにします。ソース検査は選択全体の前に一度だけ実行します。既にPowerShell内にいる場合は、`& .\tests\run.ps1 -Name test-input.ps1,test-page-actions.ps1`と直接呼び出せます。
 
 Headlessには非表示のGUI部品や短時間のツールチップを使う検査も含みますが、利用者の前面ウィンドウ・キー操作には依存しません。起動検査は実際のグローバルキーを登録するためDesktopに分類します。
 

@@ -1,14 +1,17 @@
 ﻿[CmdletBinding()]
 param([string]$AutoHotkeyPath, [ValidateSet("All","Headless","Desktop")][string]$Group="All",
-    [ValidateNotNullOrEmpty()][string]$Name, [switch]$List)
+    [ValidateNotNullOrEmpty()][string[]]$Name, [switch]$List)
 $ErrorActionPreference = 'Stop'
 $tests = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'test-*.ps1' -File | Sort-Object Name)
 $tests = @($tests | Where-Object {
     $header = Get-Content -LiteralPath $_.FullName -TotalCount 1
     if ($header -notmatch '^# Test-Session: (Headless|Desktop)$') { throw "Missing test session classification: $($_.Name)" }
-    ($Group -eq 'All' -or $Matches[1] -eq $Group) -and (!$Name -or $_.Name -eq $Name)
+    ($Group -eq 'All' -or $Matches[1] -eq $Group) -and (!$Name -or $_.Name -in $Name)
 })
 if (!$tests.Count) { throw 'No matching test scripts found. Use -List to inspect available names.' }
+foreach ($requested in $Name) {
+    if ($requested -notin $tests.Name) { throw "No matching test script in ${Group}: $requested. Use -List to inspect available names." }
+}
 if ($List) { $tests.Name; return }
 . (Join-Path $PSScriptRoot 'support.ps1')
 $checks = @((Get-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\check-source.ps1'))) + $tests
@@ -40,7 +43,7 @@ try {
             else { Write-Warning "Failed test artifacts retained: $resolved" }
         }
     }
-    $selection = if ($Name) { $Name } else { $Group }
+    $selection = if ($Name) { $tests.Name -join ', ' } else { $Group }
     Write-Output "PASS: $selection / $($tests.Count) test groups; no real messages or reactions sent."
 } finally {
     $env:HELPER_TEST_ROOT = $oldRoot

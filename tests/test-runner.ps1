@@ -29,7 +29,11 @@ $oldRoot=$env:HELPER_TEST_ROOT
 $oldAhk=$env:AHK_EXE
 $listed=@(& $runner -Name 'test-alpha.ps1' -List)
 if ($listed.Count -ne 1 -or $listed[0] -ne 'test-alpha.ps1' -or (Test-Path -LiteralPath $base)) { throw 'Named listing did not select exactly one test without preparing a runtime' }
-foreach ($arguments in @(@{Name='missing.ps1'},@{Name='test-beta.ps1';Group='Headless'},@{Name=''},@{Nmae='test-alpha.ps1'})) {
+$listed=@(& $runner -Name 'test-beta.ps1','test-alpha.ps1','test-alpha.ps1' -List)
+if (($listed -join ',') -ne 'test-alpha.ps1,test-beta.ps1' -or (Test-Path -LiteralPath $base)) { throw 'Multiple-name listing did not sort and deduplicate without execution' }
+foreach ($arguments in @(@{Name='missing.ps1'},@{Name='test-beta.ps1';Group='Headless'},@{Name=''},@{Nmae='test-alpha.ps1'},
+    @{Name=@('test-alpha.ps1','missing.ps1')},@{Name=@('test-alpha.ps1','test-beta.ps1');Group='Headless'},
+    @{Name=@('test-alpha.ps1','missing.ps1');List=$true})) {
     $rejected=$false
     try { & $runner @arguments | Out-Null } catch { $rejected=$true }
     if (!$rejected -or (Test-Path -LiteralPath $base)) { throw 'Invalid selection started a test or created a runtime' }
@@ -38,6 +42,13 @@ $output=@(& $runner -Name 'test-alpha.ps1')
 if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Named run did not validate source exactly once' }
 if ($output -notcontains 'fixture-alpha' -or $output -contains 'fixture-beta' -or ($output -join "`n") -notmatch 'PASS: test-alpha\.ps1 / 1 test groups') { throw 'Named run did not execute exactly the selected test' }
 if (@(Get-ChildItem -LiteralPath $base -Directory).Count -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Successful named run did not clean up or restore its environment' }
+$output=@(& $runner -Name 'test-beta.ps1','test-alpha.ps1','test-alpha.ps1')
+$runs=@($output | Where-Object { $_ -like 'RUN: *' })
+if (($runs -join ',') -ne 'RUN: check-source.ps1,RUN: test-alpha.ps1,RUN: test-beta.ps1' -or
+    @($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1 -or
+    $output -notcontains 'fixture-alpha' -or $output -notcontains 'fixture-beta' -or
+    ($output -join "`n") -notmatch 'PASS: test-alpha\.ps1, test-beta\.ps1 / 2 test groups') { throw 'Multiple-name run skipped, repeated or reordered a check' }
+if (@(Get-ChildItem -LiteralPath $base -Directory).Count -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Multiple-name run did not clean up or restore its environment' }
 $output=@(& $runner -Group Desktop)
 if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Desktop selection skipped or repeated source validation' }
 if ($output -notcontains 'fixture-beta' -or $output -contains 'fixture-alpha' -or ($output -join "`n") -notmatch 'PASS: Desktop / 1 test groups') { throw 'Group selection changed' }
