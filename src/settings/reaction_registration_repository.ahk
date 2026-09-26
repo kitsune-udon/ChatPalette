@@ -22,20 +22,19 @@ ValidateReactionRegistration(db,payload) {
     }
     return browser
 }
-WriteReactionRegistration(db,payload) {
+SaveReactionRegistration(payload) {
+    repository := OpenSettingsRepository(SettingsDatabasePath)
+    repository.Db.Transaction(() => ApplyReactionRegistration(repository,payload))
+}
+; The transaction owns conflict checking, validation and the complete size limit.
+ApplyReactionRegistration(repository,payload) {
+    repository.VerifyDataVersion()
+    db := repository.Db
     browser := ValidateReactionRegistration(db,payload)
     db.Run("INSERT INTO reaction_registrations VALUES(?,json_set(?,'$.browser',?)) ON CONFLICT(browser) DO UPDATE SET payload=excluded.payload",browser,payload,browser)
     ; Keep the complete startup snapshot within the existing pipe frame limit.
     if Integer(db.Scalar("SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM reaction_registrations"))>24000
         throw Error("リアクション登録情報の合計サイズが上限を超えています。")
-}
-SaveReactionRegistration(payload) {
-    repository := OpenSettingsRepository(SettingsDatabasePath)
-    repository.Db.Transaction(() => ApplyReactionRegistration(repository,payload))
-}
-ApplyReactionRegistration(repository,payload) {
-    repository.VerifyDataVersion()
-    WriteReactionRegistration(repository.Db,payload)
 }
 LoadReactionRegistrationSnapshot() {
     db := OpenSettingsRepository(SettingsDatabasePath).Db
