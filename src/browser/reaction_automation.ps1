@@ -231,14 +231,17 @@ function Invoke-ReactionRequest($Request) {
         if (-not (Test-BrowserForeground ([long]$Request.Window))) {
             $reply.State = 'wrong_window'; return $reply
         }
+        if ($Request.Mode -eq 'reaction_send') {
+            $target = $group.Elements[([int]$Request.Reaction - 1)]
+            if ($target.Current.IsOffscreen -or -not $target.Current.IsEnabled) { $reply.State = 'menu_closed'; return $reply }
+            $pattern = Get-ReactionInvoker $target
+            if ($null -eq $pattern) {
+                $reply.State = 'unsupported'; return $reply
+            }
+        }
+        # Preparing the UIA invoker can outlive a video change in the same window.
         if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
         if ($Request.Mode -eq 'reaction_check') { $reply.State = 'ready'; return $reply }
-        $target = $group.Elements[([int]$Request.Reaction - 1)]
-        if ($target.Current.IsOffscreen -or -not $target.Current.IsEnabled) { $reply.State = 'menu_closed'; return $reply }
-        $pattern = Get-ReactionInvoker $target
-        if ($null -eq $pattern) {
-            $reply.State = 'unsupported'; return $reply
-        }
         # UIA lookups may outlive a foreground switch. Check again at the action boundary.
         if (-not (Test-BrowserForeground ([long]$Request.Window))) {
             $reply.State = 'wrong_window'; return $reply

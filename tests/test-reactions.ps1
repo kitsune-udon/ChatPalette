@@ -19,7 +19,7 @@ $script:invoker | Add-Member ScriptMethod Invoke {
 function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
 function Test-BrowserForeground([long]$WindowHandle) { return $script:foreground }
-function Get-ReactionInvoker($Target) { return $script:invoker }
+function Get-ReactionInvoker($Target) { Assert $false 'checking reactions must not obtain an invoker' }
 function Find-RegisteredReactions([long]$WindowHandle, $Plan) {
     if ($script:switchDuringLookup) { $script:foreground = $false }
     if (-not $script:menu) { return @{Elements=$null; Detail='fixture menu closed'} }
@@ -32,6 +32,7 @@ Assert ((Request 'browser_context').State -eq 'ok') 'context does not require ch
 Assert ((Request 'reaction_send').State -eq 'not_registered') 'unregistered blocks'
 $script:BrowserReactionSelectors['fixture'] = @{tokens=@()}
 Assert ((Request 'reaction_check').State -eq 'ready' -and $script:invocations -eq 0) 'check never invokes'
+function Get-ReactionInvoker($Target) { return $script:invoker }
 Assert ((Request 'reaction_capture' 'ABCDEFGHIJK').State -eq 'changed') 'capture rejects changed video'
 Assert ((Request 'reaction_send' 'ABCDEFGHIJK').State -eq 'changed') 'send rejects changed video'
 $script:foreground = $false
@@ -59,7 +60,22 @@ Assert ((Request 'reaction_send').State -eq 'operated' -and $script:invocations 
 function Get-ReactionInvoker($Target) { $script:foreground = $false; return $script:invoker }
 Assert ((Request 'reaction_send').State -eq 'wrong_window' -and $script:invocations -eq 2) 'focus change immediately before invoke blocks'
 $script:foreground = $true
+foreach ($replacementVideo in @('ABCDEFGHIJK','')) {
+    function Get-ReactionInvoker($Target) { $script:video = $replacementVideo; return $script:invoker }
+    $changedReply = Request 'reaction_send'
+    Assert ($changedReply.State -eq 'changed' -and $script:invocations -eq 2) "video change while obtaining the invoker blocks without sending: state=$($changedReply.State), invocations=$script:invocations"
+    $script:video = 'abcdefghijk'
+}
 function Get-ReactionInvoker($Target) { return $script:invoker }
+function Read-BrowserVideoId([long]$WindowHandle) {
+    $script:reads++
+    if ($script:reads -eq 2) { $script:foreground = $false }
+    return $script:video
+}
+$script:reads = 0
+Assert ((Request 'reaction_send').State -eq 'wrong_window' -and $script:invocations -eq 2) 'foreground change during final video reading blocks without sending'
+$script:foreground = $true
+function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 $script:throwOnInvoke = $true
 Assert ((Request 'reaction_send').State -eq 'unknown' -and $script:invocations -eq 3) 'uncertain completion never retries'
 $script:video = ''
