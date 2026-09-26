@@ -241,11 +241,11 @@ function Invoke-ReactionRequest($Request) {
         }
         # Preparing the UIA invoker can outlive a video change in the same window.
         if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
-        if ($Request.Mode -eq 'reaction_check') { $reply.State = 'ready'; return $reply }
-        # UIA lookups may outlive a foreground switch. Check again at the action boundary.
+        # UIA lookups may outlive a foreground switch. Recheck before reporting success or acting.
         if (-not (Test-BrowserForeground ([long]$Request.Window))) {
             $reply.State = 'wrong_window'; return $reply
         }
+        if ($Request.Mode -eq 'reaction_check') { $reply.State = 'ready'; return $reply }
         # Never retry after invocation, even if the provider throws or the pipe breaks.
         $reply.State = 'unknown'
         $pattern.Invoke()

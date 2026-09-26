@@ -72,8 +72,12 @@ function Read-BrowserVideoId([long]$WindowHandle) {
     if ($script:reads -eq 2) { $script:foreground = $false }
     return $script:video
 }
-$script:reads = 0
-Assert ((Request 'reaction_send').State -eq 'wrong_window' -and $script:invocations -eq 2) 'foreground change during final video reading blocks without sending'
+foreach ($mode in @('reaction_send','reaction_check')) {
+    $script:reads = 0
+    $script:foreground = $true
+    $reply = Request $mode
+    Assert ($reply.State -eq 'wrong_window' -and $script:invocations -eq 2) "foreground change during final video reading prevents success: mode=$mode, state=$($reply.State), invocations=$script:invocations"
+}
 $script:foreground = $true
 function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 $script:throwOnInvoke = $true
