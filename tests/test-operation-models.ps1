@@ -24,7 +24,7 @@ limited := BuildPaletteItems(0,bulk,"",modelKeys)
 Assert(limited.Rows.Length=500 && limited.Truncated && InStr(limited.Hint,"500"),"large palette caps drawing with explanation")
 last := BuildPaletteItems(0,bulk,"text 501",modelKeys)
 Assert(last.Rows.Length=1 && last.Rows[1].ItemId="bulk-501" && last.Rows[1].Index=501 && !last.Truncated,"search reaches records past display limit without changing identity")
-Assert(BuildManagementPresentation([],bulk,"",modelKeys).Rows.Length=501,"management retains all rows")
+Assert(BuildManagementPresentation([],bulk,"",modelKeys).Content.Items.Length=501,"management retains all rows")
 bulk.Pop()
 Assert(!BuildPaletteItems(0,bulk,"",modelKeys).Truncated,"exact limit is not reported as truncated")
 ; Every busy-state combination: stopping always works; the owning editor may save preferences.
@@ -55,7 +55,17 @@ Assert(model.Choice=0 && InStr(model.Context,"共通の弾幕のみ"),"unmatched
 model := BuildPaletteContext(modelProfiles,modelProfiles[1],false,"")
 Assert(model.Choice=1 && InStr(model.Context,"配信者"),"manual selection uses its stable identity")
 model := BuildManagementPresentation(modelProfiles,shared,"deleted-profile",modelKeys)
-Assert(model.ProfileId="" && model.Choice=1 && model.Rows[1].ItemId="s1","deleted editing target falls back to shared items")
+Assert(model.ProfileId="" && model.Choice=1 && ManagedCellText(model.Content,1,4)="s1","deleted editing target falls back to shared items")
+Assert(ManagedCellText(model.Content,1,1)="共通" && ManagedCellText(model.Content,1,2)="shared" && ManagedCellText(model.Content,1,3)="Ctrl+Shift+F12","management resolves displayed values and captured shared keys")
+; Published library sequences are immutable; edits replace the sequence and changed item.
+shared := shared.Clone(), shared[1] := shared[1].Clone(), shared[1].Text := "replacement"
+modelKeys["shared1"] := "^!F10"
+Assert(ManagedCellText(model.Content,1,2)="shared" && ManagedCellText(model.Content,1,3)="Ctrl+Shift+F12","old management display survives committed replacement and key changes")
+replacement := BuildManagementPresentation(modelProfiles,shared,"",modelKeys)
+Assert(ManagedCellText(replacement.Content,1,2)="replacement" && ManagedCellText(replacement.Content,1,3)="Ctrl+Alt+F10","refresh captures new items and keys together")
+profileModel := BuildManagementPresentation(modelProfiles,shared,"p",modelKeys)
+Assert(ManagedCellText(profileModel.Content,1,3)="Ctrl+Shift+F11" && ManagedCellText(profileModel.Content,2,3)="","profile slots use profile keys and unassigned slots stay blank")
+Assert(ManagedCellText(model.Content,0,1)="" && ManagedCellText(model.Content,2,1)="" && ManagedCellText(model.Content,1,5)="","management rejects invalid cell coordinates")
 Assert(BuildPaletteItems(0,[],"",modelKeys).Rows.Length=0,"empty library is representable")
 
 global RefreshCount := 0

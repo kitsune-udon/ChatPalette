@@ -34,7 +34,7 @@ BuildManagement() {
     ManagementProfileMenu.OnEvent("Click",OpenManagedProfileMenu)
     ManagementListHeading := ManagementWindow.AddText("x28 y202 w680 h24","弾幕一覧 — 選んで編集")
     ManagedList := ManagementWindow.AddListView("x28 y218 w680 h210 -Multi NoSortHdr +0x1000", ["弾幕名", "本文", "キー", "ID"])
-    ManagedList.Rows := [] ; LVS_OWNERDATA: this control owns its presentation snapshot.
+    ManagedList.Content := {Items:[],KeyLabels:[]} ; LVS_OWNERDATA: this control owns its presentation snapshot.
     ManagedList.OnNotify(-177,ProvideManagedText) ; LVN_GETDISPINFOW
     ManagedList.OnNotify(-179,FindManagedRow) ; LVN_ODFINDITEMW
     ManagedList.ModifyCol(4,0)
@@ -117,13 +117,13 @@ RenderManagement() {
     ManagementTarget.Choose(model.Choice)
     ManagementChannel.Text := model.Channel
     position := BeginListRefresh(ManagedList,4)
-    previousRows := ManagedList.Rows
+    previousContent := ManagedList.Content
     try {
-        ManagedList.Rows := model.Rows
-        if !SendMessage(0x102F,model.Rows.Length,0,ManagedList.Hwnd) ; LVM_SETITEMCOUNT
+        ManagedList.Content := model.Content
+        if !SendMessage(0x102F,model.Content.Items.Length,0,ManagedList.Hwnd) ; LVM_SETITEMCOUNT
             throw Error("管理一覧の件数を更新できません。")
     } catch as failure {
-        ManagedList.Rows := previousRows
+        ManagedList.Content := previousContent
         throw failure
     } finally {
         EndListRefresh(ManagedList,position,4)
@@ -142,9 +142,7 @@ ProvideManagedText(control, notification) {
     target := NumGet(item,offset,"Ptr"), capacity := NumGet(item,offset+A_PtrSize,"Int")
     if !target || capacity<1
         return 0
-    text := ""
-    if index>=1 && index<=control.Rows.Length && column>=1 && column<=4
-        text := control.Rows[index].%["Name","Text","Key","ItemId"][column]%
+    text := ManagedCellText(control.Content,index,column)
     StrPut(SubStr(text,1,capacity-1),target,capacity,"UTF-16")
     return 0
 }
@@ -155,7 +153,7 @@ FindManagedRow(control, notification) {
     flags := NumGet(info,0,"UInt"), pointer := NumGet(info,A_PtrSize,"Ptr")
     if !pointer || (flags & 0x41) ; LPARAM and icon-position searches are not text searches.
         return -1
-    query := StrGet(pointer,"UTF-16"), count := control.Rows.Length
+    query := StrGet(pointer,"UTF-16"), count := control.Content.Items.Length
     Loop count {
         index := start+A_Index-1
         if index>=count {
@@ -163,7 +161,7 @@ FindManagedRow(control, notification) {
                 break
             index := Mod(index,count)
         }
-        name := control.Rows[index+1].Name
+        name := control.Content.Items[index+1].Name
         if (flags & 0xC) ? InStr(name,query)=1 : name=query ; PARTIAL/SUBSTRING both mean prefix.
             return index
     }
@@ -299,16 +297,15 @@ SetManagementNotice(message) {
     ManagementStatus.Visible := message != ""
 }
 
-; Reordering updates the two affected rows without rebuilding the list or resetting its viewport.
-RenderManagedOrder(previous, current) {
+; Reordering publishes the committed sequence without rebuilding rows or resetting the viewport.
+RenderManagedOrder(current) {
     id := EditingProfileId
     items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},id)
-    rows := [BuildPresentationRow(items[previous],previous,id,ShortcutKeys), BuildPresentationRow(items[current],current,id,ShortcutKeys)]
+    content := BuildManagedContent(items,id,ShortcutKeys)
     position := BeginListRefresh(ManagedList,4)
     position.Selected := current ; The moved identity is now at this index; avoid a full-list search.
     try {
-        for row in rows
-            ManagedList.Rows[row.Index] := row
+        ManagedList.Content := content
     } finally {
         EndListRefresh(ManagedList,position,4)
     }

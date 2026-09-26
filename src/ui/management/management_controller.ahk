@@ -48,7 +48,7 @@ HandleDanmakuCommand(action, *) {
         if !result
             return
         updateManagement := action = "up" || action = "down"
-            ? RenderManagedOrder.Bind(selected.Index,result.Index) : RenderManagedSelection.Bind(result.Index)
+            ? RenderManagedOrder.Bind(result.Index) : RenderManagedSelection.Bind(result.Index)
         RefreshManagementAfterCommand(selected.ProfileId,result.Label "：保存済み",updateManagement)
     } finally Critical(previousCritical)
 }

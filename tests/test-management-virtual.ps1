@@ -28,6 +28,13 @@ for capacity in [1,2,8] {
     Assert(NumGet(text,0,"UShort")=0xA5A5 && NumGet(text,(capacity+1)*2,"UShort")=0xA5A5,"text callback respects both buffer boundaries: " capacity)
     Assert(StrGet(text.Ptr+2,"UTF-16")==SubStr("Alpha 日本語",1,capacity-1),"text callback terminates bounded Unicode text: " capacity)
 }
+previousContent := ManagedList.Content
+SharedDanmakuItems := SharedDanmakuItems.Clone(), SharedDanmakuItems[1] := SharedDanmakuItems[1].Clone()
+SharedDanmakuItems[1].Name := "Changed", SharedDanmakuItems[1].Text := "replacement"
+Assert(ManagedList.GetText(1,1)=="Alpha 日本語" && ManagedList.GetText(1,2)=="first","native display retains the old committed sequence until refresh")
+RefreshManagement()
+Assert(ManagedList.GetText(1,1)=="Changed" && ManagedList.GetText(1,2)=="replacement" && ManagedList.GetText(1,4)=="alpha","refresh publishes new values with the same identity")
+Assert(ManagedCellText(previousContent,1,2)=="first","publishing a new native display leaves the previous snapshot intact")
 SharedDanmakuItems := []
 RefreshManagement()
 SelectListRow(ManagedList,0)

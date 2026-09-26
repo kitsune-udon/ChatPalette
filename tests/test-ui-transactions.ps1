@@ -7,7 +7,7 @@ Edit-TestSource $release 'src/ui/palette/palette_view.ahk' '            for row 
 Edit-TestSource $release 'src/ui/palette/palette_view.ahk' '                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)' ('                PaletteList.Add("",row.ProfileId = "" ? "共通" : "配信者",row.Name "　" row.Text,row.Key,row.ItemId)'+"`r`n                ProbeListUpdate()`r`n            }")
 Edit-TestSource $release 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(x, y) {`r`n        ProbeViewport(this)")
 Edit-TestSource $release 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
-Edit-TestSource $release 'src/ui/management/management_view.ahk' '        ManagedList.Rows := model.Rows' ('        ManagedList.Rows := model.Rows' + "`r`n        ProbeManagementUpdate()")
+Edit-TestSource $release 'src/ui/management/management_view.ahk' '        ManagedList.Content := model.Content' ('        ManagedList.Content := model.Content' + "`r`n        ProbeManagementUpdate()")
 Edit-TestSource $release 'src/ui/panel_viewport.ahk' '            OnMessage(0x115,this.ScrollHandler)' ('            OnMessage(0x115,this.ScrollHandler)' + "`r`n            ProbeViewportRegistration(this)")
 Edit-TestSource $release 'src/ui/help_view.ahk' '        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' ('        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' + "`r`n    ProbeInfoDialogBuild(view)")
 Edit-TestSource $release 'src/ui/reaction_feedback.ahk' '    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' ('    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' + "`r`n    ProbeInfoDialogBuild(details)")
@@ -93,9 +93,10 @@ global ProbeManagementArmed := true
 RefreshManagement()
 Assert(!ProbeManagementArmed && !ManagementRefresh.Active && !ActiveEditorDialog,"management defers nested refresh and blocks editing")
 Assert(SharedDanmakuItems.Length=2 && ManagedList.GetCount()=2,"management refresh cannot delete or undo data")
-ManagedList.Rows := ManagedList.Rows.Clone()
-ManagedList.Rows.Push({Name:"obsolete",Text:"obsolete",Key:"",ItemId:"obsolete-id"})
-SendMessage(0x102F,ManagedList.Rows.Length,0,ManagedList.Hwnd)
+ManagedList.Content := ManagedList.Content.Clone()
+ManagedList.Content.Items := ManagedList.Content.Items.Clone()
+ManagedList.Content.Items.Push({Name:"obsolete",Text:"obsolete",Slot:0,Id:"obsolete-id"})
+SendMessage(0x102F,ManagedList.Content.Items.Length,0,ManagedList.Hwnd)
 global ProbeManagementFailure := true
 failed := false
 try RefreshManagement()

@@ -21,28 +21,46 @@ BuildPaletteItems(profile, sharedItems, query, keys) {
 }
 BuildManagementPresentation(profiles, sharedItems, editId, keys) {
     index := FindProfileIndexById(profiles,editId), profile := index ? profiles[index] : 0
-    choices := [{Id:"",Name:"共通の弾幕"}], rows := []
+    choices := [{Id:"",Name:"共通の弾幕"}]
     for entry in profiles
         choices.Push({Id:entry.Id,Name:entry.Name})
     id := profile ? profile.Id : ""
-    CollectPresentationItems(rows,profile ? profile.Items : sharedItems,id,"",0,keys)
     return {Choices:choices, Choice:index+1, ProfileId:id,
-        Rows:rows, Channel:profile ? "チャンネル：" (profile.Channel != "" ? profile.Channel : "チャンネル未連携") : "すべてのチャンネルで使う弾幕です。"}
+        Content:BuildManagedContent(profile ? profile.Items : sharedItems,id,keys),
+        Channel:profile ? "チャンネル：" (profile.Channel != "" ? profile.Channel : "チャンネル未連携") : "すべてのチャンネルで使う弾幕です。"}
 }
 CollectPresentationItems(rows, items, profileId, query, limit, keys) {
     for i, item in items {
         if query != "" && !InStr(item.Name " " item.Text,query)
             continue
-        if limit && rows.Length >= limit
+        if rows.Length >= limit
             return true
         rows.Push(BuildPresentationRow(item,i,profileId,keys))
     }
     return false
 }
 
-; Full lists and partial reorder updates use the same captured values and key label.
+; Palette rows capture the displayed values independently of the live items.
 BuildPresentationRow(item, index, profileId, keys) {
     scope := profileId = "" ? "shared" : "profile", slot := item.Slot
     return {Index:index, ProfileId:profileId, Text:item.Text, Name:item.Name, ItemId:item.Id,
         Key:slot ? StrReplace(ShortcutKeyLabel(keys[scope slot]),"＋","+") : ""}
+}
+
+; Own one immutable item sequence and its key labels, not a second object per item.
+BuildManagedContent(items, profileId, keys) {
+    scope := profileId = "" ? "shared" : "profile"
+    return {Items:items, KeyLabels:["",StrReplace(ShortcutKeyLabel(keys[scope 1]),"＋","+"),StrReplace(ShortcutKeyLabel(keys[scope 2]),"＋","+")]}
+}
+ManagedCellText(content, index, column) {
+    if index < 1 || index > content.Items.Length
+        return ""
+    item := content.Items[index]
+    switch column {
+        case 1: return item.Name
+        case 2: return item.Text
+        case 3: return content.KeyLabels[item.Slot+1]
+        case 4: return item.Id
+    }
+    return ""
 }

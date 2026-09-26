@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$anchor='    rows := [BuildPresentationRow(items[previous],previous,id,ShortcutKeys), BuildPresentationRow(items[current],current,id,ShortcutKeys)]'
+$anchor='    content := BuildManagedContent(items,id,ShortcutKeys)'
 Edit-TestSource $release 'src/ui/management/management_view.ahk' $anchor ($anchor+"`r`n    ProbePartialUpdate()")
 $commitBoundary='    if !result'
 Edit-TestSource $release 'src/ui/management/management_controller.ahk' $commitBoundary ("    ProbeManagedCommit()`r`n"+$commitBoundary)
@@ -62,7 +62,7 @@ for scope in ["shared","profile"] {
 ; A stale owner must not replace profile rows with unrelated shared items.
 beforeRows := [ManagedList.GetText(1,4),ManagedList.GetText(2,4)]
 EditingProfileId := "missing-profile", missingOwner := ""
-try RenderManagedOrder(1,2)
+try RenderManagedOrder(2)
 catch as failure
     missingOwner := failure.Message
 finally EditingProfileId := id
