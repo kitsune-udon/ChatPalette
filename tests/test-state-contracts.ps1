@@ -1,4 +1,4 @@
-﻿# Test-Session: Desktop
+﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
@@ -210,7 +210,10 @@ for saveChange in [() => SaveAutoDetection(!AutoMode),
     Assert(persisted.AutoMode=AutoMode && persisted.ShortcutKeys["reaction"]==ShortcutKeys["reaction"]
         && persisted.ShortcutKeys["chat_focus"]==ShortcutKeys["chat_focus"],"concurrent selection retains committed preference values")
 }
-FileAppend("PASS: " Checks " identity, publication, storage-range and job-state checks`n","*")
+Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd)
+    && !DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd) && !ReactionOverlay && !ActiveEditorDialog,
+    "state contracts leave all application views hidden without opening an overlay or editor")
+FileAppend("PASS: " Checks " identity, publication, storage-range and job-state checks; no interactive windows`n","*")
 ExitApp()
 ProbePreferenceCommit() {
     global ProbePreferenceArmed

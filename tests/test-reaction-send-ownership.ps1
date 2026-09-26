@@ -1,4 +1,4 @@
-﻿# Test-Session: Desktop
+﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $ownershipRuntime=New-TestRuntime
@@ -25,7 +25,10 @@ for scenario in [{Point:1,Throws:false,Requests:0,Precision:""},
     Assert(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"replacement keeps operation controls locked: " label)
     FinishReactionJob(OwnershipReplacement)
 }
-FileAppend("PASS: " Checks " send-loop ownership checks; no real browser operations`n","*")
+Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd)
+    && !DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd) && !ReactionOverlay && !ActiveEditorDialog,
+    "send-loop ownership checks leave application views hidden without opening an overlay or editor")
+FileAppend("PASS: " Checks " send-loop ownership checks; no interactive windows or browser operations`n","*")
 ExitApp()
 ReplaceOwnershipJob() {
     global ActiveReactionJob, OwnershipReplacement

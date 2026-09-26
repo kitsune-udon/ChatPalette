@@ -62,7 +62,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
 | SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、バックアップと復旧 |
 | 登録保存・同期・表示 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 登録の検証・保存・同期を区別し、中止時と同期失敗時のデータ・失敗理由を保全。再同期まで操作を拒否。登録状態の表示はDBを直接読み、通信・操作制限・診断更新を行わない |
-| 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有 |
+| 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面・キー解放は代替処理を使うHeadless検査 |
 | 設定整合性 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・空・不正な設定やIDを拒否し、呼び出し元データとDB原本を保持 |
 | 起動・復旧 | [test-startup.ps1](../../tests/test-startup.ps1) | 標準の`/Validate`による構文検査・起動中プロセスとDBの保持、空・破損DBの原本保持、初期作成中断後の再試行 |
 | 空のライブラリ | [test-empty-settings.ps1](../../tests/test-empty-settings.ps1) | 新規状態・最後の削除・配信者なしの共通弾幕・再読み込み |
@@ -78,7 +78,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 通知の寿命 | [test-status-tip.ps1](../../tests/test-status-tip.ps1) | 実ツールチップの期限・置換・継続表示・消去 |
 | 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 診断・補助画面・開始失敗・中止・小画面配置の連携 |
 | 即時リアクション | [test-quick-reaction.ps1](../../tests/test-quick-reaction.ps1) | キー解放・動画確認・開始前の中止と交代、実行への引き継ぎ |
-| 送信中の所有 | [test-reaction-send-ownership.ps1](../../tests/test-reaction-send-ownership.ps1) | 前面確認・応答中に交代したジョブの資源解放と後続処理の保護 |
+| 送信中の所有 | [test-reaction-send-ownership.ps1](../../tests/test-reaction-send-ownership.ps1) | 前面確認・応答中に交代したジョブの資源解放と後続処理の保護。前面・通信・タイマー精度を代替処理にし、非表示コントロールを扱うHeadless検査 |
 | カウントダウン | [test-reaction-countdown.ps1](../../tests/test-reaction-countdown.ps1) | 待機・登録再試行・通知中の交代と中止、古いタイマーの抑止 |
 | リアクション開始 | [test-reaction-start.ps1](../../tests/test-reaction-start.ps1) | 開始途中の交代と中止、後続ジョブへのタイマー・結果の誤反映防止 |
 | 結果の公開 | [test-reaction-results.ps1](../../tests/test-reaction-results.ps1) | 操作制限の解除・結果描画中に交代しても、実行中または終了済みの後続ジョブの状態・結果・通知を維持 |
