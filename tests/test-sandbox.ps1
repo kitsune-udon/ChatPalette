@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 . (Join-Path $ProjectRoot 'scripts\release-files.ps1')
-$runtime = New-TestRuntime
+$runtime = New-TestDirectory
 Copy-ReleaseFiles -Project $ProjectRoot -Destination $runtime
 # Poll a log while the writer holds it open, including a split UTF-8 character.
 $log=[pscustomobject]@{Path=(Join-Path $runtime 'progress.txt'); Position=0}

@@ -1,7 +1,7 @@
 ﻿# Test-Session: Headless
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
-$release=New-TestRuntime
+$release=New-TestDirectory
 . (Join-Path $ProjectRoot 'scripts\release-files.ps1')
 Copy-ReleaseFiles $ProjectRoot $release
 # A version change needs no README rewrite; validation and both outputs use VERSION.

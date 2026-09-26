@@ -10,10 +10,14 @@ function Assert($condition, [string]$label) {
     }
     $script:checks++
 }
-function New-TestRuntime {
+function New-TestDirectory {
     $base = if ($env:HELPER_TEST_ROOT) { $env:HELPER_TEST_ROOT } else { Join-Path $PSScriptRoot '.tmp' }
     $path = Join-Path $base ([guid]::NewGuid().ToString('N').Substring(0,16))
     New-Item -ItemType Directory -Path $path -Force | Out-Null
+    return $path
+}
+function New-TestRuntime {
+    $path = New-TestDirectory
     Get-ChildItem -LiteralPath $ProjectRoot -File | Where-Object { $_.Extension -in '.ahk','.ps1' -or $_.Name -eq 'VERSION' } | Copy-Item -Destination $path
     Copy-Item -LiteralPath (Join-Path $ProjectRoot 'src') -Destination $path -Recurse
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures\library-model.ahk') -Destination (Join-Path $path 'library-model.ahk')
