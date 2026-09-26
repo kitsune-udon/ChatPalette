@@ -17,7 +17,7 @@ Assert((GetEditingProfileId() = "") && ManagementTarget.Value=1, "empty manageme
 OpenDanmakuEditor(true)
 Assert(!!ActiveEditorDialog, "shared editor needs no author")
 CloseDanmakuEditor(ActiveEditorDialog.Window)
-state := CreateTestSettingsSnapshot()
+state := CreateTestLibrarySnapshot()
 state.Profiles.Push({Id:NewRecordId(),Name:"first",Channel:"",Items:[]})
 CommitTestLibraryChange(state,"add")
 Assert(Profiles.Length=1 && InputProfileId="","first added author does not steal input selection")

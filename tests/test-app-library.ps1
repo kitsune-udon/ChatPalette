@@ -9,7 +9,7 @@ Invoke-AppFixture -Body @'
     Assert(!Profiles[1].HasOwnProp("Reaction"), "profile reaction setting removed")
     Assert(Profiles[1].Items[1].Slot = 1, "fixture first preset keeps shortcut")
 
-    initial := CreateTestSettingsSnapshot()
+    initial := CreateTestLibrarySnapshot()
     initial.Profiles.Push({Id:NewRecordId(),Name:"editing B",Channel:"/channel/b",Items:[]})
     CommitTestLibraryChange(initial,"test author")
     SaveInputProfileId(Profiles[1].Id)
@@ -17,22 +17,22 @@ Invoke-AppFixture -Body @'
     EditingProfileId := Profiles[-1].Id
     RefreshManagement()
     Assert(GetInputProfile().Id = activeId, "editing another profile preserves active input target")
-    state := CreateTestSettingsSnapshot()
+    state := CreateTestLibrarySnapshot()
     FindProfileById(state.Profiles,EditingProfileId).Items := [{Id:"library-b",Name:"B",Text:"bbb",Slot:1}]
     CommitTestLibraryChange(state,"B item")
     Assert(GetInputProfile().Id = activeId && FindProfileById(Profiles,EditingProfileId).Items.Length = 1,"editing commits without changing active target")
     EditingProfileId := Profiles[1].Id
     originalText := Profiles[1].Items[1].Text
-    state := CreateTestSettingsSnapshot()
+    state := CreateTestLibrarySnapshot()
     first := state.Profiles[1].Items.RemoveAt(1)
     state.Profiles[1].Items.Push(first)
     CommitTestLibraryChange(state,"reorder")
     Assert(Profiles[1].Items[-1].Slot = 1 && Profiles[1].Items[-1].Text = originalText,"shortcut follows item after reorder")
-    state := CreateTestSettingsSnapshot()
+    state := CreateTestLibrarySnapshot()
     AssignItemSlot(state.Profiles[1].Items,1,1)
     CommitTestLibraryChange(state,"assign")
     Assert(Profiles[1].Items[1].Slot = 1 && Profiles[1].Items[-1].Slot = 0,"assignment moves uniquely")
-    state := CreateTestSettingsSnapshot()
+    state := CreateTestLibrarySnapshot()
     state.Profiles[1].Items.RemoveAt(1)
     CommitTestLibraryChange(state,"delete")
     for item in Profiles[1].Items
@@ -43,7 +43,7 @@ Invoke-AppFixture -Body @'
     UndoLibraryChange()
     Assert(Profiles[1].Items[-1].Slot=1,"multi-step undo restores previous assignment")
     beforeCount := Profiles.Length
-    state := CreateTestSettingsSnapshot()
+    state := CreateTestLibrarySnapshot()
     state.Profiles.RemoveAt(1)
     CommitTestLibraryChange(state,"remove active")
     Assert(InputProfileId="","deleting active author never silently targets next author")
@@ -51,7 +51,7 @@ Invoke-AppFixture -Body @'
     Assert(Profiles.Length=beforeCount && InputProfileId="","undo restores author without selecting a different target")
     SaveInputProfileId(Profiles[1].Id)
     EditingProfileId := ""
-    state := CreateTestSettingsSnapshot()
+    state := CreateTestLibrarySnapshot()
     state.SharedDanmakuItems := [{Id:"search-target",Name:"search target",Text:"unique body",Slot:1},{Id:"search-other",Name:"other",Text:"other",Slot:0}]
     CommitTestLibraryChange(state,"shared")
     PaletteSearch.Value := "unique body"
@@ -68,7 +68,7 @@ Invoke-AppFixture -Body @'
     priorProfiles := Profiles, priorHistory := LibraryHistory.Length, path := SettingsDatabasePath
     SettingsDatabasePath := A_ScriptDir "\missing\cannot-save.db"
     failed := false
-    state := CreateTestSettingsSnapshot(), state.Profiles[1].Name := "not saved"
+    state := CreateTestLibrarySnapshot(), state.Profiles[1].Name := "not saved"
     try CommitTestLibraryChange(state,"failed")
     catch
         failed := true

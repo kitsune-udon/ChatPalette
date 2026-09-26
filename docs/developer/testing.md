@@ -150,7 +150,7 @@ GUI操作では、前提と結果を別々に確認します。最前面であ�
 
 PowerShell側も`support.ps1`の`Assert 条件 説明`と`$script:checks`を共有します。判定失敗は呼び出し元のファイル・行を標準エラーへ記録してから例外を出します。製品の`catch`や疑似UI要素の`ScriptProperty`・`ScriptMethod`が例外を吸収しても、ランナーがこの記録を検出して失敗とし、調査用コピーを残します。故障注入には通常の`throw`、呼ばれてはいけない処理には`Assert $false`を使います。プロセスを強制終了せず、シナリオの`finally`による後始末を維持します。
 
-`fixtures/library-model.ahk`はテストデータの全件コピーと確定を担当します。`New-TestRuntime`が隔離先へコピーし、`Invoke-AppTest`が読み込みます。初期化を行わないSQLiteテストとUIベンチマークでは入口から明示的に読み込みます。補助名は`Test`を含め、確定時は製品の`CommitLibraryDraft`を使うため、保存・公開・履歴の処理をテスト側に複製しません。
+`fixtures/library-model.ahk`はテストデータのコピーと確定を担当します。ライブラリ編集には`CreateTestLibrarySnapshot`を使い、共通設定やキーを含む保存・照合には`CreateTestSettingsSnapshot`を使います。`New-TestRuntime`が隔離先へコピーし、`Invoke-AppTest`が読み込みます。初期化を行わないSQLiteテストとUIベンチマークでは入口から明示的に読み込みます。補助名は`Test`を含め、確定時は製品の`CommitLibraryDraft`を使うため、保存・公開・履歴の処理をテスト側に複製しません。
 
 ### 失敗・割り込み・資源解放の検証
 
