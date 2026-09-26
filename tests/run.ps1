@@ -36,7 +36,12 @@ try {
             $env:HELPER_TEST_ROOT = $runRoot
             $out = Join-Path $runRoot ($testName + '.stdout.txt')
             $err = Join-Path $runRoot ($testName + '.stderr.txt')
-            $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $test.FullName + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+            $modulePath = $env:PSModulePath
+            try {
+                # Let Windows PowerShell build its own paths instead of inheriting PowerShell 7 modules.
+                $env:PSModulePath = $null
+                $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $test.FullName + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+            } finally { $env:PSModulePath = $modulePath }
             try { $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000 }
             finally { Get-Content -LiteralPath $out,$err }
             if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName" }

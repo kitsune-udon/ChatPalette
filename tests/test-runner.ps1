@@ -11,6 +11,8 @@ $scripts=Join-Path $runtime 'scripts'
 New-Item -ItemType Directory -Path $scripts | Out-Null
 $sourceCheck=Join-Path $scripts 'check-source.ps1'
 $sourceProbe=@'
+$hash=Get-FileHash -LiteralPath $PSCommandPath
+if ($hash.Hash.Length -ne 64) { throw 'Source check could not use the standard hashing module' }
 [IO.File]::WriteAllText((Join-Path $PSScriptRoot '..\source-ready'),'validated')
 Write-Output 'fixture-source'
 '@
@@ -21,12 +23,14 @@ $desktop=Join-Path $fixture 'test-beta.ps1'
 # Test-Session: Headless
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) { throw 'Tests must run in Windows PowerShell 5.1' }
 if (!(Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\source-ready'))) { throw 'Test started before source validation' }
+if ((Get-FileHash -LiteralPath $PSCommandPath).Hash.Length -ne 64) { throw 'Test could not use the standard hashing module' }
 Write-Output 'fixture-alpha'
 '@,[Text.UTF8Encoding]::new($true))
 [IO.File]::WriteAllText($desktop,"# Test-Session: Desktop`r`nWrite-Output 'fixture-beta'`r`n",[Text.UTF8Encoding]::new($true))
 $base=Join-Path $fixture '.tmp'
 $oldRoot=$env:HELPER_TEST_ROOT
 $oldAhk=$env:AHK_EXE
+$oldModulePath=$env:PSModulePath
 $listed=@(& $runner -Name 'test-alpha.ps1' -List)
 if ($listed.Count -ne 1 -or $listed[0] -ne 'test-alpha.ps1' -or (Test-Path -LiteralPath $base)) { throw 'Named listing did not select exactly one test without preparing a runtime' }
 $listed=@(& $runner -Name 'test-beta.ps1','test-alpha.ps1','test-alpha.ps1' -List)
@@ -41,14 +45,14 @@ foreach ($arguments in @(@{Name='missing.ps1'},@{Name='test-beta.ps1';Group='Hea
 $output=@(& $runner -Name 'test-alpha.ps1')
 if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Named run did not validate source exactly once' }
 if ($output -notcontains 'fixture-alpha' -or $output -contains 'fixture-beta' -or ($output -join "`n") -notmatch 'PASS: test-alpha\.ps1 / 1 test groups') { throw 'Named run did not execute exactly the selected test' }
-if (@(Get-ChildItem -LiteralPath $base -Directory).Count -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Successful named run did not clean up or restore its environment' }
+if (@(Get-ChildItem -LiteralPath $base -Directory).Count -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'Successful named run did not clean up or restore its environment' }
 $output=@(& $runner -Name 'test-beta.ps1','test-alpha.ps1','test-alpha.ps1')
 $runs=@($output | Where-Object { $_ -like 'RUN: *' })
 if (($runs -join ',') -ne 'RUN: check-source.ps1,RUN: test-alpha.ps1,RUN: test-beta.ps1' -or
     @($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1 -or
     $output -notcontains 'fixture-alpha' -or $output -notcontains 'fixture-beta' -or
     ($output -join "`n") -notmatch 'PASS: test-alpha\.ps1, test-beta\.ps1 / 2 test groups') { throw 'Multiple-name run skipped, repeated or reordered a check' }
-if (@(Get-ChildItem -LiteralPath $base -Directory).Count -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Multiple-name run did not clean up or restore its environment' }
+if (@(Get-ChildItem -LiteralPath $base -Directory).Count -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'Multiple-name run did not clean up or restore its environment' }
 $output=@(& $runner -Group Desktop)
 if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Desktop selection skipped or repeated source validation' }
 if ($output -notcontains 'fixture-beta' -or $output -contains 'fixture-alpha' -or ($output -join "`n") -notmatch 'PASS: Desktop / 1 test groups') { throw 'Group selection changed' }
@@ -59,7 +63,7 @@ if ($output -notcontains 'fixture-alpha' -or $output -notcontains 'fixture-beta'
 $failed=$false
 try { & $runner -Name 'test-alpha.ps1' -AutoHotkeyPath 'fixture-runtime.exe' -WarningAction SilentlyContinue | Out-Null } catch { $failed=$true }
 $retained=@(Get-ChildItem -LiteralPath $base -Directory)
-if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Failed named run did not retain evidence or restore its environment' }
+if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'Failed named run did not retain evidence or restore its environment' }
 $stderr=Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'
 if (!(Test-Path -LiteralPath $stderr) -or [IO.File]::ReadAllText($stderr) -notmatch 'fixture failure') { throw 'Failed test stderr was not retained' }
 # Source failure stops before any selected test starts; listing still remains read-only.
@@ -74,7 +78,7 @@ try {
     $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
     if ($failure -ne 'Failed: check-source.ps1' -or $observed.Contains('RUN: test-alpha.ps1') -or $retained.Count -ne 1) { throw 'Source failure did not stop before the selected tests' }
     if ([IO.File]::ReadAllText((Join-Path $retained[0].FullName 'check-source.ps1.stderr.txt')) -notmatch 'fixture source failure') { throw 'Source failure lost its diagnostic evidence' }
-    if ($env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Source failure changed the caller environment' }
+    if ($env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'Source failure changed the caller environment' }
 } finally { [IO.File]::WriteAllText($sourceCheck,$sourceProbe,[Text.UTF8Encoding]::new($true)) }
 # Earlier successful groups must be gone before the next group starts.
 [IO.File]::WriteAllText($headless,@'
@@ -94,7 +98,7 @@ $before=@(Get-ChildItem -LiteralPath $base -Directory | Select-Object -ExpandPro
 $failed=$false
 try { & $runner -Group All -AutoHotkeyPath 'fixture-runtime.exe' -WarningAction SilentlyContinue | Out-Null } catch { $failed=$true }
 $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
-if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'A later group failure lost isolation or environment restoration' }
+if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'A later group failure lost isolation or environment restoration' }
 $failedRoot=$retained[0].FullName
 if (!(Test-Path -LiteralPath (Join-Path $failedRoot 'failed-copy.txt')) -or (Test-Path -LiteralPath (Join-Path $failedRoot 'successful-copy.txt'))) { throw 'A later failure did not retain only its own artifacts' }
 if ([IO.File]::ReadAllText((Join-Path $failedRoot 'test-beta.ps1.stderr.txt')) -notmatch 'fixture beta failure') { throw 'The later group failure lost its diagnostic output' }
@@ -168,7 +172,7 @@ Start-Sleep -Seconds 30
         throw 'Group timeout hid its last output or original timeout error'
     }
     $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
-    if ($retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Group timeout lost evidence or environment restoration' }
+    if ($retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'Group timeout lost evidence or environment restoration' }
 } finally { [IO.File]::WriteAllBytes($runner,$runnerBytes) }
 $ahkTimeout=Join-Path $runtime 'ahk-timeout'
 New-Item -ItemType Directory -Path $ahkTimeout | Out-Null
