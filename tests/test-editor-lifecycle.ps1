@@ -90,7 +90,7 @@ TargetBrowserHwnd := ManagementWindow.Hwnd
 ProbeEditorFailure := false
 global ProbeEditorBuildFailure := false, ProbeBuiltEditorHwnd := 0, ProbeBuiltViewport := 0
 for openEditor in [TransferItem,OpenChannelLinkDialog,ShowShortcutManager] {
-    ManagedList.Modify(1,"Select Focus")
+    SelectListRow(ManagedList,1)
     ProbeEditorBuildFailure := true, ProbeBuiltEditorHwnd := 0, ProbeBuiltViewport := 0
     beforeCritical := A_IsCritical
     failed := false
@@ -114,7 +114,7 @@ for openEditor in [TransferItem,OpenChannelLinkDialog,ShowShortcutManager] {
 }
 ProbeEditorFailure := true
 for openEditor in [() => OpenDanmakuEditor(true),TransferItem,OpenChannelLinkDialog] {
-    ManagedList.Modify(1,"Select Focus")
+    SelectListRow(ManagedList,1)
     failed := false
     try openEditor.Call()
     catch as failure {
@@ -128,7 +128,7 @@ for openEditor in [() => OpenDanmakuEditor(true),TransferItem,OpenChannelLinkDia
 ProbeEditorFailure := false
 global ProbeEditorBeginFailure := false
 for openEditor in [() => OpenDanmakuEditor(true),TransferItem,OpenChannelLinkDialog,ShowShortcutManager,() => ManageProfile("unbind")] {
-    ManagedList.Modify(1,"Select Focus")
+    SelectListRow(ManagedList,1)
     ProbeEditorBeginFailure := true
     failed := false
     try openEditor.Call()

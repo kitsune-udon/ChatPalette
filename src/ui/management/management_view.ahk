@@ -33,7 +33,10 @@ BuildManagement() {
     ManagementProfileMenu := ManagementWindow.AddButton("x28 y112 w280 h32","配信者の設定…")
     ManagementProfileMenu.OnEvent("Click",OpenManagedProfileMenu)
     ManagementListHeading := ManagementWindow.AddText("x28 y202 w680 h24","弾幕一覧 — 選んで編集")
-    ManagedList := ManagementWindow.AddListView("x28 y218 w680 h210 -Multi NoSortHdr", ["弾幕名", "本文", "キー", "ID"])
+    ManagedList := ManagementWindow.AddListView("x28 y218 w680 h210 -Multi NoSortHdr +0x1000", ["弾幕名", "本文", "キー", "ID"])
+    ManagedList.Rows := [] ; LVS_OWNERDATA: this control owns its presentation snapshot.
+    ManagedList.OnNotify(-177,ProvideManagedText) ; LVN_GETDISPINFOW
+    ManagedList.OnNotify(-179,FindManagedRow) ; LVN_ODFINDITEMW
     ManagedList.ModifyCol(4,0)
     ManagedList.OnEvent("ItemSelect",UpdateManagementActions)
     ManagedList.OnEvent("DoubleClick", (*) => OpenDanmakuEditor(false))
@@ -114,27 +117,57 @@ RenderManagement() {
     ManagementTarget.Choose(model.Choice)
     ManagementChannel.Text := model.Channel
     position := BeginListRefresh(ManagedList,4)
+    previousRows := ManagedList.Rows
     try {
-        existingRows := ManagedList.GetCount()
-        ; Bulk deletion is cheaper when more rows are removed than retained.
-        if existingRows > model.Rows.Length*2 {
-            ManagedList.Delete()
-            existingRows := 0
-        }
-        for i,row in model.Rows {
-            if i <= existingRows
-                ManagedList.Modify(i,"",row.Name,row.Text,row.Key,row.ItemId)
-            else
-                ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)
-        }
-        Loop Max(0,existingRows-model.Rows.Length)
-            ManagedList.Delete(existingRows-A_Index+1)
+        ManagedList.Rows := model.Rows
+        if !SendMessage(0x102F,model.Rows.Length,0,ManagedList.Hwnd) ; LVM_SETITEMCOUNT
+            throw Error("管理一覧の件数を更新できません。")
+    } catch as failure {
+        ManagedList.Rows := previousRows
+        throw failure
     } finally {
         EndListRefresh(ManagedList,position,4)
     }
     ManagementWindow.GetClientPos(,,&width,&height)
     if width > 0
         ResizeManagement(ManagementWindow,0,width,height)
+}
+
+ProvideManagedText(control, notification) {
+    item := notification+3*A_PtrSize ; NMLVDISPINFO.item follows NMHDR.
+    if !(NumGet(item,0,"UInt") & 1) ; LVIF_TEXT
+        return 0
+    index := NumGet(item,4,"Int")+1, column := NumGet(item,8,"Int")+1
+    offset := A_PtrSize=8 ? 24 : 20
+    target := NumGet(item,offset,"Ptr"), capacity := NumGet(item,offset+A_PtrSize,"Int")
+    if !target || capacity<1
+        return 0
+    text := ""
+    if index>=1 && index<=control.Rows.Length && column>=1 && column<=4
+        text := control.Rows[index].%["Name","Text","Key","ItemId"][column]%
+    StrPut(SubStr(text,1,capacity-1),target,capacity,"UTF-16")
+    return 0
+}
+
+FindManagedRow(control, notification) {
+    start := Max(0,NumGet(notification,3*A_PtrSize,"Int"))
+    info := notification+(A_PtrSize=8 ? 32 : 16) ; NMLVFINDITEM.lvfi
+    flags := NumGet(info,0,"UInt"), pointer := NumGet(info,A_PtrSize,"Ptr")
+    if !pointer || (flags & 0x41) ; LPARAM and icon-position searches are not text searches.
+        return -1
+    query := StrGet(pointer,"UTF-16"), count := control.Rows.Length
+    Loop count {
+        index := start+A_Index-1
+        if index>=count {
+            if !(flags & 0x20) ; LVFI_WRAP
+                break
+            index := Mod(index,count)
+        }
+        name := control.Rows[index+1].Name
+        if (flags & 0xC) ? InStr(name,query)=1 : name=query ; PARTIAL/SUBSTRING both mean prefix.
+            return index
+    }
+    return -1
 }
 
 
@@ -219,7 +252,9 @@ RenderManagedSelection(index) {
 
 SelectManagedRow(index) {
     if ManagedList.GetCount() {
-        ManagedList.Modify(Min(Max(1,index),ManagedList.GetCount()),"Select Focus Vis")
+        index := Min(Max(1,index),ManagedList.GetCount())
+        SelectListRow(ManagedList,index)
+        SendMessage(0x1013,index-1,0,ManagedList.Hwnd) ; LVM_ENSUREVISIBLE
     }
     ; Programmatic selection must not depend on deferred ItemSelect callbacks.
     UpdateManagementActions()
@@ -273,7 +308,7 @@ RenderManagedOrder(previous, current) {
     position.Selected := current ; The moved identity is now at this index; avoid a full-list search.
     try {
         for row in rows
-            ManagedList.Modify(row.Index,"",row.Name,row.Text,row.Key,row.ItemId)
+            ManagedList.Rows[row.Index] := row
     } finally {
         EndListRefresh(ManagedList,position,4)
     }

@@ -126,6 +126,14 @@ IsAppWindow(hwnd) {
     return pid = DllCall("GetCurrentProcessId")
 }
 
+; LVM_SETITEMSTATE works for both stored and virtual lists. Zero clears selection.
+SelectListRow(list, index) {
+    item := Buffer(A_PtrSize=8 ? 88 : 60,0)
+    NumPut("UInt",index ? 3 : 0,"UInt",index ? 3 : 2,item,12)
+    if !SendMessage(0x102B,index-1,item.Ptr,list.Hwnd)
+        throw Error("一覧の選択を更新できません。")
+}
+
 BeginListRefresh(list, keyColumn) {
     selected := list.GetNext()
     state := {Selected:selected, Key:selected ? list.GetText(selected,keyColumn) : "",
@@ -147,7 +155,7 @@ EndListRefresh(list, state, keyColumn) {
                 }
         }
         if count
-            list.Modify(selected ? selected : 1,"Select Focus")
+            SelectListRow(list,selected ? selected : 1)
     } finally {
         list.Opt("+Redraw")
         ; WM_SETREDRAW can expose an inactive tab control. Restore the native

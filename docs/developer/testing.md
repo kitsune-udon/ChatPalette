@@ -82,7 +82,8 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | カウントダウン | [test-reaction-countdown.ps1](../../tests/test-reaction-countdown.ps1) | 待機・登録再試行・通知中の交代と中止、古いタイマーの抑止 |
 | リアクション開始 | [test-reaction-start.ps1](../../tests/test-reaction-start.ps1) | 開始途中の交代と中止、後続ジョブへのタイマー・結果の誤反映防止 |
 | 結果の公開 | [test-reaction-results.ps1](../../tests/test-reaction-results.ps1) | 操作制限の解除・結果描画中に交代しても、実行中または終了済みの後続ジョブの状態・結果・通知を維持 |
-| 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 未変更データの共有、差分編集、同値保存・非表示更新・同値描画の抑制、管理行の再利用・増減と選択・スクロールの保持 |
+| 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 未変更データの共有、差分編集、同値保存・非表示更新・同値描画の抑制、管理行の置換・増減と選択・スクロールの保持 |
+| 管理一覧の表示通知 | [test-management-virtual.ps1](../../tests/test-management-virtual.ps1) | 名前の完全一致・前方一致・折り返し検索、文字入力によるID選択、Unicode表示バッファの境界と終端、空一覧 |
 | 検索・選択肢 | [test-search-scheduling.ps1](../../tests/test-search-scheduling.ps1) | 検索の集約、古い結果による操作の拒否、選択肢の再利用とIDの追従 |
 | 時間制御 | [test-timing.ps1](../../tests/test-timing.ps1) | 送信間隔・中止・単調増加時計、タイマー精度と実行ジョブの解放 |
 | リアクション検出 | [test-reactions.ps1](../../tests/test-reactions.ps1) | 5種類の識別、登録情報の妥当性、一括取得の整合性、操作直前の対象確認 |

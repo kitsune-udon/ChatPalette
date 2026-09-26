@@ -171,7 +171,7 @@ Invoke-AppFixture -Body @'
                     {Id:"destination",Name:"Destination",Channel:"",Items:[]}],SharedDanmakuItems:sourceId = "" ? items : []}
                 CommitTestLibraryChange(library,"dialog identity fixture")
                 EditingProfileId := sourceId
-                RefreshManagement(), ManagedList.Modify(2,"Select Focus")
+                RefreshManagement(), SelectListRow(ManagedList,2)
                 if action = "edit"
                     OpenDanmakuEditor(false)
                 else

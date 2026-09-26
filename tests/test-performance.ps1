@@ -180,8 +180,8 @@ Assert(ManagedList.GetNext()=1,"removed selection falls back to the first curren
 SelectManagedRow(2)
 SharedDanmakuItems := [SharedDanmakuItems[2],SharedDanmakuItems[1]]
 RefreshManagement()
-Assert(ManagedList.GetNext()=1 && ManagedList.GetText(1,4)=="CASE-ID","reused rows restore identity with case-sensitive matching")
-Assert(ManagedList.GetText(1,3)="" && ManagedList.GetText(2,3)="Ctrl+Shift+F8","rewriting rows clears obsolete shortcut labels")
+Assert(ManagedList.GetNext()=1 && ManagedList.GetText(1,4)=="CASE-ID","replacement rows restore identity with case-sensitive matching")
+Assert(ManagedList.GetText(1,3)="" && ManagedList.GetText(2,3)="Ctrl+Shift+F8","replacing rows clears obsolete shortcut labels")
 retained := SharedDanmakuItems.Clone()
 Loop 6
     SharedDanmakuItems.Push({Id:"extra-" A_Index,Name:"extra",Text:"extra body",Slot:0})

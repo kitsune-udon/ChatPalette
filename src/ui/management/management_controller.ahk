@@ -16,7 +16,7 @@ GetSelectedManagedTarget() {
         message := failure.Message
     }
     RefreshManagement()
-    ManagedList.Modify(0,"-Select")
+    SelectListRow(ManagedList,0)
     UpdateManagementActions()
     SetManagementNotice(message)
     return 0

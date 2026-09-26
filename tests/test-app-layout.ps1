@@ -178,7 +178,7 @@ Invoke-AppFixture -Body @'
     EditingProfileId := ""
     RefreshManagement()
     Assert(!ManagementProfileMenu.Enabled,"shared library has no profile settings action")
-    ManagedList.Modify(0,"-Select")
+    SelectListRow(ManagedList,0)
     UpdateManagementActions()
     Assert(ManagementItemButtons[1].Enabled && !ManagementItemButtons[2].Enabled && !ManagementItemButtons[7].Enabled,"selection dependent actions are disabled")
     if ManagedList.GetCount() {
@@ -322,7 +322,7 @@ Invoke-AppFixture -Body @'
         LinkWaitChange := ""
     }
     EditingProfileId := ""
-    RefreshManagement(), ManagedList.Modify(1,"Select Focus")
+    RefreshManagement(), SelectListRow(ManagedList,1)
     TransferItem()
     destination := FindDialogControl("DDL")
     destination.Choose(2)
@@ -331,7 +331,7 @@ Invoke-AppFixture -Body @'
     moved := FindProfileById(Profiles,"link-A").Items
     Assert(SharedDanmakuItems.Length=0 && moved.Length=1 && moved[1].Id=="move-item" && moved[1].Slot=0,"move uses the displayed destination ID after an earlier same-name profile is deleted")
     EditingProfileId := "link-A"
-    RefreshManagement(), ManagedList.Modify(1,"Select Focus")
+    RefreshManagement(), SelectListRow(ManagedList,1)
     TransferItem()
     Assert(FindDialogControl("DDL").Text="共通の弾幕","profile-to-shared move exposes its explicit shared destination")
     SubmitDialog("移動")
@@ -391,7 +391,7 @@ Invoke-AppFixture -Body @'
         catch as failure
             failureMessage := failure.Message
         Assert(InStr(failureMessage,"Test window did not become active: " target.Expected)
-            && InStr(failureMessage,"foreground_owned=1"),target.Name ": failure identifies the actual window state")
+            && InStr(failureMessage,"foreground_owned=1"),target.Name ": failure identifies the actual window state; observed=" failureMessage)
         Assert(RegExMatch(failureMessage," desktop=(?!unavailable\()[^\r\n]+ receives_input=1$"),
             target.Name ": failure identifies the desktop receiving user input")
         Assert(WinActive("ahk_id " anchor.Hwnd),target.Name ": waiting never activates a different window")

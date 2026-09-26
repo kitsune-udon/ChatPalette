@@ -86,7 +86,7 @@ Loop 3
     ExecuteDanmakuCommand("add","","",{Name:"same",Text:"same",Slot:0})
 RefreshPalette(), RefreshManagement()
 selectedId := SharedDanmakuItems[2].Id
-PaletteList.Modify(2,"Select Focus"), ManagedList.Modify(2,"Select Focus")
+PaletteList.Modify(2,"Select Focus"), SelectListRow(ManagedList,2)
 ExecuteDanmakuCommand("delete","",SharedDanmakuItems[1].Id)
 RefreshPalette(), RefreshManagement()
 Assert(PaletteList.GetText(PaletteList.GetNext(),4)=selectedId,"palette restores duplicate text by ID after preceding deletion")

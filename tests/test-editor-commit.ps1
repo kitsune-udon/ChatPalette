@@ -20,8 +20,8 @@ EditingProfileId := ""
 RefreshManagement()
 for action in ["duplicate","up","down","edit","transfer","delete"] {
     selected := action="up" ? 2 : 1
-    ManagedList.Modify(0,"-Select")
-    ManagedList.Modify(selected,"Select Focus")
+    SelectListRow(ManagedList,0)
+    SelectListRow(ManagedList,selected)
     movedId := SharedDanmakuItems[selected].Id
     TransferItem()
     global ProbeAfterSaveFailure := true
@@ -80,7 +80,7 @@ Assert(ManagedList.GetText(1,3)=StrReplace(ShortcutKeyLabel(GetShortcutKey("shar
 RuntimePorts.ConfirmDiscard := (*) => false
 panel.Close.Call()
 Assert(!ActiveEditorDialog,"committed drafts close without discard confirmation")
-ManagedList.Modify(1,"Select Focus")
+SelectListRow(ManagedList,1)
 historyBefore := LibraryHistory.Length
 HandleDanmakuCommand("duplicate")
 Assert(SharedDanmakuItems.Length=2 && LibraryHistory.Length=historyBefore+1 && LoadSettings(SettingsDatabasePath).SharedDanmakuItems.Length=2,"duplicate commits once despite palette failure")
