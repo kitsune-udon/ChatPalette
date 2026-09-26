@@ -35,6 +35,28 @@ $retained=@(Get-ChildItem -LiteralPath $base -Directory)
 if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Failed named run did not retain evidence or restore its environment' }
 $stderr=Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'
 if (!(Test-Path -LiteralPath $stderr) -or [IO.File]::ReadAllText($stderr) -notmatch 'fixture failure') { throw 'Failed test stderr was not retained' }
+# Earlier successful groups must be gone before the next group starts.
+[IO.File]::WriteAllText($headless,@'
+# Test-Session: Headless
+[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'alpha-root.txt'),$env:HELPER_TEST_ROOT)
+[IO.File]::WriteAllText((Join-Path $env:HELPER_TEST_ROOT 'successful-copy.txt'),'completed')
+Write-Output 'fixture-alpha'
+'@,[Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText($desktop,@'
+# Test-Session: Desktop
+$earlier=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'alpha-root.txt'))
+if (Test-Path -LiteralPath $earlier) { throw 'Successful group artifacts survived into the next group' }
+[IO.File]::WriteAllText((Join-Path $env:HELPER_TEST_ROOT 'failed-copy.txt'),'diagnostic evidence')
+throw 'fixture beta failure'
+'@,[Text.UTF8Encoding]::new($true))
+$before=@(Get-ChildItem -LiteralPath $base -Directory | Select-Object -ExpandProperty FullName)
+$failed=$false
+try { & $runner -Group All -AutoHotkeyPath 'fixture-runtime.exe' -WarningAction SilentlyContinue | Out-Null } catch { $failed=$true }
+$retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
+if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'A later group failure lost isolation or environment restoration' }
+$failedRoot=$retained[0].FullName
+if (!(Test-Path -LiteralPath (Join-Path $failedRoot 'failed-copy.txt')) -or (Test-Path -LiteralPath (Join-Path $failedRoot 'successful-copy.txt'))) { throw 'A later failure did not retain only its own artifacts' }
+if ([IO.File]::ReadAllText((Join-Path $failedRoot 'test-beta.ps1.stderr.txt')) -notmatch 'fixture beta failure') { throw 'The later group failure lost its diagnostic output' }
 # A callback or adapted property may swallow exceptions and even exit statements.
 # Failure evidence must survive that boundary, and finally blocks must still run.
 foreach ($kind in @('stderr','assertion','callback-assertion','property-assertion','method-assertion','caught')) {

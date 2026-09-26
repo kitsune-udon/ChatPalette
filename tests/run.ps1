@@ -12,33 +12,36 @@ if (!$tests.Count) { throw 'No matching test scripts found. Use -List to inspect
 if ($List) { $tests.Name; return }
 . (Join-Path $PSScriptRoot 'support.ps1')
 $base = Join-Path $PSScriptRoot '.tmp'
-# Nested release verification must leave room for source paths on Windows PowerShell 5.1.
-$runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N').Substring(0,16))
-New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
-$completed = $false
 $oldRoot = $env:HELPER_TEST_ROOT
 $oldAhk = $env:AHK_EXE
 try {
-    $env:HELPER_TEST_ROOT = $runRoot
     if ($AutoHotkeyPath) { $env:AHK_EXE = $AutoHotkeyPath }
     foreach ($test in $tests) {
         $testName = $test.Name
         Write-Output "RUN: $testName"
-        $out = Join-Path $runRoot ($testName + '.stdout.txt')
-        $err = Join-Path $runRoot ($testName + '.stderr.txt')
-        $process = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $testName) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
-        $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000
-        Get-Content -LiteralPath $out,$err
-        if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName" }
+        # Each group owns its artifacts; keep paths short for nested release checks.
+        $runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N').Substring(0,16))
+        New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
+        $completed = $false
+        try {
+            $env:HELPER_TEST_ROOT = $runRoot
+            $out = Join-Path $runRoot ($testName + '.stdout.txt')
+            $err = Join-Path $runRoot ($testName + '.stderr.txt')
+            $process = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $PSScriptRoot $testName) + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+            $exitCode = Wait-TestProcess -Process $process -TimeoutMs 120000
+            Get-Content -LiteralPath $out,$err
+            if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Failed: $testName" }
+            $completed = $true
+        } finally {
+            $resolved = (Resolve-Path -LiteralPath $runRoot).Path
+            if ((Split-Path $resolved -Parent) -ne (Resolve-Path -LiteralPath $base).Path) { throw 'Unexpected cleanup path' }
+            if ($completed) { Remove-Item -LiteralPath $resolved -Recurse -Force }
+            else { Write-Warning "Failed test artifacts retained: $resolved" }
+        }
     }
-    $completed = $true
     $selection = if ($Name) { $Name } else { $Group }
     Write-Output "PASS: $selection / $($tests.Count) test groups; no real messages or reactions sent."
 } finally {
     $env:HELPER_TEST_ROOT = $oldRoot
     $env:AHK_EXE = $oldAhk
-    $resolved = (Resolve-Path -LiteralPath $runRoot).Path
-    if ((Split-Path $resolved -Parent) -ne (Resolve-Path -LiteralPath $base).Path) { throw 'Unexpected cleanup path' }
-    if ($completed) { Remove-Item -LiteralPath $resolved -Recurse -Force }
-    else { Write-Warning "Failed test artifacts retained: $resolved" }
 }
