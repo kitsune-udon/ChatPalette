@@ -255,6 +255,37 @@ foreach ($mode in @('success','failure','timeout','invalid-timeout')) {
         }
     }
 }
+# Preserve the wait failure even when stopping its process also fails.
+$cleanupSupport=Join-Path $runtime 'cleanup-failure-support.ps1'
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'support.ps1') -Destination $cleanupSupport
+Edit-TestSource $runtime 'cleanup-failure-support.ps1' '& (Join-Path $env:SystemRoot ''System32\taskkill.exe'') /PID $Process.Id /T /F | Out-Null' '$LASTEXITCODE = 5'
+& {
+    . $cleanupSupport
+    foreach ($timeout in @(100,0)) {
+        $process=Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$probe+'"'),'-Mode','timeout' -PassThru -WindowStyle Hidden
+        $null=$process.Handle
+        $handle=$process.SafeHandle
+        # Retain a separate handle so the injected cleanup failure cannot leak this child.
+        $owned=Get-Process -Id $process.Id
+        $null=$owned.Handle
+        try {
+            $failure=$null
+            try { $null=Wait-TestProcess -Process $process -TimeoutMs $timeout }
+            catch { $failure=$_.Exception }
+            $expected=if ($timeout) { 'Test process timed out after 100ms' } else { 'Test process timeout must be positive.' }
+            if ($failure -isnot [AggregateException] -or $failure.InnerExceptions.Count -ne 2 -or
+                $failure.InnerExceptions[0].Message -notlike "$expected*" -or
+                $failure.InnerExceptions[1].Message -notlike 'Could not stop test process tree*') {
+                throw "Cleanup failure hid the original wait error: $failure"
+            }
+            if (!$handle.IsClosed) { throw 'Cleanup failure retained the original process handle' }
+            if ($owned.HasExited) { throw 'Injected cleanup refusal did not leave a live process to inspect' }
+        } finally {
+            try { if (!$owned.HasExited) { $owned.Kill(); $owned.WaitForExit() } }
+            finally { $owned.Dispose() }
+        }
+    }
+}
 # A timed-out test must not leave its worker behind or stop unrelated instances.
 $tree=$null; $descendant=$null; $sibling=$null
 try {

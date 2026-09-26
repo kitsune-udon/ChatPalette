@@ -45,7 +45,8 @@ function Wait-TestProcess {
         if (!$Process.WaitForExit($TimeoutMs)) { throw "Test process timed out after ${TimeoutMs}ms (PID $($Process.Id))." }
         $Process.WaitForExit()
         return $Process.ExitCode
-    } finally {
+    } catch {
+        $waitFailure = $_.Exception
         try {
             if (!$Process.HasExited) {
                 # Keep the root handle open while terminating only this test's process tree.
@@ -53,8 +54,11 @@ function Wait-TestProcess {
                 if ($LASTEXITCODE -ne 0) { throw "Could not stop test process tree (PID $($Process.Id))." }
                 $Process.WaitForExit()
             }
-        } finally { $Process.Dispose() }
-    }
+        } catch {
+            throw [AggregateException]::new('Test process wait and cleanup failed.', [Exception[]]@($waitFailure, $_.Exception))
+        }
+        throw
+    } finally { $Process.Dispose() }
 }
 
 function Invoke-AppTest {
