@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param([string]$AutoHotkeyPath, [ValidateSet("All","Headless","Desktop")][string]$Group="All",
-    [ValidateNotNullOrEmpty()][string[]]$Name, [switch]$List)
+    [ValidateNotNullOrEmpty()][string[]]$Name, [switch]$List, [switch]$Sandbox, [switch]$PrepareOnly)
 $ErrorActionPreference = 'Stop'
+if ($PrepareOnly -and !$Sandbox) { throw '-PrepareOnly requires -Sandbox.' }
 $tests = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'test-*.ps1' -File | Sort-Object Name)
 $tests = @($tests | Where-Object {
     $header = Get-Content -LiteralPath $_.FullName -TotalCount 1
@@ -13,6 +14,10 @@ foreach ($requested in $Name) {
     if ($requested -notin $tests.Name) { throw "No matching test script in ${Group}: $requested. Use -List to inspect available names." }
 }
 if ($List) { $tests.Name; return }
+if ($Sandbox) {
+    & (Join-Path $PSScriptRoot 'sandbox.ps1') -Name $tests.Name -AutoHotkeyPath $AutoHotkeyPath -PrepareOnly:$PrepareOnly
+    return
+}
 . (Join-Path $PSScriptRoot 'support.ps1')
 $checks = @((Get-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\check-source.ps1'))) + $tests
 $base = Join-Path $PSScriptRoot '.tmp'

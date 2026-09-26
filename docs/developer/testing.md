@@ -24,18 +24,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -List
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Name test-sqlite.ps1
 # 関連する複数のテストをまとめて実行（配列はPowerShell式として渡す）
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/run.ps1' -Name test-input.ps1,test-page-actions.ps1"
-# 全テストを実行
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
+# Windows Sandboxで全テストを実行（初回準備は下記参照）
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 ```
 
 | 引数 | 動作 |
 |---|---|
 | `-Group Headless` | 画面操作不要のテストを選ぶ。Windows版AutoHotkey v2・SQLite・.NET/UIAを使うため、Linux向けではない |
-| `-Group Desktop` | 操作可能なWindowsセッションが必要なテストを選ぶ。フォーカス競合を避け、他の画面操作と並行して実行しない |
+| `-Group Desktop` | 操作可能なWindowsセッションが必要なテストを選ぶ。`-Sandbox`を併用し、普段の操作環境と分離する |
 | `-Group All`（省略時） | 全テストを選ぶ |
 | `-Name test-sqlite.ps1` | ファイル名の完全一致で選ぶ。複数名は配列で指定でき、名前順に各群を一度だけ実行。`-Group`との組み合わせも可能 |
 | `-List` | 選択したテスト名だけを表示。一時フォルダーや実行用環境変数を変更しない |
 | `-AutoHotkeyPath '実行ファイルの絶対パス'` | AutoHotkeyの場所を指定。未指定なら環境変数`AHK_EXE`、それもなければ標準インストール先を使用 |
+| `-Sandbox` | 選択したテストをWindows Sandbox内で実行し、結果をホストへ回収する。起動できなくてもホスト実行へ切り替えない |
+| `-Sandbox -PrepareOnly` | 起動用コピーと`.wsb`を生成する。Sandbox起動・テスト実行は行わない |
 
 明示したAutoHotkeyが存在しない場合、引数が不正な場合、対象テストがない場合はエラーになります。別のインストール先や全テストへ切り替えません。
 
@@ -43,7 +45,34 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1
 
 Headlessには非表示のGUI部品や短時間のツールチップを使う検査も含みますが、利用者の前面ウィンドウ・キー操作には依存しません。起動検査は実際のグローバルキーを登録するためDesktopに分類します。
 
-Desktop区分は通常の操作用デスクトップで実行します。`RequireTestWindowActive`の失敗ログには、実行先の`desktop`と、そこが利用者の入力を受け取るデスクトップかを示す`receives_input`が含まれます。判定にはWindowsの[GetUserObjectInformationW（UOI_IO）](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getuserobjectinformationw)を使います。`receives_input=0`なら、`CodexSandboxDesktop`など通常の操作先と異なる環境で実行していないか確認し、必要な権限を得てから通常デスクトップで再実行します。`unavailable(番号)`は情報取得失敗のWin32エラーです。これらは失敗後の観測であり、`receives_input=1`や`foreground_owned=0`だけで手操作の介入や失敗原因を断定しません。
+Desktop区分には、実行先Windowsの入力可能なデスクトップが必要です。`RequireTestWindowActive`の失敗ログには、実行先の`desktop`と、そこが入力を受け取るデスクトップかを示す`receives_input`が含まれます。判定にはWindowsの[GetUserObjectInformationW（UOI_IO）](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getuserobjectinformationw)を使います。`receives_input=0`なら、`CodexSandboxDesktop`など非入力デスクトップで実行していないか確認します。Codexのコマンド隔離と、独立したWindowsを起動するWindows Sandboxは別の仕組みです。`unavailable(番号)`は情報取得失敗のWin32エラーです。これらは失敗後の観測であり、`receives_input=1`や`foreground_owned=0`だけで手操作の介入や失敗原因を断定しません。ホストで直接Desktopを実行する場合は、他の画面操作と並行して実行しないでください。
+
+### Windows Sandboxで実行する
+
+Windows Sandboxの対応エディションと仮想化が必要です。初回は管理者PowerShellで次を実行し、再起動が必要と表示された場合は作業を保存して再起動します。詳細は[Microsoftの導入手順](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-install)を参照してください。
+
+```powershell
+Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All -NoRestart
+```
+
+ホストにAutoHotkey v2を用意し、再起動後にリポジトリ直下で実行します。Windows Sandboxは同時に複数起動できないため、既に開いているSandboxがある場合は必要な内容を保存して閉じてください。
+
+```powershell
+# まず少数の画面テストを実行
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/run.ps1' -Sandbox -Name test-app-library.ps1,test-empty-settings.ps1"
+# Desktop全体
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox -Group Desktop
+```
+
+[sandbox.ps1](../../tests/sandbox.ps1)は既存の配布ファイル一覧を使って現在のソースを固定し、指定したAutoHotkey実行ファイルと選択名を`tests/.tmp/sandbox-*/input`へ保存します。利用者の`data/`、`.git/`、`dist/`、既存のテスト記録はコピーしません。Sandboxにはこの入力フォルダーを読み取り専用、実行ごとの`results/`だけを書き込み可能として渡します。ネットワーク、ホストとのクリップボード共有、音声・映像入力、プリンター共有は無効です。実ブラウザー検証には使いません。
+
+[sandbox-guest.ps1](../../tests/sandbox-guest.ps1)はゲストのローカルディスクへコピーし、既存の`run.ps1`をWindows PowerShell 5.1で実行します。ホストではSandboxウィンドウを開いたままにし、その中を操作しないでください。終了後の`results/stdout.txt`、`stderr.txt`と、失敗コピーを回収した`artifacts/`で調査できます。`result.json`はログの終了・回収後に作成され、`ExitCode=0`だけが成功です。ホスト側も失敗をエラーとして返します。Sandboxは調査のため自動では閉じません。結果確認後に閉じてください。
+
+起動や終了通知の待機がタイムアウトした場合は成功とせず、設定・入力・ログを残します。Sandboxを途中で閉じたりゲストが異常終了した場合、ゲスト内だけに残る失敗コピーは回収できません。別のSandboxを強制終了したり自動再実行したりはしません。保持した`tests.wsb`を再実行すると結果が混ざるため、再現時もランナーから新しい実行を作成します。
+
+導入時の検証状況：起動設定生成とゲスト側の成功・失敗・ログ回収は画面不要の検査で確認します。Windows Sandbox実機での前面・キー入力、ホスト操作との並行実行、最小化時の動作は別途確認が必要です。これらが通るまでは「操作干渉を解消した」とは扱いません。
+
+ホスト上でPowerShell 7からランナーを直接呼ぶと、継承された`PSModulePath`によりWindows PowerShell側の`Get-FileHash`が見つからず配布検査が失敗する環境を確認しています。ホスト検査は上記の`powershell.exe`経由で実行してください。Sandbox内は独立したWindows PowerShell 5.1環境です。このホスト側の問題をSandbox導入によって修正済みとは扱いません。
 
 ランナーは直下の`test-*.ps1`を名前順に検出し、各テストをWindows標準のPowerShell 5.1の別プロセスで実行します。ランナー自体はPowerShell 7から直接呼び出しても、テストの実行環境は変わりません。区分の正本は各ファイル先頭の`Test-Session`で、未分類はエラーです。支援・計測スクリプトには`test-`を付けません。各テストの終了コードが0でも、標準エラーへの出力があれば失敗とします。テスト群・AutoHotkeyの待機がタイムアウトした場合も、終了までに記録された標準出力と標準エラーを表示します。実行中のファイル名と成功したテスト群数を表示し、ランナーの終了コード0と最後の`PASS`で全選択テストの成功を確認します。
 
@@ -108,6 +137,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | メモリキャッシュ | [test-storage.ps1](../../tests/test-storage.ps1) | メモリキャッシュの再利用・期限・件数・失敗後の再取得と登録更新 |
 | ブラウザー診断の出力 | [test-browser-report.ps1](../../tests/test-browser-report.ps1) | 不正な引数の拒否、診断出力先の解決・作成、失敗記録、既存レポートの保護。実ブラウザー操作なし |
 | テスト実行 | [test-runner.ps1](../../tests/test-runner.ps1) | テスト選択と隔離、子プロセス・環境の後始末、PowerShell・AHKの判定失敗と呼び出し位置、例外が捕捉された場合の失敗記録 |
+| Windows Sandbox実行 | [test-sandbox.ps1](../../tests/test-sandbox.ps1) | 利用者データを含まない起動用コピー、共有範囲、テスト選択の維持、成功・異常終了と出力・失敗記録の回収。仮想化・最前面の実機検証は含まない |
 | ソース・配布 | [test-release.ps1](../../tests/test-release.ps1) | ソース検査による形式・参照・モジュール境界違反の拒否、SemVer形式、必須ファイルの欠落・同名フォルダーの拒否、収録範囲・個人データ除外・ハッシュ、コピーした版番号とZIP・検証記録の一致、圧縮と公開の失敗時処理、上書き防止 |
 
 ## 失敗したとき
