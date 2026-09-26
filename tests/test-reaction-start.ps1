@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 # A suspended start must never schedule or report on behalf of its successor.
 $startRuntime=New-TestRuntime
+Edit-TestSource $startRuntime 'src/ui/reaction_feedback.ahk' '    PaletteStatusControl.Text := message' ("    ProbeReactionStart(""status"")`r`n" + '    PaletteStatusControl.Text := message')
 $startTests=@'
 BuildManagement()
 global StartCase := 0, StartPoint := "", StartProbeArmed := false, StartProbeReached := false
@@ -111,9 +112,9 @@ ReplaceStartingJob() {
     ActiveReactionJob := StartReplacement
     SetReactionStatus("successor pending")
 }
-ProbeReactionStart() {
+ProbeReactionStart(point) {
     global StartProbeArmed, StartProbeReached, StartOriginal
-    if StartProbeArmed && ActiveReactionJob {
+    if StartPoint=point && StartProbeArmed && ActiveReactionJob {
         StartProbeArmed := false, StartProbeReached := true, StartOriginal := ActiveReactionJob
         if StartCase="cancelled"
             CancelReaction()
@@ -123,14 +124,8 @@ ProbeReactionStart() {
             throw Error("start display failure")
     }
 }
-StartClock() {
-    if StartPoint="status"
-        ProbeReactionStart()
-    return NativeAppClockMs()
-}
 StartOverlayShow(view,options := "") {
-    if StartPoint="overlay"
-        ProbeReactionStart()
+    ProbeReactionStart("overlay")
     return Gui.Prototype.Show.Call(view,options)
 }
 StartRequest(hwnd,mode,video,extra) {
@@ -149,7 +144,6 @@ StartRequest(hwnd,mode,video,extra) {
 '@
 # Each of the 24 scenarios observes the real one-second timer deadline.
 Invoke-AppTest -Runtime $startRuntime -Body $startTests -TimeoutMs 60000 -Setup @'
-RuntimePorts.Clock := StartClock
 RuntimePorts.BrowserIdentity := (hwnd) => !!hwnd
 RuntimePorts.Foreground := (hwnd) => true
 RuntimePorts.ShortcutRelease := (keys) => true
