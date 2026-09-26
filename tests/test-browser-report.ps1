@@ -21,16 +21,17 @@ try {
 # Change PowerShell's location without changing the process working directory.
 $entry=Join-Path $runtime 'probe.ps1'
 [IO.File]::WriteAllText($entry,@'
-param([string]$Checker,[string]$ReportPath,[string]$Location)
+param([string]$Checker,[string]$ReportPath,[string]$Location,[switch]$Exercise)
 $ErrorActionPreference='Stop'
 Set-Location -LiteralPath $Location
-& $Checker -WindowHandle -1 -OutputPath $ReportPath
+& $Checker -WindowHandle -1 -OutputPath $ReportPath -Exercise:$Exercise
 exit $LASTEXITCODE
 '@,[Text.UTF8Encoding]::new($true))
-function Invoke-ReportProbe([string]$ReportPath) {
+function Invoke-ReportProbe([string]$ReportPath, [switch]$Exercise) {
     $stdout=Join-Path $runtime 'stdout.txt'
     $stderr=Join-Path $runtime 'stderr.txt'
     $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$entry+'"'),'-Checker',('"'+$checker+'"'),'-ReportPath',('"'+$ReportPath+'"'),'-Location',('"'+$runtime+'"'))
+    if ($Exercise) { $arguments += '-Exercise' }
     $process=Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList $arguments -WorkingDirectory $ProjectRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     return Wait-TestProcess -Process $process -TimeoutMs 15000
 }
@@ -68,8 +69,7 @@ function Find-ReactionLauncher { return $null }
     $report=[IO.File]::ReadAllText($path) | ConvertFrom-Json
     if ($report.Error -or $report.ChatDetected -isnot [bool] -or $report.ChatDetected -ne ($state -eq 'ok')) { throw "Chat detection state $state was misreported" }
 }
-foreach ($page in @('Watch','Popout')) {
-    $fixture=@'
+$pageFixture=@'
 function Get-Process { return [pscustomobject]@{ProcessName='brave';MainModule=[pscustomobject]@{FileVersionInfo=[pscustomobject]@{FileVersion='test'}}} }
 function Test-BrowserForeground { return $true }
 function Read-BrowserVideoId { return 'abcdefghijk' }
@@ -80,8 +80,9 @@ $script:AddressBarCache[[long]-1]=$address
 function Find-ChatInput { return @{State='ok';Element='test-chat'} }
 function Find-ReactionLauncher { return 'test-launcher' }
 '@
+foreach ($page in @('Watch','Popout')) {
     $urlPath=if ($page -eq 'Watch') { 'watch' } else { 'live_chat' }
-    [IO.File]::WriteAllText((Join-Path $runtime 'src\browser\browser_worker.ps1'),$fixture.Replace('__PAGE__',$urlPath),[Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText((Join-Path $runtime 'src\browser\browser_worker.ps1'),$pageFixture.Replace('__PAGE__',$urlPath),[Text.UTF8Encoding]::new($true))
     $path=Join-Path $runtime ("page-$page.json")
     if ((Invoke-ReportProbe $path) -ne 0) { throw "Cached address could not identify page kind: $page" }
     $json=[IO.File]::ReadAllText($path)
@@ -91,4 +92,31 @@ function Find-ReactionLauncher { return 'test-launcher' }
         throw "Cached address inspection changed privacy or read-only reporting: $page"
     }
 }
-Write-Output 'PASS: argument rejection, report paths, overwrite protection, chat outcomes and cached page-kind inspection'
+# A shared report identifies the failed stage without exposing exception contents.
+foreach ($fault in @('chat','focus','hover')) {
+    $faultFixture=$pageFixture.Replace('__PAGE__','watch')
+    if ($fault -eq 'chat') {
+        $faultFixture=$faultFixture.Replace("return @{State='ok';Element='test-chat'}", "throw 'fixture-private chat text and URL'")
+    }
+    $actions=@'
+function Invoke-PageAction($Request) {
+    if ($Request.Mode -eq '__MODE__') { throw 'fixture-private window title and path' }
+    return @{State='focused'}
+}
+'@
+    $mode=if ($fault -eq 'focus') { 'chat_focus' } else { 'reactions_show' }
+    $faultFixture+="`r`n"+$actions.Replace('__MODE__',$mode)
+    [IO.File]::WriteAllText((Join-Path $runtime 'src\browser\browser_worker.ps1'),$faultFixture,[Text.UTF8Encoding]::new($true))
+    $path=Join-Path $runtime ("failure-$fault.json")
+    if ((Invoke-ReportProbe $path -Exercise:($fault -ne 'chat')) -ne 1) { throw "$fault exception must fail inspection" }
+    $json=[IO.File]::ReadAllText($path)
+    $report=$json | ConvertFrom-Json
+    if ($report.Error -notlike "Inspection failed at ${fault}.*") { throw "Missing failure stage ${fault}: $($report.Error)" }
+    $expectedFocus=if ($fault -eq 'hover') { 'focused' } elseif ($fault -eq 'focus') { 'unknown' } else { 'not-run' }
+    $expectedHover=if ($fault -eq 'hover') { 'unknown' } else { 'not-run' }
+    if ($report.Focus -ne $expectedFocus -or $report.Hover -ne $expectedHover -or !$report.VideoDetected -or
+        $report.Display -ne 'not-verified' -or $json -match 'fixture-private|abcdefghijk|youtube\.com') {
+        throw "$fault inspection lost partial results or included private data"
+    }
+}
+Write-Output 'PASS: argument rejection, report paths, overwrite protection, chat outcomes, cached page kinds and private failure-stage reporting'

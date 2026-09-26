@@ -30,29 +30,40 @@ if ($List) {
 $report=[ordered]@{Time=[DateTime]::UtcNow.ToString('o'); Browser=''; BrowserVersion=''; PageKind='unknown';
     Foreground=$false; AddressDetected=$false; VideoDetected=$false; ChatDetected=$false; LauncherDetected=$false;
     Focus='not-run'; Hover='not-run'; Display='not-verified'; Error=''}
+$stage='window'
 try {
     $root=[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
     $process=Get-Process -Id $root.Current.ProcessId
     if ($process.ProcessName -notin @('chrome','msedge','brave','firefox','opera','vivaldi')) { throw 'Unsupported browser process' }
     $report.Browser=$process.ProcessName
     $report.BrowserVersion=$process.MainModule.FileVersionInfo.FileVersion
+    $stage='foreground'
     $report.Foreground=Test-BrowserForeground $WindowHandle
+    $stage='address'
     $report.VideoDetected=[bool](Read-BrowserVideoId $WindowHandle)
     $report.AddressDetected=$script:AddressBarCache.ContainsKey($WindowHandle)
     if ($report.VideoDetected) {
+        $stage='page-kind'
         $address=$script:AddressBarCache[$WindowHandle].GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
         if ($address -notmatch '^https?://') { $address='https://'+$address }
         $report.PageKind=if (([uri]$address).AbsolutePath -in @('/live_chat','/live_chat_replay')) {'Popout'} else {'Watch'}
         if ($PageKind -ne 'Auto' -and $PageKind -ne $report.PageKind) { throw 'Unexpected page kind' }
     }
+    $stage='chat'
     $report.ChatDetected=(Find-ChatInput $WindowHandle).State -eq 'ok'
+    $stage='launcher'
     $report.LauncherDetected=$null -ne (Find-ReactionLauncher $WindowHandle)
     if ($Exercise) {
+        $stage='exercise-precondition'
         if (!$report.Foreground -or !$report.VideoDetected) { throw 'Place the target video in the foreground before exercising actions' }
+        $stage='focus'
+        $report.Focus='unknown'
         $report.Focus=(Invoke-PageAction @{Seq=1;Window=$WindowHandle;Mode='chat_focus';Video=''}).State
+        $stage='hover'
+        $report.Hover='unknown'
         $report.Hover=(Invoke-PageAction @{Seq=2;Window=$WindowHandle;Mode='reactions_show';Video=''}).State
     }
-} catch { $report.Error='Inspection failed; verify target window, foreground and accessible live chat.' }
+} catch { $report.Error="Inspection failed at $stage. Verify the target window and this inspection step." }
 # Never include titles, URLs, field values or exception text in a shareable report.
 $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($report | ConvertTo-Json))
 $stream=[IO.File]::Open($OutputPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)

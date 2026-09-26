@@ -250,7 +250,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.
 | `ChatDetected=false` | 入力可能なチャット欄を一意に検出できない。表示・ログイン・入力可能な状態を確認する |
 | `LauncherDetected=false` | リアクション表示用UIを一意に検出できない。対象のライブ配信とページ表示を確認する |
 | `Focus`・`Hover`が`not-run` | 操作は未実施。読み取り専用の検出確認では通常の結果 |
-| `Error`が空でない | 検査自体が失敗。対象ウィンドウと表示状態を確認して再実行する |
+| `Focus`・`Hover`が`unknown` | 呼び出した操作の結果を確認できない。未実施とは判断せず、実画面を確認する |
+| `Error`が空でない | 検査自体が失敗。文中の段階を確認し、その箇所の対象・表示状態を調べる。例外の本文や個人情報は収録しない |
+
+例外時の段階は`window`（ウィンドウ・ブラウザー情報）、`foreground`（最前面）、`address`（動画判定）、`page-kind`（ページ種類）、`chat`（入力欄）、`launcher`（表示用UI）、`exercise-precondition`（操作開始条件）、`focus`（フォーカス操作）、`hover`（ホバー操作）です。完了済みの検出・操作結果は保持し、例外後の操作は実行しません。
 
 フォーカス移動とホバーも確認する場合は、対象動画を最前面にし、別のレポート名で `-Exercise` を付けます。
 
