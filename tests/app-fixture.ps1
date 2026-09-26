@@ -5,9 +5,7 @@
 function Invoke-AppFixture {
     param([string]$Body, [string]$Helpers = '', [string]$Runtime = '', [int]$TimeoutMs = 30000)
     $release = if ($Runtime) { $Runtime } else { New-TestRuntime }
-$fixture = $release
-New-Item -ItemType Directory -Path $fixture -Force | Out-Null
-New-Item -ItemType Directory -Path "$fixture\data" -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $release 'data') -Force | Out-Null
 $mock = @'
 function Invoke-FixtureRequest($Request) {
     if ($Request.Mode -eq 'fixture_native') {

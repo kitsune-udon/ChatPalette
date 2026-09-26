@@ -3,8 +3,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
-$fixture = $release
-New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'fixtures\ui-message-probe.ahk') (Join-Path $release 'ui-message-probe.ahk')
 $tests = @'
 #Include %A_ScriptDir%\ui-message-probe.ahk

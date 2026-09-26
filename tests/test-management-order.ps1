@@ -7,8 +7,6 @@ Edit-TestSource $release 'src/ui/management/management_view.ahk' $anchor ($ancho
 $commitBoundary='    if !result'
 Edit-TestSource $release 'src/ui/management/management_controller.ahk' $commitBoundary ("    ProbeManagedCommit()`r`n"+$commitBoundary)
 
-$fixture = $release
-New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 $tests = @'
 global PartialArmed := false, PartialFailure := false, PartialProbes := 0, PartialGuarded := false
 global CommitProbeArmed := false, QueuedEdits := 0, QueuedTarget := "", CommittedCopy := ""
