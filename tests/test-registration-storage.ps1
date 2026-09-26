@@ -48,8 +48,26 @@ Assert(db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="1","saved regis
 reply := SendWorkerRequest(0,"reaction_configure","","Payload=" snapshot "`n")
 Assert(reply.State="configured","worker accepts snapshot over pipe")
 StopBrowserWorker()
+; A registration read must succeed before transport acquires worker resources.
+failed := false, sequenceBefore := WorkerState.Sequence
+db.Exec("BEGIN")
+try {
+    db.Exec("ALTER TABLE reaction_registrations RENAME TO unavailable_registrations")
+    try EnsureReactionRegistrations(0)
+    catch as failure
+        failed := InStr(failure.Message,"reaction_registrations") > 0
+    Assert(failed && !WorkerState.ProcessHandle && !WorkerState.PipeHandle && !WorkerState.SignalHandle,
+        "failed registration read does not start a worker or acquire transport resources")
+    Assert(!WorkerState.RequestActive && !IsWorkerRegistrationCurrent() && WorkerState.Sequence=sequenceBefore,
+        "failed registration read leaves no active or synchronized request")
+} finally db.Exec("ROLLBACK")
+Assert(LoadReactionRegistrationSnapshot()==snapshot,"failed registration read preserves the committed snapshot")
 EnsureReactionRegistrations(0)
 Assert(IsWorkerRegistrationCurrent(),"worker restart restores registrations")
+sequenceBefore := WorkerState.Sequence, synchronizedWorker := WorkerState.ProcessHandle
+EnsureReactionRegistrations(0)
+Assert(WorkerState.Sequence=sequenceBefore && WorkerState.ProcessHandle=synchronizedWorker,
+    "current registration reuses the worker without sending another snapshot")
 db.Exec("PRAGMA query_only=ON")
 reply := CommitCapturedReactionRegistration(0,{State:"captured",Detail:StrReplace(payload,"👏1","must-not-save")})
 Assert(reply.State="save_failed" && LoadReactionRegistrationSnapshot()==snapshot,"failed commit preserves registration")

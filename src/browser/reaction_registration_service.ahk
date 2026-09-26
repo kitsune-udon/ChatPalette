@@ -1,6 +1,5 @@
 ﻿; The application owns durable registration. Workers receive only committed snapshots.
 EnsureReactionRegistrations(hwnd) {
-    EnsureWorkerRunning()
     if IsWorkerRegistrationCurrent()
         return
     reply := SendWorkerRequest(hwnd,"reaction_configure","","Payload=" LoadReactionRegistrationSnapshot() "`n")

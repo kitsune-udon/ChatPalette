@@ -235,7 +235,7 @@ Invoke-AppFixture -Runtime $cleanupRuntime -Body @'
             }
             label := entry "/" scenario
             Assert(failed && StopChecks=1,label ": unconfirmed cleanup is surfaced without an implicit retry")
-            Assert(entry="transport" || entry="browser" ? (StopOwned && StopNestedState="unavailable") : !StopOwned,label ": cleanup preserves its caller request gate and rejects nested requests")
+            Assert(entry!="startup" ? (StopOwned && StopNestedState="unavailable") : !StopOwned,label ": cleanup preserves its caller request gate and rejects nested requests")
             Assert(WorkerState.ProcessHandle=handle && DllCall("GetHandleInformation","Ptr",handle,"UInt*",&flags:=0),label ": unconfirmed process handle remains owned")
             Assert(!WorkerState.PipeHandle && !WorkerState.SignalHandle,label ": pipe and signal are already released")
             Assert(!WorkerState.RequestActive && !IsBrowserOperationBusy,label ": cleanup failure releases both request gates")
