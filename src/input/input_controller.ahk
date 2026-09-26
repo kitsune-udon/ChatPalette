@@ -107,7 +107,8 @@ DeliverDanmakuInput(plan, activate := false) {
     }
     if !IsTargetForeground(hwnd)
         return {State:"input_cancelled"}
-    if !VerifyInputTarget(hwnd, plan.Video)
-        return {State:"input_cancelled"}
+    verified := VerifyInputTarget(hwnd, plan.Video)
+    if verified.State != "ok"
+        return verified
     return SendPlannedDanmaku(plan)
 }

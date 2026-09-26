@@ -8,7 +8,6 @@ class RuntimePorts {
     static WorkerScript := ""
     static BrowserIdentity := 0
     static ResolveChannel := 0
-    static VerifyInput := 0
     static Foreground := 0
     static Text := 0
     static ClearChat := 0

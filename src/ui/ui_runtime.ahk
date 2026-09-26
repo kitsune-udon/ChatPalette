@@ -56,11 +56,8 @@ EndWorkerWait(view) {
 }
 
 ShowInputFailure(state) {
-    if state = "unknown" || state = "invalid_text" {
-        info := BrowserResultInfo(state)
-        PaletteHint.Text := info.Summary "。" info.Advice
-    } else
-        PaletteHint.Text := "入力できませんでした。YouTubeのチャット欄かコメント欄をクリックし、" ShortcutKeyLabel(GetShortcutKey("palette")) "を押してください。"
+    info := BrowserResultInfo(state)
+    PaletteHint.Text := info.Summary "。" info.Advice
     ShowStatusTip(PaletteHint.Text,3500)
 }
 

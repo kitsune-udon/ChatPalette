@@ -9,13 +9,13 @@ Invoke-AppFixture -Body @'
     CommitTestLibraryChange(fixtureLibrary,"input fixture")
     global FixtureResolveCount := 0, FixtureCurrentVideo := "aaaaaaaaaaa", FixtureSent := []
     RuntimePorts.ResolveChannel := ResolveInputPlanChannel
-    RuntimePorts.VerifyInput := (hwnd,video) => video == FixtureCurrentVideo
+    RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"ok",Video:FixtureCurrentVideo}
     RuntimePorts.Text := (text) => FixtureSent.Push(text)
     AutoMode := true
     plan := ResolveShortcutInput("profile",1,123)
     Assert(FixtureResolveCount=1 && plan.Text="A-one" && plan.Video="aaaaaaaaaaa","shortcut resolves profile and slot exactly once")
     FixtureCurrentVideo := "bbbbbbbbbbb"
-    Assert(DeliverDanmakuInput(plan).State="input_cancelled" && FixtureSent.Length=0,"video change after resolving prevents any input")
+    Assert(DeliverDanmakuInput(plan).State="changed" && FixtureSent.Length=0,"video change after resolving prevents any input")
     Assert(FixtureResolveCount=1,"delivery never re-resolves profile or list index")
     FixtureCurrentVideo := "aaaaaaaaaaa"
     Assert(DeliverDanmakuInput(plan).State="inserted" && FixtureSent[1]="A-one","unchanged target delivers the frozen text")
@@ -68,7 +68,7 @@ PartialInputFailure(text) {
 
 # Resolution and final verification failures use one user-facing input boundary.
 Invoke-AppFixture -Body @'
-    global InputFailureMode := "", InputRequests := [], InputSent := []
+    global InputFailureMode := "", InputVerificationState := "ok", InputRequests := [], InputSent := []
     RuntimePorts.WorkerRequest := InputBoundaryRequest
     RuntimePorts.Text := (text) => InputSent.Push(text)
     BuildManagement()
@@ -87,12 +87,19 @@ Invoke-AppFixture -Body @'
         RequestShortcutInput("shared",1,123)
         Assert(InputRequests.Length=2 && InputSent.Length=1 && InputSent[1]==SharedDanmakuItems[1].Text,mode ": a new request succeeds once after recovery")
     }
+    for state in ["changed","wrong_input","unavailable","unknown"] {
+        InputVerificationState := state, InputRequests := [], InputSent := []
+        RequestShortcutInput("shared",1,123)
+        Assert(InputSent.Length=0 && InputRequests.Length=2,state ": failed verification never types or retries")
+        Assert(InStr(PaletteHint.Text,BrowserResultInfo(state).Summary),state ": input guidance preserves the verification reason")
+        Assert(!IsBrowserOperationBusy && OperationAllowed("input"),state ": failed verification releases the operation gate")
+    }
 '@ -Helpers @'
 InputBoundaryRequest(hwnd,mode,video,extra) {
     InputRequests.Push(mode)
     if mode=InputFailureMode
         throw Error("Synthetic input failure: " mode)
-    return {State:"ok",Video:"abcdefghijk"}
+    return {State:mode="verify_input" ? InputVerificationState : "ok",Video:"abcdefghijk"}
 }
 '@
 
@@ -119,7 +126,6 @@ Invoke-AppFixture -Body @'
     sent := [], foregroundChecks := []
     RuntimePorts.BrowserIdentity := (hwnd) => hwnd=browser.Hwnd
     RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"ok",Video:"abcdefghijk"}
-    RuntimePorts.VerifyInput := (hwnd,video) => hwnd=browser.Hwnd && video=="abcdefghijk"
     ; Retain the exact observation used by delivery; a later foreground read can differ.
     RuntimePorts.Foreground := (hwnd) => (foregroundChecks.Push(!!WinActive("ahk_id " hwnd)), foregroundChecks[-1])
     RuntimePorts.Text := (text) => sent.Push(text)
@@ -154,7 +160,7 @@ Invoke-AppFixture -Body @'
     InsertPaletteItem()
     Assert(sent.Length=before,"unknown displayed identity never inputs a neighbouring item")
     Assert(GetPaletteLibraryTarget().Index=0,"unknown displayed identity does not open a neighbouring editor item")
-    RuntimePorts.BrowserIdentity := 0, RuntimePorts.BrowserRequest := 0, RuntimePorts.VerifyInput := 0
+    RuntimePorts.BrowserIdentity := 0, RuntimePorts.BrowserRequest := 0
     RuntimePorts.Foreground := 0, RuntimePorts.Text := 0
     browser.Destroy()
 '@
@@ -173,21 +179,19 @@ Invoke-AppFixture -Body @'
         if item.Slot=1
             deliveryItem := item
     deliveryItem.DefineProp("Text",{Get:DeliveryItemText})
-    for adapter in ["native","port"] {
-        RuntimePorts.VerifyInput := adapter = "native" ? 0 : DeliveryVerify
-        for scenario in ["before","during","validation","video","field","success","empty-expected"] {
-            DeliveryCase := scenario, DeliveryCalls := 0, DeliverySent := [], DeliveryValidationArmed := false
-            ActivateDeliveryWindow(scenario = "before" ? DeliveryOther.Hwnd : DeliveryBrowser.Hwnd)
-            video := scenario = "empty-expected" ? "" : "abcdefghijk"
-            plan := PlanDanmakuInput({ProfileId:"",ItemId:deliveryItem.Id,ExpectedText:deliveryItem.Text},
-                {ProfileId:"",Window:DeliveryBrowser.Hwnd,Video:video})
-            result := DeliverDanmakuInput(plan)
-            succeeds := scenario = "success" || scenario = "empty-expected"
-            Assert(result.State = (succeeds ? "inserted" : "input_cancelled") && DeliverySent.Length = (succeeds ? 1 : 0),adapter "/" scenario ": delivery honors foreground and verification")
-            Assert(DeliveryCalls = (scenario = "before" ? 0 : 1),adapter "/" scenario ": no verification in background and no replay")
-            if succeeds
-                Assert(DeliverySent[1] == "literal 👏",adapter "/" scenario ": delivers the frozen literal text")
-        }
+    for scenario in ["before","during","validation","video","field","success","empty-expected"] {
+        DeliveryCase := scenario, DeliveryCalls := 0, DeliverySent := [], DeliveryValidationArmed := false
+        ActivateDeliveryWindow(scenario = "before" ? DeliveryOther.Hwnd : DeliveryBrowser.Hwnd)
+        video := scenario = "empty-expected" ? "" : "abcdefghijk"
+        plan := PlanDanmakuInput({ProfileId:"",ItemId:deliveryItem.Id,ExpectedText:deliveryItem.Text},
+            {ProfileId:"",Window:DeliveryBrowser.Hwnd,Video:video})
+        result := DeliverDanmakuInput(plan)
+        succeeds := scenario = "success" || scenario = "empty-expected"
+        expectedState := succeeds ? "inserted" : scenario="video" ? "changed" : scenario="field" ? "wrong_input" : "input_cancelled"
+        Assert(result.State = expectedState && DeliverySent.Length = (succeeds ? 1 : 0),scenario ": delivery honors foreground and verification")
+        Assert(DeliveryCalls = (scenario = "before" ? 0 : 1),scenario ": no verification in background and no replay")
+        if succeeds
+            Assert(DeliverySent[1] == "literal 👏",scenario ": delivers the frozen literal text")
     }
     DeliveryBrowser.Destroy(), DeliveryOther.Destroy()
 '@ -Helpers @'
@@ -213,10 +217,6 @@ DeliveryItemText(item) {
     }
     return "literal 👏"
 }
-DeliveryVerify(hwnd,video) {
-    DeliveryRequest(hwnd,"verify_input",video,"")
-    return DeliveryCase != "video" && DeliveryCase != "field"
-}
 '@
 
 # Both input paths keep the selected identity through browser verification.
@@ -224,7 +224,6 @@ Invoke-AppFixture -Body @'
     global InputChange := "", InputScope := "", InputSelected := 0, InputSent := [], InputChecks := 0, InputForeground := true
     AutoMode := false
     RuntimePorts.BrowserRequest := IdentityRequest
-    RuntimePorts.VerifyInput := IdentityVerify
     RuntimePorts.Foreground := (hwnd) => InputForeground && hwnd=123
     RuntimePorts.ShortcutRelease := (*) => true
     RuntimePorts.Text := (text) => InputSent.Push(text)
@@ -271,7 +270,7 @@ IdentityRequest(hwnd,mode,video,extra) {
         }
         return {State:"ok",Video:"abcdefghijk"}
     }
-    if mode="verify_chat" {
+    if mode="verify_chat" || mode="verify_input" {
         IdentityVerify(hwnd,video)
         return {State:"ok",Video:video}
     }
@@ -306,7 +305,6 @@ IdentityVerify(hwnd,video) {
             other := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},profileId)[2]
             ExecuteDanmakuCommand("edit",profileId,other.Id,{Name:other.Name,Text:other.Text,Slot:1})
     }
-    return true
 }
 '@
 
@@ -314,7 +312,6 @@ IdentityVerify(hwnd,video) {
 Invoke-AppFixture -Body @'
     global InputGate := "", GateOwner := 0, GateSent := [], GateChecks := 0
     RuntimePorts.BrowserRequest := GateRequest
-    RuntimePorts.VerifyInput := 0
     RuntimePorts.ShortcutRelease := (*) => true
     RuntimePorts.Text := (text) => GateSent.Push(text)
     for route in ["shortcut","focused"] {

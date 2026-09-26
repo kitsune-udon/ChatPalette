@@ -60,14 +60,12 @@ ResolveBrowserChannel(hwnd) {
 }
 
 
-VerifyInputTarget(hwnd, expectedVideo) {
-    return RuntimePorts.VerifyInput ? RuntimePorts.VerifyInput.Call(hwnd,expectedVideo) : NativeVerifyInputTarget(hwnd,expectedVideo)
-}
-
 ; Input orchestration owns foreground checks; this adapter verifies only video and field.
-NativeVerifyInputTarget(hwnd, expectedVideo) {
+VerifyInputTarget(hwnd, expectedVideo) {
     result := RequestBrowserOperation(hwnd, "verify_input", expectedVideo)
-    return result.State = "ok" && (expectedVideo = "" || result.Video == expectedVideo)
+    if result.State = "ok" && expectedVideo != "" && !(result.Video == expectedVideo)
+        return {State:"changed"}
+    return result
 }
 
 ; Clear and queued input consume the same focus proof and require the same video.

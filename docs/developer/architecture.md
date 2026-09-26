@@ -85,7 +85,7 @@ sequenceDiagram
 |---|---|
 | 割当の解決 | `PlanShortcutInput`がキーの割当を一度だけ弾幕IDへ変換する。通常入力は対象解決後、保留入力はキー押下時のライブラリを渡す |
 | 入力計画 | `PlanDanmakuInput`が配信者ID・弾幕ID・本文・ウィンドウ・動画を固定する。`ValidateDanmakuInput`が計画作成時と送信直前に所属先・ID・本文を照合する |
-| ブラウザー確認 | 通常・パレット入力は`DeliverDanmakuInput`が最前面を確認してから`VerifyInputTarget`を呼び、不成立なら`input_cancelled`を返す。`VerifyInputTarget`は動画・入力欄だけを担当する。保留入力は後述の`verify_chat`を使う |
+| ブラウザー確認 | 通常・パレット入力は`DeliverDanmakuInput`が最前面を確認してから`VerifyInputTarget`を呼ぶ。`VerifyInputTarget`は動画・入力欄だけを担当し、失敗の応答を表示へ引き継ぐ。成功応答でも動画IDが異なれば`changed`で中止する。最前面や実行可否の不成立は`input_cancelled`とする。保留入力は後述の`verify_chat`を使う |
 | 文字送信 | 全経路が`SendPlannedDanmaku`を通る。アプリ内の割り込みを止めた範囲で計画を最終確認し、その後に操作可否と対象ウィンドウの最前面を確認して`SendInputText`を呼ぶ。保留入力は開始時のページ操作を明示的に渡し、所有が続き、期限内の場合だけ自身の処理中状態を除外する。照合中に前面が変わった場合や、別の編集・操作が始まった場合も`input_cancelled`で中止する。終了時は成否にかかわらず元の割り込み設定へ戻す |
 
 ブラウザー確認中の本文変更・削除・移動・同文の別IDへの置換は拒否します。並べ替え、名前やキー割当だけの変更なら選択した弾幕を維持し、配信者やキーを解決し直しません。
