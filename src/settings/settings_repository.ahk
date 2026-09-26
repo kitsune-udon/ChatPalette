@@ -50,7 +50,7 @@ class SettingsRepository {
         state := {Profiles:[],SharedDanmakuItems:[],InputProfileId:""}, scopes := Map()
         scopes.CaseSense := "On"
         for row in this.Db.Rows("SELECT id,name,channel,position FROM scopes ORDER BY position,id") {
-            scope := {Id:row[1],Name:row[2],Channel:row[3],Position:Integer(row[4]),Items:[],Rows:Map()}
+            scope := {Id:row[1],Name:row[2],Channel:row[3],Position:this.ReadInteger(row[4]),Items:[],Rows:Map()}
             scope.Rows.CaseSense := "On"
             scopes[scope.Id] := scope
             if scope.Id = "@shared"
@@ -63,11 +63,12 @@ class SettingsRepository {
         for row in this.Db.Rows("SELECT id,scope_id,position,name,body,COALESCE(slot,0) FROM items ORDER BY scope_id,position") {
             if !scopes.Has(row[2])
                 throw Error("弾幕の所属先がありません。")
-            scope := scopes[row[2]], item := {Id:row[1],Name:row[4],Text:row[5],Slot:Integer(row[6])}
-            scope.Items.Push(item)
-            scope.Rows[item.Id] := CreateStorageRow(item,Integer(row[3]))
-            if Integer(row[3]) <= 0
+            position := this.ReadInteger(row[3])
+            if position <= 0
                 throw Error("弾幕の保存順序が不正です。")
+            scope := scopes[row[2]], item := {Id:row[1],Name:row[4],Text:row[5],Slot:this.ReadInteger(row[6])}
+            scope.Items.Push(item)
+            scope.Rows[item.Id] := CreateStorageRow(item,position)
         }
         prefs := this.Db.Rows("SELECT active_scope,auto_mode,reaction_kind,reaction_count,reaction_interval,reaction_key FROM preferences WHERE id=1")
         if prefs.Length != 1
@@ -76,8 +77,8 @@ class SettingsRepository {
         state.InputProfileId := row[1]
         if row[1] != "" && !FindProfileIndexById(state.Profiles,state.InputProfileId)
             throw Error("選択中の配信者がありません。")
-        state.AutoMode := Integer(row[2]), state.DefaultReactionKind := Integer(row[3]), state.DefaultReactionCount := Integer(row[4])
-        state.DefaultReactionIntervalMs := Integer(row[5])
+        state.AutoMode := this.ReadInteger(row[2]), state.DefaultReactionKind := this.ReadInteger(row[3]), state.DefaultReactionCount := this.ReadInteger(row[4])
+        state.DefaultReactionIntervalMs := this.ReadInteger(row[5])
         state.ShortcutKeys := ReadShortcutKeys(this.Db,row[6])
         ValidateSettingsPreferences(state)
         validated := BuildLibraryStoragePlan(state,scopes,true)
@@ -85,6 +86,13 @@ class SettingsRepository {
             scope.TextBytes := validated.Scopes[id].TextBytes
         ; The caller publishes this baseline only after the read transaction commits.
         return {State:state,Saved:{Scopes:scopes,Preferences:this.CopyPreferences(state),DataVersion:this.Db.Scalar("PRAGMA data_version")}}
+    }
+    ReadInteger(value) {
+        ; SQLite returns integers as decimal text. Reject lossy conversion or other spellings.
+        result := Integer(value)
+        if !(String(result) == value)
+            throw Error("設定データベースに整数ではない値、または範囲外の数値があります。")
+        return result
     }
     EnsureLoaded() {
         if !this.Saved

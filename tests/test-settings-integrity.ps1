@@ -14,6 +14,15 @@ for sql in ["DELETE FROM preferences", "DELETE FROM scopes WHERE id='@shared'",
     "INSERT INTO shortcut_bindings VALUES('CHAT_FOCUS','^!f')",
     "INSERT INTO shortcut_bindings VALUES('reaction','^+F12')",
     "UPDATE preferences SET reaction_count=7",
+    "UPDATE preferences SET reaction_kind=1.5",
+    "UPDATE preferences SET reaction_count=10.5",
+    "UPDATE preferences SET reaction_interval=200.5",
+    "UPDATE scopes SET position=0.5",
+    "UPDATE items SET position=1024.5",
+    "UPDATE preferences SET reaction_interval=-0.5",
+    "UPDATE preferences SET reaction_kind='0x1'",
+    "UPDATE items SET position='0x10000000000000400'",
+    "UPDATE items SET position=1e30",
     "UPDATE items SET body=char(10)", "UPDATE items SET id=''",
     "UPDATE items SET body='prefix'||char(0)||'suffix'",
     "UPDATE items SET body=char(0)||'suffix'",
@@ -38,6 +47,33 @@ for sql in ["DELETE FROM preferences", "DELETE FROM scopes WHERE id='@shared'",
 }
 CloseSettingsStore()
 FileDelete(path)
+; Preserve exact 64-bit ranks, including values that cannot round-trip through a float.
+numericStore := SettingsRepository(A_ScriptDir "\integer-values.db",true)
+try {
+    numericState := CreateDefaultSettings()
+    numericState.SharedDanmakuItems := [{Id:"integer-item",Name:"kept",Text:"important",Slot:0}]
+    numericStore.SaveAll(numericState)
+    for rank in [2147483648,9007199254740993,9223372036854775807] {
+        numericStore.Db.Run("UPDATE items SET position=?",rank)
+        loaded := numericStore.Load()
+        Assert(numericStore.Saved.Scopes["@shared"].Rows["integer-item"].Position=rank,"load preserves the exact integer rank: " rank)
+        before := numericStore.Db.Scalar("SELECT total_changes()")
+        numericStore.SaveAll(loaded)
+        Assert(numericStore.Db.Scalar("SELECT total_changes()")=before,"unchanged save does not normalize an exact integer rank: " rank)
+    }
+    numericStore.Db.Exec("UPDATE preferences SET reaction_interval=200.0; UPDATE items SET position=1024.0")
+    VerifySettingsRoundTrip(numericState,numericStore.Load())
+    Assert(true,"integral numeric values normalized by SQLite remain readable")
+    baseline := numericStore.Saved, rejected := false
+    numericStore.Db.Exec("UPDATE preferences SET reaction_kind=1.5")
+    try numericStore.Load()
+    catch
+        rejected := true
+    Assert(rejected && numericStore.Saved=baseline,"a lossy numeric read cannot replace a previously loaded baseline")
+    numericStore.Db.Exec("UPDATE preferences SET reaction_kind=1")
+    VerifySettingsRoundTrip(numericState,numericStore.Load())
+    Assert(true,"load succeeds after an explicit repair of the invalid numeric value")
+} finally numericStore.Close()
 state := CreateDefaultSettings()
 OpenSettingsRepository(path).SaveAll(state)
 VerifySettingsRoundTrip(state,LoadSettings(path))
