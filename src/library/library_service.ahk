@@ -80,7 +80,7 @@ ExecuteDanmakuCommand(action, profileId, itemId := "", value := 0, destinationId
                 AssignItemSlot(items,selected,requestedSlot)
                 label := "「" item.Name "」の" (action = "add" ? "追加" : "編集")
                 if original && item.Name == original.Name && item.Text == original.Text && requestedSlot = original.Slot
-                    return {Label:label, Index:selected, ProfileId:profileId}
+                    return {Label:label, Index:selected}
             case "delete":
                 label := "「" items[index].Name "」の削除"
                 items.RemoveAt(index)
@@ -105,7 +105,7 @@ ExecuteDanmakuCommand(action, profileId, itemId := "", value := 0, destinationId
                 throw Error("不明な弾幕操作です。")
         }
         CommitLibraryDraft(library,label)
-        return {Label:label, Index:selected, ProfileId:profileId}
+        return {Label:label, Index:selected}
     } finally {
         Critical(previousCritical)
     }
