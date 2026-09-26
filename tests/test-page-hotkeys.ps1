@@ -21,8 +21,12 @@ for entry in [["f",1,"chat_focus","focused"],["c",3,"chat_clear","cleared"],["e"
     while (HotkeyCalls.Length<entry[2] || LastBrowserOperation.Mode!=entry[3] || LastBrowserOperation.State!=entry[4]) && A_TickCount<deadline
         Sleep(10)
     Assert(HotkeyCalls.Length=entry[2] && LastBrowserOperation.State=entry[4],"real binding dispatches " entry[1] " calls=" HotkeyCalls.Length " state=" LastBrowserOperation.State " active=" (!!WinActive("ahk_id " FixtureBrowser.Hwnd)))
-    if entry[1]="f"
-        Assert(DllCall("GetFocus","Ptr")=FixtureChat.Hwnd && FixtureChat.Value="unsent fixture text","F focuses without modifying draft")
+    if entry[1]="f" {
+        focused := DllCall("GetFocus","Ptr")=FixtureChat.Hwnd
+        unchanged := FixtureChat.Value="unsent fixture text"
+        Assert(focused && unchanged,"F focuses without modifying draft; focused=" focused " unchanged=" unchanged
+            . " active=" (!!WinActive("ahk_id " FixtureBrowser.Hwnd)) " operation_active=" (!!ActivePageAction))
+    }
     if entry[1]="c"
         Assert(FixtureChat.Value="" && HotkeyCalls[2].Mode="chat_focus" && HotkeyCalls[3].Mode="verify_chat","C clears only isolated edit after verification")
     if entry[1]="e"
