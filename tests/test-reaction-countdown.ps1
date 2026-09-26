@@ -1,4 +1,4 @@
-﻿# Test-Session: Desktop
+﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $countdownRuntime=New-TestRuntime
@@ -91,6 +91,9 @@ for retryCase in ["replacement","cancelled"] {
             FinishReactionJob(ActiveReactionJob)
     }
 }
+Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd) && !DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd) && !ReactionOverlay && !ActiveEditorDialog,
+    "checks keep application views hidden")
+Assert(!ApplicationShortcutsInstalled && !WorkerState.ProcessHandle,"checks need no live shortcuts or worker")
 FileAppend("PASS: " Checks " countdown ownership checks; no real browser operations`n","*")
 ExitApp()
 CountdownBoundary(point) {

@@ -1,4 +1,4 @@
-﻿# Test-Session: Desktop
+﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
@@ -109,6 +109,9 @@ catch
 SetReactionStatus("recovered render",true)
 Assert(failed && PaletteStatusControl.Text="recovered render","render failure releases ownership for the next result")
 RuntimePorts.Clock := 0
+Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd) && !ManagementWindow && !ReactionOverlay && !ActiveEditorDialog,
+    "checks keep application views hidden")
+Assert(!ApplicationShortcutsInstalled && !WorkerState.ProcessHandle,"checks need no live shortcuts or worker")
 FileAppend("PASS: " Checks " timing lifecycle checks`n", "*")
 TimingMode := "exit", PrecisionEvents := ""
 ActiveReactionJob := CreateReactionJob({Mode:"reaction_send",Window:123,Video:"abcdefghijk",Choice:1,Completed:0,Total:2,Cancelled:false,Interval:100})
