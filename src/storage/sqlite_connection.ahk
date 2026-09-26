@@ -74,17 +74,21 @@ class SqliteConnection {
     Rows(sql, values*) {
         stmt := this.Statement(sql,values), rows := []
         try {
+            ; Resolve once per query from the already loaded system module.
+            step := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_step","Ptr")
+            columnText := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_column_text16","Ptr")
+            columnBytes := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_column_bytes16","Ptr")
             columns := DllCall(SqliteConnection.Library "\sqlite3_column_count", "Ptr", stmt, "CDecl Int")
             loop {
-                rc := DllCall(SqliteConnection.Library "\sqlite3_step", "Ptr", stmt, "CDecl Int")
+                rc := DllCall(step, "Ptr", stmt, "CDecl Int")
                 if rc = 101
                     break
                 if rc != 100
                     this.Check(rc)
                 row := []
                 Loop columns {
-                    ptr := DllCall(SqliteConnection.Library "\sqlite3_column_text16", "Ptr", stmt, "Int", A_Index-1, "CDecl Ptr")
-                    bytes := DllCall(SqliteConnection.Library "\sqlite3_column_bytes16", "Ptr", stmt, "Int", A_Index-1, "CDecl Int")
+                    ptr := DllCall(columnText, "Ptr", stmt, "Int", A_Index-1, "CDecl Ptr")
+                    bytes := DllCall(columnBytes, "Ptr", stmt, "Int", A_Index-1, "CDecl Int")
                     value := ptr ? StrGet(ptr,"UTF-16") : ""
                     ; Never publish the prefix of a value containing an embedded NUL.
                     if StrLen(value)*2 != bytes
