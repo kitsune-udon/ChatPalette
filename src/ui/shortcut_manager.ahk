@@ -25,9 +25,8 @@ ShowShortcutManager(selectedAction := "reaction",*) {
         saveButton.OnEvent("Click",SaveKeys)
         view.AddButton("x212 y420 w200 h32","標準の割当に戻す").OnEvent("Click",ResetKeys)
         view.AddGroupBox("x20 y466 w640 h196","弾幕キーで入力する内容")
-        scopeChoices := [{Id:"",Name:"共通の弾幕"}]
-        for profile in Profiles
-            scopeChoices.Push({Id:profile.Id,Name:profile.Name})
+        scopeChoices := Profiles.Clone()
+        scopeChoices.InsertAt(1,{Id:"",Name:"共通の弾幕"})
         scope := view.AddDropDownList("x36 y496 w290",[])
         SyncProfileChoices(scope,scopeChoices), scope.Choose(1)
         slotLabels := [view.AddText("x36 y532 w290 h22",""),view.AddText("x350 y532 w290 h22","")]

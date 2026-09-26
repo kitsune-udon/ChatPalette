@@ -116,7 +116,7 @@ TransferItem(*) {
         for profile in Profiles {
             if profile.Id == editId
                 continue
-            choices.Push({Id:profile.Id,Name:profile.Name})
+            choices.Push(profile)
         }
         target := view.AddDropDownList("w380",[])
         SyncProfileChoices(target,choices)
@@ -192,7 +192,7 @@ OpenChannelLinkDialog(preferredProfileId := "",*) {
         view.AddText("w440","このチャンネルで自動選択する配信者")
         choices := [{Id:"",Name:"新しい配信者として登録"}], selected := 1
         for profile in Profiles {
-            choices.Push({Id:profile.Id,Name:profile.Name})
+            choices.Push(profile)
             if preferredProfileId != "" ? profile.Id == preferredProfileId : profile.Channel == candidate.Channel
                 selected := choices.Length
         }
