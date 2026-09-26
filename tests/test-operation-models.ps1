@@ -6,6 +6,17 @@ $source = @'
 #Requires AutoHotkey v2.0
 #Include %A_ScriptDir%\src\app\app_modules.ahk
 modelKeys := DefaultShortcutKeys(), modelKeys["profile1"] := "^+F11", modelKeys["shared1"] := "^+F12"
+; Canonical spelling must stay valid for every supported function key.
+Loop 12 {
+    functionBinding := "^!F" A_Index, normalizedBinding := CanonicalShortcutKey(functionBinding)
+    Assert(ValidShortcutKey(functionBinding) && ValidShortcutKey(normalizedBinding),"function key validation agrees with canonical spelling: " A_Index)
+    normalizedKeys := DefaultShortcutKeys(), normalizedKeys["chat_focus"] := normalizedBinding
+    ValidateShortcutMap(normalizedKeys)
+    originalKeys := normalizedKeys.Clone(), originalKeys["chat_focus"] := "!^F" A_Index
+    Assert(ChangedShortcutBindings(originalKeys,normalizedKeys).Count=0,"function key spelling does not reinstall a binding: " A_Index)
+}
+for invalidBinding in ["^!f0","^!f13","^!f01","^^!f1","!f1","^f1"]
+    Assert(!ValidShortcutKey(invalidBinding),"function key bounds and modifier requirements remain enforced: " invalidBinding)
 bulk := []
 Loop 501
     bulk.Push({Id:"bulk-" A_Index,Name:"row",Text:"text " A_Index,Slot:0})

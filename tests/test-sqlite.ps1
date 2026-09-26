@@ -185,6 +185,20 @@ try {
         VerifySettingsRoundTrip(preferenceState,preferenceStore.Load())
         Assert(true,"all values survive key update and reload: " definition.Id)
     }
+    for storedKey in ["!^f1","+^f12"] {
+        preferenceState.ShortcutKeys["chat_focus"] := storedKey
+        preferenceStore.SavePreferences(preferenceState)
+        VerifySettingsRoundTrip(preferenceState,preferenceStore.Load())
+        Assert(true,"lowercase function keys preserve their spelling through save and reload: " storedKey)
+    }
+    collisionState := preferenceState.Clone(), collisionState.ShortcutKeys := preferenceState.ShortcutKeys.Clone()
+    collisionState.ShortcutKeys["chat_clear"] := "^+F12"
+    before := preferenceStore.Db.Scalar("SELECT total_changes()"), rejected := false
+    try preferenceStore.SavePreferences(collisionState)
+    catch
+        rejected := true
+    Assert(rejected && preferenceStore.Db.Scalar("SELECT total_changes()")=before,"case and modifier-order variants cannot save the same function key twice")
+    VerifySettingsRoundTrip(preferenceState,preferenceStore.Load())
     callerState := preferenceStore.Load()
     callerState.AutoMode := 1, callerState.ShortcutKeys["reaction"] := "^+r"
     callerState.SharedDanmakuItems := [{Id:"preference-item",Name:"item",Text:"body",Slot:0}]

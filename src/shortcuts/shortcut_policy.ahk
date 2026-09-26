@@ -33,7 +33,7 @@ DefaultShortcutKeys() {
     return keys
 }
 ValidShortcutKey(key) {
-    return RegExMatch(key,"^[!^+]*(?:[A-Za-z0-9]|F(?:[1-9]|1[0-2]))$")
+    return RegExMatch(key,"^[!^+]*(?:[A-Za-z0-9]|[Ff](?:[1-9]|1[0-2]))$")
         && InStr(key,"^") && (InStr(key,"!") || InStr(key,"+"))
         && StrLen(RegExReplace(key,"[^!^+]","")) = !!InStr(key,"^")+!!InStr(key,"!")+!!InStr(key,"+")
 }
