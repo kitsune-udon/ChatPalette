@@ -4,6 +4,31 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $ProjectRoot 'scripts\release-files.ps1')
 $runtime = New-TestRuntime
 Copy-ReleaseFiles -Project $ProjectRoot -Destination $runtime
+# Poll a log while the writer holds it open, including a split UTF-8 character.
+$log=[pscustomobject]@{Path=(Join-Path $runtime 'progress.txt'); Position=0}
+Assert (@(Write-TestLogUpdate $log).Count -eq 0) 'Absent progress log does not block Sandbox startup'
+$writer=[IO.File]::Open($log.Path,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+try {
+    Assert (@(Write-TestLogUpdate $log).Count -eq 0) 'Empty progress log is not published'
+    $bytes=[Text.Encoding]::UTF8.GetBytes("first 日本語 🧪`r`n")
+    $writer.Write($bytes,0,$bytes.Length-4); $writer.Flush()
+    Assert (@(Write-TestLogUpdate $log).Count -eq 0 -and $log.Position -eq 0) 'Partial UTF-8 line is not consumed'
+    $writer.Write($bytes,$bytes.Length-4,4); $writer.Flush()
+    $lines=@(Write-TestLogUpdate $log)
+    Assert ($lines.Count -eq 1 -and $lines[0] -ceq 'first 日本語 🧪') 'Completed Unicode line is preserved'
+    Assert (@(Write-TestLogUpdate $log).Count -eq 0) 'Unchanged log is not printed twice'
+    $bytes=[Text.Encoding]::UTF8.GetBytes("`r`nsecond`ntail 日本語 🧪")
+    $writer.Write($bytes,0,$bytes.Length); $writer.Flush()
+    $lines=@(Write-TestLogUpdate $log)
+    Assert ($lines.Count -eq 2 -and $lines[0] -ceq '' -and $lines[1] -ceq 'second') 'Empty lines and mixed line endings are preserved'
+} finally { $writer.Dispose() }
+$lines=@(Write-TestLogUpdate $log -Complete)
+Assert ($lines.Count -eq 1 -and $lines[0] -ceq 'tail 日本語 🧪') 'Closed log publishes its final line without a newline'
+Assert (@(Write-TestLogUpdate $log -Complete).Count -eq 0) 'Final drain does not repeat output'
+[IO.File]::WriteAllText($log.Path,'')
+$rejected=$false
+try { Write-TestLogUpdate $log | Out-Null } catch { $rejected=$_.Exception.Message -like 'Test log was truncated:*' }
+Assert $rejected 'Unexpected log replacement is reported instead of silently losing progress'
 # Host packaging must exclude user data and previous test evidence.
 New-Item -ItemType Directory -Path (Join-Path $runtime 'data'),(Join-Path $runtime 'dist') | Out-Null
 Set-Content -LiteralPath (Join-Path $runtime 'data\private.txt') -Value 'private'
@@ -36,6 +61,44 @@ foreach ($excluded in @('data','dist','.git','tests\.tmp')) {
 }
 Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $snapshot 'tests\run.ps1'))) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes($runner))) 'Snapshot contains the current runner'
 Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $package 'input\AutoHotkey.exe'))) -ceq [Convert]::ToBase64String([IO.File]::ReadAllBytes((Get-AutoHotkeyPath)))) 'Snapshot contains the selected AutoHotkey'
+# The host must forward output before completion, then drain failure logs only once.
+$producer=@'
+param([string]$OutputRoot)
+$utf8=[Text.UTF8Encoding]::new($false)
+$stdout=Join-Path $OutputRoot 'stdout.txt'
+[IO.File]::WriteAllText($stdout,"live 日本語 🧪`r`n",$utf8)
+$ack=Join-Path $OutputRoot 'observed.txt'
+$deadline=[DateTime]::UtcNow.AddSeconds(10)
+while (!(Test-Path -LiteralPath $ack) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+[IO.File]::AppendAllText($stdout,'final line without newline',$utf8)
+[IO.File]::WriteAllText((Join-Path $OutputRoot 'stderr.txt'),'failure 日本語 🧪',$utf8)
+[IO.File]::WriteAllText((Join-Path $OutputRoot 'result.pending.json'),'{"ExitCode":1,"Error":"fixture progress failure"}',$utf8)
+Move-Item -LiteralPath (Join-Path $OutputRoot 'result.pending.json') -Destination (Join-Path $OutputRoot 'result.json')
+'@
+[IO.File]::WriteAllText((Join-Path $runtime 'progress-writer.ps1'),$producer,[Text.UTF8Encoding]::new($true))
+Edit-TestSource $runtime 'tests/sandbox.ps1' '$sandboxExe = Join-Path $env:SystemRoot ''System32\WindowsSandbox.exe''' '$sandboxExe = Join-Path $env:SystemRoot ''System32\WindowsPowerShell\v1.0\powershell.exe'''
+Edit-TestSource $runtime 'tests/sandbox.ps1' '-ArgumentList (''"'' + $config + ''"'') -WindowStyle Normal' '-ArgumentList ''-NoProfile'',''-ExecutionPolicy'',''Bypass'',''-File'',(''"'' + (Join-Path $ProjectRoot ''progress-writer.ps1'') + ''"''),''-OutputRoot'',(''"'' + $outputRoot + ''"'') -WindowStyle Hidden'
+$before=@(Get-ChildItem -LiteralPath (Join-Path $runtime 'tests\.tmp') -Directory | Select-Object -ExpandProperty FullName)
+$observed=[Collections.Generic.List[string]]::new()
+$liveBeforeCompletion=$false
+$failure=''
+try {
+    & (Join-Path $runtime 'tests\sandbox.ps1') -Name test-input.ps1 | ForEach-Object {
+        $observed.Add([string]$_)
+        if ($_ -ceq 'live 日本語 🧪') {
+            $active=@(Get-ChildItem -LiteralPath (Join-Path $runtime 'tests\.tmp') -Directory | Where-Object FullName -NotIn $before)
+            Assert ($active.Count -eq 1) 'Progress belongs to this host invocation'
+            $results=Join-Path $active[0].FullName 'results'
+            $liveBeforeCompletion=!(Test-Path -LiteralPath (Join-Path $results 'result.json'))
+            [IO.File]::WriteAllText((Join-Path $results 'observed.txt'),'observed')
+        }
+    }
+} catch { $failure=$_.Exception.Message }
+Assert $liveBeforeCompletion 'Host publishes progress before the result exists'
+foreach ($line in @('live 日本語 🧪','final line without newline','failure 日本語 🧪')) {
+    Assert (@($observed | Where-Object { $_ -ceq $line }).Count -eq 1) "Host publishes each line once: $line"
+}
+Assert ($failure -like 'Sandbox tests failed: fixture progress failure*') 'Live progress does not turn a failing run into success'
 # Exercise the guest's real process/log/result handoff with a headless fake runner.
 # This does not claim to test virtualization, desktop activation or input delivery.
 $inputRoot = Join-Path $runtime 'guest-input'

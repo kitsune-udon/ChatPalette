@@ -61,6 +61,21 @@ function Wait-TestProcess {
     } finally { $Process.Dispose() }
 }
 
+# The caller owns one cursor per append-only UTF-8 log. Only consume complete lines
+# until the writer has closed, so a partial multibyte character is never published.
+function Write-TestLogUpdate {
+    param($Log, [switch]$Complete)
+    if (!(Test-Path -LiteralPath $Log.Path)) { return }
+    $content = '' + (Get-Content -LiteralPath $Log.Path -Raw -Encoding UTF8)
+    $end = if ($Complete) { $content.Length } else { $content.LastIndexOf("`n") + 1 }
+    if ($end -lt $Log.Position) { throw "Test log was truncated: $($Log.Path)" }
+    if ($end -eq $Log.Position) { return }
+    $chunk = $content.Substring($Log.Position, $end - $Log.Position)
+    if ($chunk.EndsWith("`n")) { $chunk = $chunk.Substring(0, $chunk.Length - 1) }
+    foreach ($line in ($chunk -split "`n")) { Write-Output $line.TrimEnd("`r") }
+    $Log.Position = $end
+}
+
 function Invoke-AppTest {
     param([string]$Runtime, [string]$Body, [int]$TimeoutMs = 30000, [string]$Setup = '')
     $source = "#Requires AutoHotkey v2.0`r`n#SingleInstance Force`r`n#Include %A_ScriptDir%\src\app\app_modules.ahk`r`n#Include %A_ScriptDir%\library-model.ahk`r`n" + $Setup + "`r`nInitializeApplication(false)`r`n" + $Body

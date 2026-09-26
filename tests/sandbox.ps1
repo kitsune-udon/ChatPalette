@@ -42,14 +42,16 @@ if ($PrepareOnly) { return }
 $process = Start-Process -FilePath $sandboxExe -ArgumentList ('"' + $config + '"') -WindowStyle Normal -PassThru
 $process.Dispose()
 $resultPath = Join-Path $outputRoot 'result.json'
+$logs = @('stdout.txt','stderr.txt') | ForEach-Object { [pscustomobject]@{Path=(Join-Path $outputRoot $_); Position=0} }
 $deadline = [DateTime]::UtcNow.AddSeconds(180 + 120 * ($Name.Count + 1))
 while (!(Test-Path -LiteralPath $resultPath)) {
+    foreach ($log in $logs) { Write-TestLogUpdate $log }
     if ([DateTime]::UtcNow -ge $deadline) {
         throw "Sandbox did not report completion. It may still be running; inspect its window and $outputRoot. No success is assumed and no other Sandbox is stopped."
     }
     Start-Sleep -Milliseconds 500
 }
 $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-Get-Content -LiteralPath (Join-Path $outputRoot 'stdout.txt'),(Join-Path $outputRoot 'stderr.txt') -Encoding UTF8 -ErrorAction SilentlyContinue
+foreach ($log in $logs) { Write-TestLogUpdate $log -Complete }
 if ($result.ExitCode -ne 0) { throw "Sandbox tests failed: $($result.Error). Results: $outputRoot" }
 Write-Output "PASS: Windows Sandbox / $($Name.Count) test groups. Results: $outputRoot"
