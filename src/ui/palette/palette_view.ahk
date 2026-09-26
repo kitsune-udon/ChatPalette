@@ -120,7 +120,6 @@ RefreshPalette() {
     model := BuildPaletteContext(Profiles,GetPaletteInputProfile(),AutoMode,DetectionMessage)
     SyncProfileChoices(PaletteProfile,model.Choices)
     PaletteProfile.Choose(model.Choice)
-    SetControlEnabled(PaletteProfile,model.CanChoose && OperationAllowed("preferences"))
     PaletteContext.Text := model.Context
     RefreshPaletteItems()
 }

@@ -7,7 +7,6 @@ BuildPaletteContext(profiles, profile, autoMode, detectionMessage) {
             index := i
     }
     return {Choices:choices, Choice:index,
-        CanChoose:!autoMode && profiles.Length > 0,
         Context:"弾幕の入力対象：" (profile ? profile.Name : "共通の弾幕のみ")
             . "`n" (autoMode ? detectionMessage : "手動選択：下の欄で配信者を選べます。")}
 }

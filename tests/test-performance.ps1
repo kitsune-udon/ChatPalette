@@ -98,14 +98,14 @@ PaletteList.Modify(40,"Select Focus Vis")
 Assert(PaletteList.GetNext()=40,"palette selection is prepared before refresh: selected=" PaletteList.GetNext())
 top := SendMessage(0x1027,0,0,PaletteList.Hwnd)
 RefreshPalette()
-Assert(PaletteList.GetNext()=40 && SendMessage(0x1027,0,0,PaletteList.Hwnd)=top,"palette full refresh preserves selection and viewport")
+Assert(PaletteList.GetNext()=40 && SendMessage(0x1027,0,0,PaletteList.Hwnd)=top && PaletteProfile.Enabled,"manual palette refresh preserves selection, viewport and profile choice")
 PaletteSearch.Value := "text60"
 RefreshPaletteItems()
 Assert(PaletteRows.Length=1 && PaletteRows[1].Text="text60" && PaletteList.GetNext()=1,"search selection remains valid")
 AutoMode := true, TargetBrowserHwnd := 123
 prior := UiMessageProbe.Renders
 RefreshPaletteForTarget()
-Assert(UiMessageProbe.Renders=prior+1,"detection renders exactly once")
+Assert(UiMessageProbe.Renders=prior+1 && !PaletteProfile.Enabled,"detection renders exactly once and disables manual profile choice")
 RefreshOperationControls()
 writes := UiMessageProbe.Writes
 Loop 20
