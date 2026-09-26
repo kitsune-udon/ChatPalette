@@ -294,7 +294,17 @@ SQLite・設定整合性・アプリ設定・登録保存の4テスト群、計8
 
 計測範囲が重なり、安定した改善とは判断できないため、製品コードは変更しませんでした。以前の容量予約指定でも改善を確認できていません。既存APIの呼び方だけで、全行追加の負担を解消できる根拠は得られていません。
 
-次の検討候補は仮想一覧です。[Windowsの仕様](https://learn.microsoft.com/en-us/windows/win32/controls/list-view-controls-overview#creating-a-virtual-list-view-control)では、`LVS_OWNERDATA`は現在の文字列取得（`LVM_GETITEMTEXT`）や行更新（`LVM_SETITEM`）と同じようには使えず、表示要求への応答と選択状態の更新方法を整理する必要があります。現行のID確認・選択復元・編集後の更新を含む置換負担を評価するため、まず隔離試作で確認します。仮想化による性能改善や互換性はまだ検証していません。
+次の検討候補は仮想一覧です。[Windowsの仕様](https://learn.microsoft.com/en-us/windows/win32/controls/list-view-controls-overview#creating-a-virtual-list-view-control)では、`LVS_OWNERDATA`で`LVM_GETITEMTEXT`や`LVM_SETITEM`を同じようには使えません。ただし、その後[AutoHotkey 2.0.28の実装](https://github.com/AutoHotkey/AutoHotkey/blob/v2.0.28/source/lib/Gui.ListView.cpp)を確認し、`GetText`は対応する`LVM_GETITEM`を使うことが分かりました。`GetText`まで変更が必要という当初の見立ては訂正します。`Modify`による選択は`LVM_SETITEM`を使うため、選択専用メッセージへの置換が必要です。
+
+### 仮想一覧の隔離試作
+
+製品ソースは変更せず、既存の`BuildManagementPresentation`で10万件の合成弾幕をモデル化し、独立した一覧を`LVS_OWNERDATA`で作りました。モデルは一覧コントロールが保持し、[`LVN_GETDISPINFO`](https://learn.microsoft.com/en-us/windows/win32/api/commctrl/ns-commctrl-nmlvdispinfow)の要求範囲だけをWindowsの指定バッファへコピーします。別の文字列キャッシュは設けません。
+
+前面の準備確認と一覧自体の同期再描画を含む最終試作は、作成・モデル化・表示が1回の観測で429.245ms、10チェックが成功しました。先頭と末尾の描画通知、日本語とIDの取得、10万件の行数、選択専用メッセージによる末尾選択・スクロール、空一覧での選択解除を確認しています。既存の`GetText`でも末尾IDを取得できました。`Modify`で50000行目を選ぶ呼び出しは選択0のままで、置換の必要性を実測でも確認しました。
+
+初期試作は320.586msで9チェックに成功しましたが、親画面の更新と固定30ms待機だけの準備では次の実行で初回描画の複合判定が失敗しました。各条件の値はその時点で未記録で、原因解消とは扱いません。失敗コピーは`tests/.tmp/bc8354e42c42497f`に保持しています。最終試作では前面確認・子一覧の同期再描画・条件別の失敗診断を加えました。
+
+この試作は製品の管理画面や全体のベンチマークではなく、安定性・編集連携・故障復旧を検証済みとはしていません。導入時には、選択復元での専用API使用、モデルと行数の更新所有、部分並べ替え、非表示タブ、長文表示、[`LVN_ODFINDITEM`](https://learn.microsoft.com/en-us/windows/win32/controls/lvn-odfinditem)によるキーボード検索を確認する必要があります。次はこの対応を既存の管理画面へ隔離適用し、削除できる行追加・削除ループと、増える通知処理・保持モデルの負担を比較します。
 
 ## 原因未特定の失敗と追加した観測
 
