@@ -221,7 +221,7 @@ ShowShortcutManager(selectedAction := "reaction",*) {
         if !ActiveEditorDialog || ActiveEditorDialog.Window != view
             return
         if (KeysDirty() || ItemsDirty()) && !ConfirmEditorDiscard(view,"未保存の変更を破棄して閉じますか？")
-            return
+            return true ; Prevent the native Close event from hiding the retained editor.
         DestroyEditorDialog(view,viewport)
     }
 }

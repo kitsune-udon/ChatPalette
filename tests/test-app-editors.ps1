@@ -126,8 +126,14 @@ Invoke-AppFixture -Body @'
             break
         }
     nameControl.Value := "draft"
-    CloseDanmakuEditor(ActiveEditorDialog.Window)
-    Assert(ActiveEditorDialog && DiscardCount=1 && nameControl.Value="draft","cancelled discard preserves input and modal owner")
+    draftWindow := ActiveEditorDialog.Window
+    WinClose("ahk_id " draftWindow.Hwnd)
+    deadline := A_TickCount+2000
+    while DiscardCount<1 && A_TickCount<deadline
+        Sleep(10)
+    Assert(ActiveEditorDialog && ActiveEditorDialog.Window=draftWindow && DiscardCount=1
+        && DllCall("IsWindowVisible","Ptr",draftWindow.Hwnd) && nameControl.Value="draft","cancelled native close preserves visible input and modal owner")
+    Assert(!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && !DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"cancelled native close retains parent locks")
     nameControl.Value := ""
     CloseDanmakuEditor(ActiveEditorDialog.Window)
     Assert(!ActiveEditorDialog && DiscardCount=1,"reverted edit closes without asking")
@@ -136,8 +142,11 @@ Invoke-AppFixture -Body @'
         if control.Type="Edit"
             control.Value := "discarded"
     DiscardAllowed := true
-    CloseDanmakuEditor(ActiveEditorDialog.Window)
+    draftHwnd := ActiveEditorDialog.Window.Hwnd
+    WinClose("ahk_id " draftHwnd)
+    Assert(WinWaitClose("ahk_id " draftHwnd,,2) && !DllCall("IsWindow","Ptr",draftHwnd),"confirmed native close destroys the editor")
     Assert(!ActiveEditorDialog && DiscardCount=2 && SharedDanmakuItems.Length=beforeFocusSave,"confirmed discard saves nothing")
+    Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"confirmed native close restores parent windows")
     RuntimePorts.ConfirmDiscard := 0
     ManagementWindow.Hide()
     modal := Gui(,"key editing fixture")

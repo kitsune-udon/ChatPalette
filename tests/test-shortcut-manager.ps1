@@ -47,8 +47,12 @@ Invoke-AppFixture -Body @'
     Assert(panel.SaveButton.Enabled && InStr(panel.Status.Text,"保存できません"),"failed save retains draft")
     global DiscardCalls := 0, AllowDiscard := false
     RuntimePorts.ConfirmDiscard := ConfirmDraftDiscard
-    panel.Close.Call()
-    Assert(ActiveEditorDialog && DiscardCalls=1,"cancel close retains editor and draft")
+    WinClose("ahk_id " panel.Window.Hwnd)
+    deadline := A_TickCount+2000
+    while DiscardCalls<1 && A_TickCount<deadline
+        Sleep(10)
+    Assert(ActiveEditorDialog && ActiveEditorDialog.Window=panel.Window && DiscardCalls=1 && DllCall("IsWindowVisible","Ptr",panel.Window.Hwnd)
+        && panel.SaveButton.Enabled,"cancel native close keeps the editor visible with its draft")
     AllowDiscard := true
     Assert(SharedDanmakuItems[-1].Slot=0,"screen can unassign an item without deleting it")
     panel.Reset.Call(), panel.Close.Call()
@@ -58,8 +62,13 @@ Invoke-AppFixture -Body @'
     Assert(!ActiveEditorDialog && DiscardCalls=2,"unchanged editor closes without confirmation")
     panel := ShowShortcutManager()
     panel.First.Choose(1), panel.Second.Choose(1), panel.UpdateItems.Call()
-    AllowDiscard := false, panel.Close.Call()
-    Assert(ActiveEditorDialog && DiscardCalls=3,"item-only dirty draft also blocks cancelled close")
+    AllowDiscard := false
+    WinClose("ahk_id " panel.Window.Hwnd)
+    deadline := A_TickCount+2000
+    while DiscardCalls<3 && A_TickCount<deadline
+        Sleep(10)
+    Assert(ActiveEditorDialog && ActiveEditorDialog.Window=panel.Window && DiscardCalls=3 && DllCall("IsWindowVisible","Ptr",panel.Window.Hwnd)
+        && panel.First.Value=1 && panel.Second.Value=1,"item-only draft stays visible after cancelled native close")
     panel.Scope.Choose(2), panel.ChangeScope.Call()
     Assert(panel.Scope.Value=1 && panel.Second.Value=1,"cancel scope switch preserves draft")
     AllowDiscard := true, panel.Close.Call()

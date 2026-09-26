@@ -76,7 +76,7 @@ CloseDanmakuEditor(view,*) {
     if !ActiveEditorDialog || ActiveEditorDialog.Window != view
         return
     if view.IsDirty.Call() && !ConfirmEditorDiscard(view)
-        return
+        return true ; Prevent the native Close event from hiding the retained editor.
     FinishDanmakuEditor(view)
 }
 FinishDanmakuEditor(view) {
