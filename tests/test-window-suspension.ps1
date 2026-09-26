@@ -11,13 +11,26 @@ RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
 global ProbeWaitFailure := false
 for managerEnabled in [true,false] {
     ManagementWindow.Opt(managerEnabled ? "-Disabled" : "+Disabled")
+    RecordBrowserOperation({Mode:"chat_focus",State:"focused",Window:456,Duration:17})
     ProbeWaitFailure := true
     failed := false
     try NativeRequestBrowserOperation(123,"browser_context")
     catch as failure
         failed := failure.Message == "fixture wait preparation failure"
     Assert(failed && !IsBrowserOperationBusy,"failed wait preparation releases operation ownership")
+    diagnostic := ReadDiagnosticSnapshot()
+    Assert(diagnostic.ModeCode="browser_context" && diagnostic.StateCode="unknown" && LastBrowserOperation.Window=123
+        && IsInteger(LastBrowserOperation.Duration) && LastBrowserOperation.Duration>=0,
+        "failed wait preparation replaces the previous diagnostic success")
     Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && !!DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd)=managerEnabled,"failed wait preparation restores prior parent enabled state")
+}
+for rejected in ["busy","wrong-window"] {
+    previousOperation := LastBrowserOperation
+    IsBrowserOperationBusy := rejected="busy"
+    try reply := NativeRequestBrowserOperation(rejected="busy" ? 123 : 456,"chat_focus")
+    finally IsBrowserOperationBusy := false
+    Assert(reply.State="unavailable" && LastBrowserOperation=previousOperation,
+        "rejected request leaves the owning operation diagnostic intact: " rejected)
 }
 ManagementWindow.Opt("-Disabled")
 PaletteWindow.DefineProp("Opt",{Call:WindowOpt})
@@ -38,6 +51,9 @@ for flow in ["wait","editor"] {
         for window, detail in WindowFaults
             Assert(InStr(errorMessage,detail),"restore failure remains visible: " label "/" detail)
         Assert(!IsBrowserOperationBusy && !ActiveEditorDialog,"failed restore releases the operation: " label)
+        if flow="wait"
+            Assert(LastBrowserOperation.Mode="browser_context" && LastBrowserOperation.State="ok",
+                "parent restore failure preserves the observed browser outcome: " label)
         Assert(!!DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd)=(failedWindow="manager"),"palette restoration is attempted independently: " label)
         Assert(!!DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd)=(failedWindow="palette"),"management restoration is attempted independently: " label)
         Assert(PaletteStart.Enabled && ManagementItemButtons[1].Enabled,"operation controls refresh despite parent restore failure: " label)

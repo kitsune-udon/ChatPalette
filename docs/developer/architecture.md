@@ -405,7 +405,7 @@ DBがない場合、`CreateDefaultSettings`が空のライブラリと標準設�
 
 ツールチップは`ui_runtime.ahk`の`ShowStatusTip`から表示・消去します。消去タイマーは一つだけ所有し、表示の置換時に前の期限を解除します。期限なしの待機表示は処理側が明示的に消去します。
 
-通知と診断の結果説明は`browser_feedback.ahk`の`BrowserResultInfo`を共有します。診断は通信単体または利用者の操作全体を`RecordBrowserOperation`で記録し、途中の通信結果は操作完了時の記録で置き換えます。
+通知と診断の結果説明は`browser_feedback.ahk`の`BrowserResultInfo`を共有します。診断は通信単体または利用者の操作全体を`RecordBrowserOperation`で記録し、途中の通信結果は操作完了時の記録で置き換えます。 `NativeRequestBrowserOperation`は受け付けた要求の終了処理で一度記録し、待機準備・通信・後始末の例外で応答がない場合は`unknown`として以前の成功を置き換えます。応答が得られた場合はその状態を維持します。所要時間は待機準備から記録時点までを含み、記録に失敗しても操作制限と親画面の復旧を試みます。再入や対象外ウィンドウによって受け付けなかった要求は既存記録を変更しません。
 
 ## 変更時に守る条件
 

@@ -28,12 +28,11 @@ NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extr
     global IsBrowserOperationBusy
     if IsBrowserOperationBusy || !IsBrowser(hwnd)
         return {State: mode = "reaction_send" ? "unknown" : "unavailable", Author: "", Channel: "", Video: ""}
+    started := AppClockMs(), reply := 0
     IsBrowserOperationBusy := true
     try {
         waitView := CreateWorkerWait(mode)
         BeginWorkerWait(waitView)
-        started := AppClockMs()
-        reply := 0
         if InStr(mode,"reaction_") = 1 {
             try EnsureReactionRegistrations(hwnd)
             catch as failure
@@ -41,16 +40,20 @@ NativeRequestBrowserOperation(hwnd, mode := "resolve", expectedVideo := "", extr
         }
         if !reply
             reply := SendWorkerRequest(hwnd, mode, expectedVideo, extra)
-        RecordBrowserOperation({Mode:mode, State:reply.State, Window:hwnd, Duration:Round(AppClockMs()-started)})
         return reply
     } finally {
         ; Release the request and restore its windows before another owner can enter.
         cleanupCritical := A_IsCritical
         Critical("On")
         try {
-            IsBrowserOperationBusy := false
-            if IsSet(waitView)
-                EndWorkerWait(waitView)
+            ; No reply means the outcome is unknown; never leave an older success.
+            try RecordBrowserOperation({Mode:mode, State:reply ? reply.State : "unknown",
+                Window:hwnd, Duration:Round(AppClockMs()-started)})
+            finally {
+                IsBrowserOperationBusy := false
+                if IsSet(waitView)
+                    EndWorkerWait(waitView)
+            }
         } finally Critical(cleanupCritical)
     }
 }

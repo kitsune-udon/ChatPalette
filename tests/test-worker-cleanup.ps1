@@ -13,6 +13,8 @@ $body = @'
         DllCall("TerminateProcess","Ptr",handle,"UInt",1)
         Assert(DllCall("WaitForSingleObject","Ptr",handle,"UInt",2000,"UInt")=0,entry ": previous worker is stopped before restart")
     }
+    RecordBrowserOperation({Mode:"chat_focus",State:"focused",Window:456,Duration:17})
+    previousOperation := LastBrowserOperation
     StopFaultArmed := true
     if scenario="timeout"
         RuntimePorts.Clock := StopDeadlineClock
@@ -49,6 +51,15 @@ $body = @'
             : (scenario="oversize" ? "依頼サイズが不正です" : "補助プロセスが応答する前に終了しました|パイプが切断されました")
         Assert(RegExMatch(detail,cause)>0,label ": original communication failure survives cleanup failure: " detail)
     }
+    if entry="browser" || entry="registration" {
+        expectedMode := entry="browser" ? "verify_input" : "reaction_check"
+        expectedState := entry="registration" ? "sync_failed" : (scenario="restart" ? "unavailable" : "unknown")
+        diagnostic := ReadDiagnosticSnapshot()
+        Assert(diagnostic.ModeCode=expectedMode && diagnostic.StateCode=expectedState && LastBrowserOperation.Window=123
+            && IsInteger(LastBrowserOperation.Duration) && LastBrowserOperation.Duration>=0,
+            label ": diagnostic report replaces the previous success after a failed operation")
+    } else
+        Assert(LastBrowserOperation=previousOperation,label ": direct transport and synchronization leave operation diagnostics to their caller")
     Assert(entry!="startup" ? (StopOwned && StopNestedState="unavailable") : !StopOwned,label ": cleanup preserves its caller request gate and rejects nested requests")
     Assert(WorkerState.ProcessHandle=handle && DllCall("GetHandleInformation","Ptr",handle,"UInt*",&flags:=0),label ": unconfirmed process handle remains owned")
     Assert(!WorkerState.PipeHandle && !WorkerState.SignalHandle,label ": pipe and signal are already released")
