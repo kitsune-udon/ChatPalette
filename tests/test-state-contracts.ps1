@@ -157,6 +157,19 @@ for at in [1,2,3] {
     Assert(oldScope.Rows["left"].Position=1024 && oldScope.Rows["right"].Position=2048,"rank expansion preserves baseline")
     Assert(delta.Rows.Count=22 && delta.Deleted.Length=0,"all inserted rows retained")
 }
+; Full and partial deletion publish an independent map and exact byte totals.
+for remaining in [0,1] {
+    reduced := remaining ? [seed[1]] : []
+    delta := BuildScopeStorageDelta(reduced,oldScope)
+    Assert(delta.Rows.Count=remaining && delta.Deleted.Length=2-remaining && delta.Changed.Length=0
+        && delta.TextBytes=remaining*16,"deletion keeps exact rows, changes and byte totals: " remaining)
+    Assert(oldScope.Rows.Count=2 && oldScope.Rows.Has("left") && oldScope.Rows.Has("right")
+        && oldScope.TextBytes=36 && oldScope.Items.Length=2,"deletion preserves the previous complete snapshot: " remaining)
+}
+delta := BuildScopeStorageDelta(seed,oldScope,true)
+Assert(delta.Rows.Count=2 && delta.TextBytes=36 && delta.Changed.Length=0 && delta.Deleted.Length=0,"full revalidation preserves saved values without changes")
+delta.Rows.Delete("left")
+Assert(oldScope.Rows.Has("left") && oldScope.Rows.Count=2,"a completed full row map does not alias the saved map")
 oldJob := CreateReactionJob({Mode:"queued"})
 currentJob := CreateReactionJob({Mode:"queued"})
 ActiveReactionJob := currentJob

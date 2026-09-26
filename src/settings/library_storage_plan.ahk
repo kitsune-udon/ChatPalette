@@ -71,22 +71,25 @@ BuildScopeStorageDelta(items, old, force := false) {
         previous := old.Rows
         updated := BuildItemStorageRows(items,previous,force)
     }
-    result := {Rows:old ? old.Rows.Clone() : Map(), TextBytes:old && !force ? old.TextBytes : 0, Changed:[], Deleted:[]}
-    if !old
-        result.Rows.CaseSense := "On"
+    result := {Rows:updated, TextBytes:old && !force ? old.TextBytes : 0, Changed:[], Deleted:[]}
     for id, row in previous {
         if !force
             result.TextBytes -= StorageRowBytes(row)
-        if !updated.Has(id) {
-            result.Rows.Delete(id)
+        if !updated.Has(id)
             result.Deleted.Push(id)
-        }
     }
     for id, row in updated {
-        result.Rows[id] := row
         result.TextBytes += StorageRowBytes(row)
         if !previous.Has(id) || !SameStoredItem(row,previous[id])
             result.Changed.Push(id)
+    }
+    ; Full reconciliation already owns the complete map; merge only partial ranges.
+    if old && previous != old.Rows {
+        result.Rows := old.Rows.Clone()
+        for id in result.Deleted
+            result.Rows.Delete(id)
+        for id, row in updated
+            result.Rows[id] := row
     }
     return result
 }
