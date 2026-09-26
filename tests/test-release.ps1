@@ -32,6 +32,23 @@ foreach($invalid in @('version','encoding','link')) {
     } finally { [IO.File]::WriteAllBytes($target,$original) }
 }
 $versionFile=Join-Path $release 'VERSION'
+foreach ($violation in @(
+    @{Path='src\settings\settings_store.ahk';Code='MsgBox("unexpected storage UI")';Message='Boundary regression:'},
+    @{Path='src\ui\help_view.ahk';Code='view.Show()';Message='Presentation boundary regression:'}
+)) {
+    $target=Join-Path $release $violation.Path
+    $original=[IO.File]::ReadAllBytes($target)
+    try {
+        [IO.File]::AppendAllText($target,("`r`n"+$violation.Code+"`r`n"),[Text.UTF8Encoding]::new($false))
+        $rejected=$false
+        try { & (Join-Path $release 'scripts\check-source.ps1') -ProjectRoot $release | Out-Null }
+        catch {
+            if (!$_.Exception.Message.StartsWith($violation.Message)) { throw }
+            $rejected=$true
+        }
+        if (!$rejected) { throw "Source validator accepted boundary violation: $($violation.Path)" }
+    } finally { [IO.File]::WriteAllBytes($target,$original) }
+}
 $originalVersion=[IO.File]::ReadAllBytes($versionFile)
 try {
     foreach ($invalidVersion in @('01.2.3','1.02.3','1.2.03','1.2.3-01','1.2.3-alpha.01',
