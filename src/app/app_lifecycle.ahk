@@ -56,11 +56,11 @@ BackupSettingsForReset(path) {
         while moved.Length {
             pair := moved.Pop()
             try FileMove(pair[2],pair[1],false)
-            catch
-                unrestored .= "`n" pair[2] " → " pair[1]
+            catch as restoreFailure
+                unrestored .= "`n" pair[2] " → " pair[1] "`n理由: " restoreFailure.Message
         }
         if unrestored != ""
-            throw Error(failure.Message "`n`n元に戻せなかったファイルがあります。退避先 → 元の場所：" unrestored)
+            failure.Message .= "`n`n元に戻せなかったファイルがあります。退避先 → 元の場所：" unrestored
         throw failure
     }
     return path suffix

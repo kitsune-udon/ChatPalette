@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 $release = New-TestRuntime
 # Fail one rollback move only in the isolated runtime.
 Edit-TestSource $release 'src/app/app_lifecycle.ahk' 'try FileMove(pair[2],pair[1],false)' 'try ProbeResetRestore(pair)'
+Edit-TestSource $release 'src/app/app_lifecycle.ahk' 'FileMove(pair[1],pair[2],false)' 'ProbeResetMove(pair)'
 
 $tests = @'
 #Requires AutoHotkey v2.0
@@ -146,7 +147,7 @@ try {
 CloseSettingsStore()
 SettingsDatabasePath := A_ScriptDir "\reset-control.db"
 OpenSettingsRepository(SettingsDatabasePath)
-global ProbeRollbackFailure := false
+global ProbeRollbackFailure := false, ProbeResetFailure := 0
 brokenPath := A_ScriptDir "\broken.db"
 FileAppend("invalid database", brokenPath)
 invalidMessage := ""
@@ -169,12 +170,18 @@ for blockRollback in [false,true] {
     locked := DllCall("CreateFileW","Str",resetDirectory "\settings.db-shm","UInt",0x80000000,"UInt",0,"Ptr",0,"UInt",3,"UInt",0,"Ptr",0,"Ptr")
     Assert(locked != -1,"reset failure fixture holds the final file exclusively")
     try {
-        resetError := ""
+        resetError := "", resetFailure := 0
         try BackupSettingsForReset(resetPath)
-        catch as failure
+        catch as failure {
+            resetFailure := failure
             resetError := failure.Message
+        }
         Assert(resetError != "","reset aborts when a source cannot be moved")
     } finally DllCall("CloseHandle","Ptr",locked)
+    Assert(InStr(resetError,ProbeResetFailure.Message)=1 && !!InStr(resetError,"Injected reset rollback failure")=blockRollback,
+        "reset reports the original move failure and any restoration failure together")
+    Assert(resetFailure=ProbeResetFailure.Error && resetFailure.Stack=ProbeResetFailure.Stack && resetFailure.Extra=ProbeResetFailure.Extra,
+        "reset preserves the original move exception and its failure location")
     remainingBackups := []
     Loop Files resetDirectory "\*.backup-*"
         remainingBackups.Push(A_LoopFileFullPath)
@@ -198,6 +205,14 @@ actual := FileRead(SettingsDatabasePath,"RAW")
 Assert(actual.Size=currentDatabase.Size && DllCall("msvcrt\memcmp","Ptr",actual,"Ptr",currentDatabase,"UPtr",actual.Size,"CDecl Int")=0,"reset never changes the database in a different directory")
 FileAppend("PASS: " Checks " settings integrity checks; no application startup`n","*")
 ExitApp()
+ProbeResetMove(pair) {
+    global ProbeResetFailure
+    try FileMove(pair[1],pair[2],false)
+    catch as failure {
+        ProbeResetFailure := {Error:failure,Message:failure.Message,Stack:failure.Stack,Extra:failure.Extra}
+        throw failure
+    }
+}
 ProbeResetRestore(pair) {
     global ProbeRollbackFailure
     if ProbeRollbackFailure && RegExMatch(pair[1],"\\settings\.db-wal$")
