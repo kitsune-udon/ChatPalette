@@ -18,7 +18,9 @@ SetKeyDelay(40,40)
 for entry in [["f",1,"chat_focus","focused"],["c",3,"chat_clear","cleared"],["e",4,"reactions_show","hovered"]] {
     SendTestKeys("{Control down}{Alt down}" entry[1] "{Alt up}{Control up}")
     deadline := A_TickCount+3000
-    while (HotkeyCalls.Length<entry[2] || LastBrowserOperation.Mode!=entry[3] || LastBrowserOperation.State!=entry[4]) && A_TickCount<deadline
+    ; Key dispatch can finish before the edit processes the queued deletion.
+    while (HotkeyCalls.Length<entry[2] || LastBrowserOperation.Mode!=entry[3] || LastBrowserOperation.State!=entry[4]
+        || (entry[1]="c" && FixtureChat.Value!="")) && A_TickCount<deadline
         Sleep(10)
     Assert(HotkeyCalls.Length=entry[2] && LastBrowserOperation.State=entry[4],"real binding dispatches " entry[1] " calls=" HotkeyCalls.Length " state=" LastBrowserOperation.State " active=" (!!WinActive("ahk_id " FixtureBrowser.Hwnd)))
     if entry[1]="f" {
@@ -28,7 +30,7 @@ for entry in [["f",1,"chat_focus","focused"],["c",3,"chat_clear","cleared"],["e"
             . " active=" (!!WinActive("ahk_id " FixtureBrowser.Hwnd)) " operation_active=" (!!ActivePageAction))
     }
     if entry[1]="c"
-        Assert(FixtureChat.Value="" && HotkeyCalls[2].Mode="chat_focus" && HotkeyCalls[3].Mode="verify_chat","C clears only isolated edit after verification")
+        Assert(FixtureChat.Value="" && HotkeyCalls[2].Mode="chat_focus" && HotkeyCalls[3].Mode="verify_chat","C clears only isolated edit after verification; empty=" (FixtureChat.Value="") " modes=" HotkeyCalls[2].Mode "/" HotkeyCalls[3].Mode)
     if entry[1]="e"
         Assert(HotkeyCalls[4].Mode="reactions_show","E selects non-sending page operation")
 }

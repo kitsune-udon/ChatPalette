@@ -70,7 +70,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 
 起動や終了通知の待機がタイムアウトした場合は成功とせず、設定・入力・ログを残します。Sandboxを途中で閉じたりゲストが異常終了した場合、ゲスト内だけに残る失敗コピーは回収できません。別のSandboxを強制終了したり自動再実行したりはしません。保持した`tests.wsb`を再実行すると結果が混ざるため、再現時もランナーから新しい実行を作成します。
 
-導入時の検証状況：起動設定生成とゲスト側の成功・失敗・ログ回収は画面不要の検査で確認します。Windows Sandbox実機での前面・キー入力、ホスト操作との並行実行、最小化時の動作は別途確認が必要です。これらが通るまでは「操作干渉を解消した」とは扱いません。
+2026-09-27にWindows Sandbox実機でDesktop全24群の成功を確認しました。途中で見つかったテスト側の時間制限・反映待ちを修正し、変更のない成功済み群を再実行せず、5群・7群・12群の成功を合わせた結果です。実キー配送24項目、ワーカー終了失敗11ケース・104項目を含み、実行中にホスト側で別ウィンドウを操作しているとの利用者の確認があります。結果回収も成功しました。詳細は[検証結果](complexity-results.md#windows-sandboxでの画面検証)を参照してください。最小化・切断・ロック時の動作と実ブラウザーは未検証です。過去の原因未特定の失敗まで解消したとは扱いません。
 
 ホスト上でPowerShell 7からランナーを直接呼ぶと、継承された`PSModulePath`によりWindows PowerShell側の`Get-FileHash`が見つからず配布検査が失敗する環境を確認しています。ホスト検査は上記の`powershell.exe`経由で実行してください。Sandbox内は独立したWindows PowerShell 5.1環境です。このホスト側の問題をSandbox導入によって修正済みとは扱いません。
 
@@ -96,6 +96,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | 入力計画 | [test-app-input-plan.ps1](../../tests/test-app-input-plan.ps1) | IDと本文の固定、並べ替え・管理画面からの復帰後の選択保持、入力前のパレット表示・前面確認、送信直前の再検証、対象変更時の中止、部分入力を再送しないこと |
 | 設定往復（画面操作不要） | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定の独立保存、キーの巻き戻し、競合・Unicode・長文の保持 |
 | 通信・実行 | [test-app-worker.ps1](../../tests/test-app-worker.ps1) | 実パイプ通信、起動・終了・再起動の資源所有、失敗時の復旧、登録同期と操作制限の解除 |
+| ワーカーの終了失敗 | [test-worker-cleanup.ps1](../../tests/test-worker-cleanup.ps1) | 終了を確認できない場合のハンドル所有・再入拒否・明示的な復旧。11の故障ケースをそれぞれ新しいプロセスで実行し、ケース名を記録する |
 | ワーカー単体の寿命 | [test-worker-lifetime.ps1](../../tests/test-worker-lifetime.ps1) | パイプ切断・通知イベント欠落・接続先不在での終了とハンドル解放。実ワーカーを使い、画面・キー・ブラウザー操作を要しないHeadless検査 |
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
 | SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、バックアップと復旧 |
