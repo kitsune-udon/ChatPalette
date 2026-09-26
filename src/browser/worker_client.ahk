@@ -190,8 +190,10 @@ NativeSendWorkerRequest(hwnd, mode := "resolve", expectedVideo := "", extra := "
             ; Preserve the observed cause; all communication failures share cleanup.
             unavailable.Detail := failure.Message
         }
-        ; Do not catch a cleanup failure here or retry it implicitly.
-        StopBrowserWorker()
+        ; Keep cleanup outside the communication catch, and preserve both failures.
+        try StopBrowserWorker()
+        catch as cleanupFailure
+            throw Error(unavailable.Detail "`n後始末: " cleanupFailure.Message, -1)
         return unavailable
     } finally {
         WorkerState.RequestActive := false

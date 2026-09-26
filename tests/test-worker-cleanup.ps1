@@ -17,7 +17,7 @@ $body = @'
     if scenario="timeout"
         RuntimePorts.Clock := StopDeadlineClock
     extra := scenario="timeout" ? "FixtureDelay=3500`n" : (scenario="crash" ? "FixtureExit=1`n" : (scenario="oversize" ? Format("{:33000}","x") : ""))
-    failed := false
+    failed := false, detail := ""
     try {
         if entry="startup"
             EnsureWorkerRunning()
@@ -33,7 +33,10 @@ $body = @'
             failed := reply.State="unavailable" && reply.HasOwnProp("Detail")
                 && InStr(reply.Detail,"補助プロセスの終了を確認できませんでした") > 0
         }
+        if entry!="startup" && reply.HasOwnProp("Detail")
+            detail := reply.Detail
     } catch as failure {
+        detail := failure.Message
         failed := InStr(failure.Message,"補助プロセスの終了を確認できませんでした") > 0
     } finally {
         StopFaultArmed := false
@@ -41,6 +44,11 @@ $body = @'
     }
     label := entry "/" scenario
     Assert(failed && StopChecks=1,label ": unconfirmed cleanup is surfaced without an implicit retry")
+    if scenario!="restart" {
+        cause := scenario="timeout" ? "補助プロセスの応答が時間内に届きませんでした"
+            : (scenario="oversize" ? "依頼サイズが不正です" : "補助プロセスが応答する前に終了しました|パイプが切断されました")
+        Assert(RegExMatch(detail,cause)>0,label ": original communication failure survives cleanup failure: " detail)
+    }
     Assert(entry!="startup" ? (StopOwned && StopNestedState="unavailable") : !StopOwned,label ": cleanup preserves its caller request gate and rejects nested requests")
     Assert(WorkerState.ProcessHandle=handle && DllCall("GetHandleInformation","Ptr",handle,"UInt*",&flags:=0),label ": unconfirmed process handle remains owned")
     Assert(!WorkerState.PipeHandle && !WorkerState.SignalHandle,label ": pipe and signal are already released")
