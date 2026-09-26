@@ -235,21 +235,27 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.
 
 大量データのテストは合成データと隔離DBを使います。保存上限の試験を、快適性や長時間稼働の検証結果として扱わないでください。実停電、OS全体のディスク枯渇、全ブラウザーの互換性は既存テストで検証していません。
 
-計測結果はCSVで標準出力へ出します。中央値は反復回数が奇数なら中央の値、偶数なら中央2値の平均です。保管する場合は実行時にファイルへ出力してください。どちらの計測も成功時は一時環境を削除し、失敗時はソース・標準出力・標準エラーを残します。通常の回帰テストには実時間の合否基準を加えません。
+計測結果はCSVで標準出力へ出します。中央値は反復回数が奇数なら中央の値、偶数なら中央2値の平均です。保管する場合は実行時にファイルへ出力してください。各計測は成功時に一時環境を削除し、失敗時はソース・標準出力・標準エラーを残します。通常の回帰テストには実時間の合否基準を加えません。
 
 保存計画の計測では、各条件の最終結果について、件数・IDごとの名前と本文・キー割当・要求された順序を計測区間外で照合します。不一致なら、その条件のCSVを出力せず失敗します。検査で取得した参照は次の条件へ持ち越しません。
 
 | 計測 | 範囲と既定条件 | 引数 |
 |---|---|---|
 | `benchmark-storage.ps1` | 合成データ1千・1万・10万件の編集・隣接交換・Undo・全件逆順・全件検証で、保存計画の計算時間を測る。ウォームアップ1回後の7回の中央値と最大値。SQL取得・DB書き込み・描画・ブラウザー操作は含まない | `-Repeats`は1以上。`-SourceRoot`で同じモジュール構成の比較対象を指定可能 |
-| `benchmark-ui.ps1` | 隔離DBの合成データ1千・1万件で設定読み込み・実際のパレット描画・検索・管理一覧の全件更新を測る。ウォームアップ1回後の3回の中央値と最大値 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9 |
+| `benchmark-load.ps1` | 隔離DBの合成データ1千・1万件で、設定読込からアプリ状態の反映までを画面・キー登録・ワーカーなしで測る。ウォームアップ1回後の3回の中央値と最大値。DB準備と結果照合は計測外 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9。`-SourceRoot`で比較対象を指定可能 |
+| `benchmark-ui.ps1` | 隔離DBの合成データ1千・1万件で実際のパレット描画・検索・管理一覧の全件更新を測る。ウォームアップ1回後の3回の中央値と最大値 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9 |
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-storage.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-load.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-ui.ps1
 # 別フォルダーに用意した同じモジュール構成のソースと比較
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-storage.ps1 -SourceRoot '比較対象の場所'
+# 複数の件数を指定するときは、PowerShell式として配列を渡す
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/benchmark-load.ps1' -Counts 1000,10000,100000"
 ```
+
+読込計測は本番の`ReloadAppSettings`を使い、毎回、読み込んだ弾幕・配信者・共通設定・キーを元の合成データと照合します。不一致なら、その件数のCSVを出力せず失敗します。接続・ステートメントとOSのファイルキャッシュを再利用する計測で、初回起動の時間ではありません。以前の画面計測に含まれていた`load`を移したものですが、GUI・キー登録の有無と結果照合による計測外の処理が異なるため、過去の数値と同条件とは扱いません。
 
 画面計測の`cold_initialize`は、空DBの初期化と画面構築を1回測った値で、プロセス起動時間を含みません。パレットの描画は先頭500件、検索は全データが対象です。`management`は管理画面を表示した状態で一覧の全件更新を測り、行数も確認します。管理画面の初回構築とDB保存は含みません。[改善時の計測記録](complexity-results.md)には、比較条件・結果・判断を残しています。
 

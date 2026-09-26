@@ -19,16 +19,14 @@ for count in Counts {
     OpenSettingsRepository(SettingsDatabasePath).SaveAll(draft)
     ReloadAppSettings()
     PaletteViewport.Show()
-    for operation in ["load","list","search","management"] {
+    for operation in ["list","search","management"] {
         if operation="management"
             ShowManagement(1)
         samples := ""
         Loop Repeats+1 {
             PaletteSearch.Value := operation="search" ? "body 9" : ""
             started := Tick()
-            if operation="load"
-                ReloadAppSettings()
-            else if operation="management"
+            if operation="management"
                 RefreshManagement()
             else
                 RefreshPaletteItems()
