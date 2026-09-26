@@ -215,10 +215,11 @@ try {
             calls := NavigationRequests, restarts := NavigationRestarts
             owner := phase="ipc" ? 0 : {Window:browser.Hwnd,Pending:0,AcceptsPending:phase="focus_wait"}
             ActivePageAction := owner, IsBrowserOperationBusy := phase="ipc"
-            entry.Call()
             label := entry.Name "/" phase
+            AssertNavigationWindows("before " label)
+            entry.Call()
             Assert(NavigationRequests=calls && TargetBrowserHwnd=browser.Hwnd,"busy navigation never re-resolves or changes the target: " label)
-            Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd) && WinActive("ahk_id " browser.Hwnd),"busy navigation preserves foreground and both panels: " label)
+            AssertNavigationWindows("after " label)
             Assert(PaletteChoice.Value=2 && PaletteCount.Value=3 && PaletteInterval.Value=2,"busy defaults-return cannot reset the session: " label)
             Assert(!RestartApplication() && NavigationRestarts=restarts && ActivePageAction=owner,"restart and navigation preserve the current owner: " label)
             ActivePageAction := 0, IsBrowserOperationBusy := false
@@ -274,6 +275,15 @@ NavigationResolve(hwnd) {
     if NavigationFailure
         throw Error("navigation lookup failure")
     return {State:"ok",Channel:"/channel/fixture",Author:"fixture",Video:"abcdefghijk"}
+}
+AssertNavigationWindows(label) {
+    paletteVisible := DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd)
+    managementVisible := DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd)
+    foreground := DllCall("GetForegroundWindow","Ptr"), foregroundPid := 0
+    DllCall("GetWindowThreadProcessId","Ptr",foreground,"UInt*",&foregroundPid)
+    Assert(!paletteVisible && managementVisible && foreground=TargetBrowserHwnd,
+        "busy navigation window state: " label " palette_visible=" paletteVisible " management_visible=" managementVisible
+        . " target_active=" (foreground=TargetBrowserHwnd) " foreground_owned=" (foregroundPid=DllCall("GetCurrentProcessId")))
 }
 NavigationRestart() {
     global NavigationRestarts

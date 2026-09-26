@@ -7,7 +7,7 @@ $source = @'
 #Include %A_ScriptDir%\src\app\app_modules.ahk
 OnExit(CloseSettingsStore)
 global SettingsDatabasePath := A_ScriptDir "\settings.db", ApplicationShortcutsInstalled := false, LibraryHistory := []
-global ContextCalls := 0, ContextReentry := false
+global ContextCalls := 0, ContextReentry := false, TargetBrowserHwnd := 123
 state := CreateDefaultSettings()
 state.Profiles := [
     {Id:"context-a",Name:"A",Channel:"/channel/a",Items:[{Id:"item-a",Name:"A",Text:"first",Slot:1}]},
