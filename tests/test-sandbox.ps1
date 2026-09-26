@@ -99,6 +99,30 @@ foreach ($line in @('live 日本語 🧪','final line without newline','failure 
     Assert (@($observed | Where-Object { $_ -ceq $line }).Count -eq 1) "Host publishes each line once: $line"
 }
 Assert ($failure -like 'Sandbox tests failed: fixture progress failure*') 'Live progress does not turn a failing run into success'
+# A host wait timeout is not evidence that the guest stopped. Retain its inputs,
+# logs and process, then let this owned fake guest finish before test cleanup.
+$hostBytes=[IO.File]::ReadAllBytes((Join-Path $runtime 'tests\sandbox.ps1'))
+$timeoutProbe=@{Process=$null}
+function Save-TimeoutProducer($Process) { $timeoutProbe.Process=$Process }
+try {
+    Edit-TestSource $runtime 'tests/sandbox.ps1' '$timeoutMs = 1000 * (180 + 120 * ($Name.Count + 1))' '$timeoutMs = 1'
+    Edit-TestSource $runtime 'tests/sandbox.ps1' '$process.Dispose()' 'Save-TimeoutProducer $process'
+    $observed=[Collections.Generic.List[string]]::new(); $failure=''
+    try { & (Join-Path $runtime 'tests\sandbox.ps1') -Name test-input.ps1 | ForEach-Object { $observed.Add([string]$_) } }
+    catch { $failure=$_.Exception.Message }
+    $results=($observed | Where-Object { $_ -like 'Sandbox results: *' }) -replace '^Sandbox results: ',''
+    Assert ($failure -like 'Sandbox did not report completion.*' -and $failure.Contains($results)) 'Host timeout reports uncertainty and the retained evidence path'
+    Assert ($timeoutProbe.Process -and !$timeoutProbe.Process.HasExited) 'Host timeout does not stop the guest'
+    Assert (!(Test-Path -LiteralPath (Join-Path $results 'result.json')) -and
+        (Test-Path -LiteralPath (Join-Path (Split-Path $results -Parent) 'tests.wsb'))) 'Host timeout retains configuration without fabricating completion'
+    Assert (@($observed | Where-Object { $_ -like 'PASS:*' }).Count -eq 0) 'Host timeout never reports success'
+} finally {
+    [IO.File]::WriteAllBytes((Join-Path $runtime 'tests\sandbox.ps1'),$hostBytes)
+    if ($timeoutProbe.Process) {
+        [IO.File]::WriteAllText((Join-Path $results 'observed.txt'),'finish after timeout')
+        $null=Wait-TestProcess -Process $timeoutProbe.Process -TimeoutMs 15000
+    }
+}
 # Exercise the guest's real process/log/result handoff with a headless fake runner.
 # This does not claim to test virtualization, desktop activation or input delivery.
 $inputRoot = Join-Path $runtime 'guest-input'

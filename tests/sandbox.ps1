@@ -43,10 +43,11 @@ $process = Start-Process -FilePath $sandboxExe -ArgumentList ('"' + $config + '"
 $process.Dispose()
 $resultPath = Join-Path $outputRoot 'result.json'
 $logs = @('stdout.txt','stderr.txt') | ForEach-Object { [pscustomobject]@{Path=(Join-Path $outputRoot $_); Position=0} }
-$deadline = [DateTime]::UtcNow.AddSeconds(180 + 120 * ($Name.Count + 1))
+$timeoutMs = 1000 * (180 + 120 * ($Name.Count + 1))
+$elapsed = [Diagnostics.Stopwatch]::StartNew()
 while (!(Test-Path -LiteralPath $resultPath)) {
     foreach ($log in $logs) { Write-TestLogUpdate $log }
-    if ([DateTime]::UtcNow -ge $deadline) {
+    if ($elapsed.ElapsedMilliseconds -ge $timeoutMs) {
         throw "Sandbox did not report completion. It may still be running; inspect its window and $outputRoot. No success is assumed and no other Sandbox is stopped."
     }
     Start-Sleep -Milliseconds 500
