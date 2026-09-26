@@ -108,15 +108,16 @@ try { $null=$target.Read() } catch { }
     }
 }
 # Benchmark options use the same binding boundary as the test runner.
-foreach ($benchmark in @('benchmark-storage.ps1','benchmark-ui.ps1')) {
-    $benchmarkPath=Join-Path $fixture $benchmark
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot $benchmark) -Destination $benchmarkPath
-    $arguments=if ($benchmark -eq 'benchmark-storage.ps1') { @{SourceRoot=(Join-Path $fixture 'missing');SourceRoto='unused'} }
-        else { @{Counts=0;Countz=1} }
+foreach ($benchmark in Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'benchmark-*.ps1' -File) {
+    $benchmarkPath=Join-Path $fixture $benchmark.Name
+    Copy-Item -LiteralPath $benchmark.FullName -Destination $benchmarkPath
     $rejected=$false
-    try { & $benchmarkPath @arguments | Out-Null }
-    catch [Management.Automation.ParameterBindingException] { $rejected=$true }
-    if (!$rejected) { throw "$benchmark did not reject a misspelled option before executing" }
+    try { & $benchmarkPath -Repeats 1 -Repeets 1 | Out-Null }
+    catch [Management.Automation.ParameterBindingException] {
+        if ($_.Exception.ParameterName -ne 'Repeets') { throw }
+        $rejected=$true
+    }
+    if (!$rejected) { throw "$($benchmark.Name) did not reject a misspelled option before executing" }
 }
 # The same process owner handles successful, failing and unfinished child processes.
 $probe=Join-Path $runtime 'process-probe.ps1'
