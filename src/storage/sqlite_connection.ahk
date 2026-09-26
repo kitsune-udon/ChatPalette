@@ -78,6 +78,8 @@ class SqliteConnection {
             step := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_step","Ptr")
             columnText := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_column_text16","Ptr")
             columnBytes := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_column_bytes16","Ptr")
+            columnType := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_column_type","Ptr")
+            columnInt := DllCall("GetProcAddress","Ptr",SqliteConnection.Module,"AStr","sqlite3_column_int64","Ptr")
             columns := DllCall(SqliteConnection.Library "\sqlite3_column_count", "Ptr", stmt, "CDecl Int")
             loop {
                 rc := DllCall(step, "Ptr", stmt, "CDecl Int")
@@ -87,6 +89,11 @@ class SqliteConnection {
                     this.Check(rc)
                 row := []
                 Loop columns {
+                    ; Preserve integer storage exactly, without a text conversion and reparse.
+                    if DllCall(columnType, "Ptr", stmt, "Int", A_Index-1, "CDecl Int") = 1 {
+                        row.Push(DllCall(columnInt, "Ptr", stmt, "Int", A_Index-1, "CDecl Int64"))
+                        continue
+                    }
                     ptr := DllCall(columnText, "Ptr", stmt, "Int", A_Index-1, "CDecl Ptr")
                     bytes := DllCall(columnBytes, "Ptr", stmt, "Int", A_Index-1, "CDecl Int")
                     value := ptr ? StrGet(ptr,"UTF-16") : ""

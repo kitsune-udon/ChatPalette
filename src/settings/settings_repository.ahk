@@ -88,11 +88,9 @@ class SettingsRepository {
         return {State:state,Saved:{Scopes:scopes,Preferences:this.CopyPreferences(state),DataVersion:this.Db.Scalar("PRAGMA data_version")}}
     }
     ReadInteger(value) {
-        ; SQLite returns integers as decimal text. Reject lossy conversion or other spellings.
-        result := Integer(value)
-        if !(String(result) == value)
+        if !(value is Integer)
             throw Error("設定データベースに整数ではない値、または範囲外の数値があります。")
-        return result
+        return value
     }
     EnsureLoaded() {
         if !this.Saved

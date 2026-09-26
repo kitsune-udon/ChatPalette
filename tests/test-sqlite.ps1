@@ -14,6 +14,15 @@ OnExit(CloseSettingsStore)
 ReloadAppSettings()
 reuse := SqliteConnection(A_ScriptDir "\statement-reuse.db",true)
 try {
+    for integerValue in [0,-1,2147483648,9007199254740993,9223372036854775807,-9223372036854775807-1] {
+        storedNumber := reuse.Scalar("SELECT ?",integerValue)
+        Assert(storedNumber is Integer && storedNumber=integerValue,"SQLite preserves integer type and exact signed 64-bit value: " integerValue)
+    }
+    mixedTypes := reuse.Rows("SELECT 7,'0007',NULL,1.5")[1]
+    Assert(mixedTypes[1] is Integer && mixedTypes[1]=7 && Type(mixedTypes[2])="String" && mixedTypes[2]=="0007",
+        "SQLite keeps numeric text distinct from stored integers")
+    Assert(mixedTypes[3]=="" && Type(mixedTypes[4])="String" && mixedTypes[4]=="1.5",
+        "SQLite retains existing NULL and non-integer representations without truncation")
     reuse.Exec("CREATE TABLE sample(id INTEGER PRIMARY KEY, value TEXT)")
     reuse.Exec("INSERT INTO sample VALUES(4,'日本語👏'); INSERT INTO sample VALUES(5,'Ω')")
     Assert(reuse.Scalar("SELECT value FROM sample WHERE id=4")=="日本語👏"
