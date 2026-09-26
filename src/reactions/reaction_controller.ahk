@@ -82,7 +82,7 @@ ScheduleReaction(mode, delay, options := 0) {
     if !choice
         return false
     job := CreateReactionJob({Mode: mode, Window: hwnd, Video: context.Video,
-        Applied:"適用：" (options ? "今回の設定" : "共通設定") " / " ReactionNames[choice],
+        Applied:"適用：" (options ? "今回の設定" : "標準設定") " / " ReactionNames[choice],
         Choice: choice, Remaining: delay, Total: options ? options.Count : DefaultReactionCount,
         Interval: options ? options.Interval : DefaultReactionIntervalMs})
     return StartReactionJob(job)
@@ -350,7 +350,7 @@ QuickReaction(*) {
         if !choice || ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         sendJob := CreateReactionJob({Mode: "reaction_send", Window: hwnd, Video: context.Video,
-            Applied:"適用：共通設定 / " ReactionNames[choice],
+            Applied:"適用：標準設定 / " ReactionNames[choice],
             Choice: choice, Total: DefaultReactionCount, Interval: DefaultReactionIntervalMs})
         ActiveReactionJob := sendJob
         RunReactionSendLoop(sendJob)
