@@ -133,22 +133,23 @@ SelectListRow(list, index) {
         throw Error("一覧の選択を更新できません。")
 }
 
-BeginListRefresh(list, keyColumn) {
+; Read identities from the displayed sequence; each caller owns its storage/order.
+BeginListRefresh(list, keyAt) {
     selected := list.GetNext()
-    state := {Selected:selected, Key:selected ? list.GetText(selected,keyColumn) : "",
+    state := {Selected:selected, Key:selected ? keyAt.Call(selected) : "",
         Top:SendMessage(0x1027,0,0,list.Hwnd), Visible:!!(WinGetStyle("ahk_id " list.Hwnd) & 0x10000000)}
     list.Opt("-Redraw")
     return state
 }
 
-EndListRefresh(list, state, keyColumn) {
+EndListRefresh(list, state, keyAt) {
     try {
         count := list.GetCount(), selected := 0
-        if state.Selected && state.Selected <= count && list.GetText(state.Selected,keyColumn) == state.Key
+        if state.Selected && state.Selected <= count && keyAt.Call(state.Selected) == state.Key
             selected := state.Selected
         else if state.Selected {
             Loop count
-                if list.GetText(A_Index,keyColumn) == state.Key {
+                if keyAt.Call(A_Index) == state.Key {
                     selected := A_Index
                     break
                 }

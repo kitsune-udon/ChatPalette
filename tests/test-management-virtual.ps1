@@ -35,12 +35,54 @@ Assert(ManagedList.GetText(1,1)=="Alpha 日本語" && ManagedList.GetText(1,2)==
 RefreshManagement()
 Assert(ManagedList.GetText(1,1)=="Changed" && ManagedList.GetText(1,2)=="replacement" && ManagedList.GetText(1,4)=="alpha","refresh publishes new values with the same identity")
 Assert(ManagedCellText(previousContent,1,2)=="first","publishing a new native display leaves the previous snapshot intact")
+; Selection restoration uses the published identities without reading every virtual cell back.
+items := []
+Loop 1000
+    items.Push({Id:"item-" A_Index,Name:"row" A_Index,Text:"body",Slot:0})
+global KeyReads := 0
+observer := CallbackCreate(ObserveManagedText,,6)
+if !DllCall("comctl32\SetWindowSubclass","Ptr",ManagedList.Hwnd,"Ptr",observer,"UPtr",1,"UPtr",0) {
+    CallbackFree(observer)
+    throw Error("Cannot observe native identity reads")
+}
+try {
+    for scenario in ["unchanged","moved","removed"] {
+        SharedDanmakuItems := items
+        RefreshManagement()
+        SelectManagedRow(1000)
+        replacement := items.Clone()
+        if scenario != "unchanged" {
+            selected := replacement.Pop()
+            if scenario = "moved"
+                replacement.InsertAt(1,selected)
+        }
+        SharedDanmakuItems := replacement
+        KeyReads := 0
+        RefreshManagement()
+        Assert(KeyReads<=2,"selection restoration avoids per-row native identity reads: " scenario " reads=" KeyReads)
+        expected := scenario="unchanged" ? 1000 : 1
+        Assert(ManagedList.GetNext()=expected,"selection restores the current index or falls back after removal: " scenario)
+        KeyReads := 0
+        Assert(ManagedList.GetText(expected,4)==(scenario="removed" ? "item-1" : "item-1000"),"native selected identity matches the published sequence: " scenario)
+        Assert(KeyReads=1,"the observer detects one explicit native identity read: " scenario)
+    }
+} finally {
+    Assert(DllCall("comctl32\RemoveWindowSubclass","Ptr",ManagedList.Hwnd,"Ptr",observer,"UPtr",1),"native identity observer is detached before release")
+    CallbackFree(observer)
+}
 SharedDanmakuItems := []
 RefreshManagement()
 SelectListRow(ManagedList,0)
 Assert(FindNative("A",-1,0x28)=-1 && ManagedList.GetCount()=0 && ManagedList.GetNext()=0,"empty lists support search and selection clearing")
 FileAppend("PASS: " Checks " virtual management notification, search and buffer checks`n","*")
 ExitApp()
+ObserveManagedText(hwnd,message,wParam,lParam,id,data) {
+    global KeyReads
+    ; Count explicit text reads (GETITEMW/GETITEMTEXTW), not display notifications from painting.
+    if (message=0x1073 || (message=0x104B && (NumGet(lParam,0,"UInt") & 1))) && NumGet(lParam,8,"Int")=3
+        KeyReads++
+    return DllCall("comctl32\DefSubclassProc","Ptr",hwnd,"UInt",message,"UPtr",wParam,"Ptr",lParam,"Ptr")
+}
 FindNative(query,start,flags) {
     info := Buffer(A_PtrSize=8 ? 40 : 24,0)
     NumPut("UInt",flags,info), NumPut("Ptr",StrPtr(query),info,A_PtrSize)

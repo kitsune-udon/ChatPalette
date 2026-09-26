@@ -116,7 +116,8 @@ RenderManagement() {
     SyncProfileChoices(ManagementTarget,model.Choices)
     ManagementTarget.Choose(model.Choice)
     ManagementChannel.Text := model.Channel
-    position := BeginListRefresh(ManagedList,4)
+    keyAt := (index) => ManagedList.Content.Items[index].Id
+    position := BeginListRefresh(ManagedList,keyAt)
     previousContent := ManagedList.Content
     try {
         ManagedList.Content := model.Content
@@ -126,7 +127,7 @@ RenderManagement() {
         ManagedList.Content := previousContent
         throw failure
     } finally {
-        EndListRefresh(ManagedList,position,4)
+        EndListRefresh(ManagedList,position,keyAt)
     }
     ManagementWindow.GetClientPos(,,&width,&height)
     if width > 0
@@ -302,12 +303,13 @@ RenderManagedOrder(current) {
     id := EditingProfileId
     items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},id)
     content := BuildManagedContent(items,id,ShortcutKeys)
-    position := BeginListRefresh(ManagedList,4)
+    keyAt := (index) => ManagedList.Content.Items[index].Id
+    position := BeginListRefresh(ManagedList,keyAt)
     position.Selected := current ; The moved identity is now at this index; avoid a full-list search.
     try {
         ManagedList.Content := content
     } finally {
-        EndListRefresh(ManagedList,position,4)
+        EndListRefresh(ManagedList,position,keyAt)
     }
     SelectManagedRow(current)
 }

@@ -135,7 +135,8 @@ RefreshPaletteItems() {
         SetControlEnabled(PaletteManageButton,false)
         model := BuildPaletteItems(GetPaletteInputProfile(),SharedDanmakuItems,PaletteSearch.Value,ShortcutKeys)
         rows := model.Rows
-        position := BeginListRefresh(PaletteList,4)
+        keyAt := (index) => PaletteList.GetText(index,4)
+        position := BeginListRefresh(PaletteList,keyAt)
         try {
             PaletteList.Delete()
             for row in rows
@@ -147,7 +148,7 @@ RefreshPaletteItems() {
             PaletteList.Delete()
             throw failure
         } finally {
-            EndListRefresh(PaletteList,position,4)
+            EndListRefresh(PaletteList,position,keyAt)
         }
         PaletteHint.Text := model.Hint
     } finally {
