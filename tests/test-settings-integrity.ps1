@@ -14,7 +14,11 @@ for sql in ["DELETE FROM preferences", "DELETE FROM scopes WHERE id='@shared'",
     "INSERT INTO shortcut_bindings VALUES('CHAT_FOCUS','^!f')",
     "INSERT INTO shortcut_bindings VALUES('reaction','^+F12')",
     "UPDATE preferences SET reaction_count=7",
-    "UPDATE items SET body=char(10)", "UPDATE items SET id=''"] {
+    "UPDATE items SET body=char(10)", "UPDATE items SET id=''",
+    "UPDATE items SET body='prefix'||char(0)||'suffix'",
+    "UPDATE items SET body=char(0)||'suffix'",
+    "UPDATE items SET body='prefix'||char(0)",
+    "UPDATE items SET id=id||char(0)||'other'"] {
     CloseSettingsStore()
     if FileExist(path)
         FileDelete(path)

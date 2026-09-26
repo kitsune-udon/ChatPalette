@@ -35,6 +35,15 @@ try {
     reuse.Run(insert,3)
     Assert(failed && reuse.Scalar("SELECT COUNT(*) FROM sample WHERE id=? AND value IS NULL",3)="1","binding failure clears partial arguments before reuse")
     Assert(reuse.Scalar("SELECT value FROM sample WHERE id=?",1)="first" && reuse.Scalar("SELECT value FROM sample WHERE id=?")="","query reuse clears previous arguments")
+    reuse.Exec("INSERT INTO sample VALUES(6,'prefix'||char(0)||'suffix')")
+    failed := false
+    try reuse.Rows("SELECT value FROM sample WHERE id IN (?,?) ORDER BY id",4,6)
+    catch
+        failed := true
+    Assert(failed,"a NUL in a later row rejects the whole query instead of returning truncated text")
+    rows := reuse.Rows("SELECT value FROM sample WHERE id IN (?,?) ORDER BY id",5)
+    Assert(rows.Length=1 && rows[1][1]=="Ω","failed decoding resets the statement and clears every binding before reuse")
+    Assert(reuse.Scalar("SELECT hex(value) FROM sample WHERE id=6")=="70726566697800737566666978","read rejection preserves all stored bytes")
 } finally reuse.Close()
 ; Failed reads cannot publish a new comparison baseline before the transaction succeeds.
 snapshotStore := SettingsRepository(A_ScriptDir "\snapshot-publication.db",true)

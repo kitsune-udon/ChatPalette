@@ -84,7 +84,12 @@ class SqliteConnection {
                 row := []
                 Loop columns {
                     ptr := DllCall(SqliteConnection.Library "\sqlite3_column_text16", "Ptr", stmt, "Int", A_Index-1, "CDecl Ptr")
-                    row.Push(ptr ? StrGet(ptr,"UTF-16") : "")
+                    bytes := DllCall(SqliteConnection.Library "\sqlite3_column_bytes16", "Ptr", stmt, "Int", A_Index-1, "CDecl Int")
+                    value := ptr ? StrGet(ptr,"UTF-16") : ""
+                    ; Never publish the prefix of a value containing an embedded NUL.
+                    if StrLen(value)*2 != bytes
+                        throw Error("設定データベースに読み取れない文字列があります。元のデータは変更していません。")
+                    row.Push(value)
                 }
                 rows.Push(row)
             }
