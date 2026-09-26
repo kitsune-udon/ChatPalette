@@ -139,6 +139,7 @@ $address.Available=$true; $address.Pattern.Current.Value='https://www.youtube.co
 Assert ((Read-AddressBarVideoId $address) -ceq 'abcdefghijk') 'valid address can be read after a rejected attempt'
 # Substitute only native tree access; run the actual discovery and cache logic.
 $addressReader=(Get-Command Read-BrowserVideoId).ScriptBlock
+$addressWindowCheck=(Get-Command Test-ElementWindow).ScriptBlock
 $discovery=$addressReader.ToString()
 $rootRead='[System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)'
 $parentRead='[System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($ancestor)'
@@ -148,10 +149,17 @@ function AddressNode($Type, [int]$Handle, $Parent=$null) {
     return [pscustomobject]@{Current=[pscustomobject]@{ControlType=$Type;NativeWindowHandle=$Handle};Parent=$Parent}
 }
 function Get-AddressTestParent($Element) { return $Element.Parent }
+function Test-ElementWindow($Element, [long]$WindowHandle) {
+    while ($null -ne $Element) {
+        if ($Element.Current.NativeWindowHandle -eq $WindowHandle) { return $true }
+        $Element=$Element.Parent
+    }
+    return $false
+}
 $root=AddressNode ([System.Windows.Automation.ControlType]::Window) 123
 $root.Current | Add-Member NoteProperty ProcessId 17
 $root | Add-Member NoteProperty Elements @($address)
-$root | Add-Member ScriptMethod FindAll { param($scope,$condition) return $this.Elements }
+$root | Add-Member ScriptMethod FindAll { param($scope,$condition) $script:AddressSearches++; return $this.Elements }
 $script:AddressTestRoot=$root
 $address.Current | Add-Member NoteProperty ControlType ([System.Windows.Automation.ControlType]::Edit)
 $address.Current | Add-Member NoteProperty NativeWindowHandle 0
@@ -179,8 +187,40 @@ try {
         Assert (($found -ceq 'abcdefghijk') -eq $accepted) "address discovery requires proven browser chrome ancestry: $scenario"
         Assert ($script:AddressBarCache.ContainsKey([long]123) -eq $accepted -and $address.Reads -eq [int]$accepted) "unverified address candidates are neither read nor cached: $scenario"
     }
+    foreach ($scenario in @('different-window','detached','hidden','missing-pattern','navigation','editing','other-site')) {
+        $script:AddressBarCache.Clear(); $script:AddressSearches=0
+        $cached=$address.PSObject.Copy()
+        $cached.Current=$address.Current.PSObject.Copy()
+        $cached.Parent=$root; $cached.Reads=0
+        $cached.Pattern=[pscustomobject]@{Current=[pscustomobject]@{Value='https://youtu.be/abcdefghijk'}}
+        $root.Elements=@($cached)
+        Assert ((Read-BrowserVideoId 123) -ceq 'abcdefghijk') "prepare a cached address: $scenario"
+        $address.Parent=$root; $address.Reads=0
+        $address.Pattern.Current.Value='https://youtu.be/ABCDEFGHIJK'
+        $root.Elements=@($address)
+        switch ($scenario) {
+            'different-window' { $cached.Parent=AddressNode ([System.Windows.Automation.ControlType]::Window) 456 }
+            'detached' { $cached.Parent=$null }
+            'hidden' { $cached.Current.IsOffscreen=$true }
+            'missing-pattern' { $cached.Available=$false }
+            'navigation' { $cached.Pattern.Current.Value='https://youtu.be/12345678901' }
+            'editing' { $cached.Current.HasKeyboardFocus=$true }
+            'other-site' { $cached.Pattern.Current.Value='https://example.com/' }
+        }
+        $found=Read-BrowserVideoId 123
+        if ($scenario -in @('navigation','editing','other-site')) {
+            $expected=if ($scenario -eq 'navigation') { '12345678901' } else { '' }
+            Assert ($found -ceq $expected -and $script:AddressSearches -eq 1 -and $address.Reads -eq 0) "valid cached address is read without a second search: $scenario"
+        } else {
+            Assert ($found -ceq 'ABCDEFGHIJK' -and $script:AddressSearches -eq 2 -and $address.Reads -eq 1) "invalid cached address is replaced through verified discovery: $scenario"
+            if ($scenario -in @('different-window','detached')) {
+                Assert ($cached.Reads -eq 1) "unowned cached control is rejected before reading its value: $scenario"
+            }
+        }
+    }
 } finally {
     Set-Item Function:Read-BrowserVideoId $addressReader
+    Set-Item Function:Test-ElementWindow $addressWindowCheck
     $script:AddressBarCache.Clear()
 }
 # Exercise focused-input publication while substituting only native observations.

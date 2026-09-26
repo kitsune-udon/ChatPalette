@@ -37,18 +37,15 @@ function Read-AddressBarVideoId($Element) {
 
 function Read-BrowserVideoId([long]$WindowHandle) {
     if ($WindowHandle -le 0) { return '' }
-    $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
-    $processId = $root.Current.ProcessId
     if ($script:AddressBarCache.ContainsKey($WindowHandle)) {
-        $entry = $script:AddressBarCache[$WindowHandle]
-        if ($entry.ProcessId -eq $processId) {
-            try {
-                return Read-AddressBarVideoId $entry.Element
-            } catch { }
-        }
+        $element = $script:AddressBarCache[$WindowHandle]
+        try {
+            if (Test-ElementWindow $element $WindowHandle) { return Read-AddressBarVideoId $element }
+        } catch { }
         $script:AddressBarCache.Remove($WindowHandle)
     }
     # Cache the control, never its URL. Always read the CURRENT value.
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$WindowHandle)
     $condition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::Edit)
@@ -70,7 +67,7 @@ function Read-BrowserVideoId([long]$WindowHandle) {
             if (!$insideChrome) { continue }
             $video = Read-AddressBarVideoId $edit
             if ($script:AddressBarCache.Count -ge 16) { $script:AddressBarCache.Clear() }
-            $script:AddressBarCache[$WindowHandle] = @{ ProcessId = $processId; Element = $edit }
+            $script:AddressBarCache[$WindowHandle] = $edit
             return $video
         } catch { continue }
     }

@@ -40,7 +40,7 @@ try {
     $report.VideoDetected=[bool](Read-BrowserVideoId $WindowHandle)
     $report.AddressDetected=$script:AddressBarCache.ContainsKey($WindowHandle)
     if ($report.VideoDetected) {
-        $address=$script:AddressBarCache[$WindowHandle].Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
+        $address=$script:AddressBarCache[$WindowHandle].GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value
         if ($address -notmatch '^https?://') { $address='https://'+$address }
         $report.PageKind=if (([uri]$address).AbsolutePath -in @('/live_chat','/live_chat_replay')) {'Popout'} else {'Watch'}
         if ($PageKind -ne 'Auto' -and $PageKind -ne $report.PageKind) { throw 'Unexpected page kind' }

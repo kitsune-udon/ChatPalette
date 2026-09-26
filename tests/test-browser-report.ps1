@@ -68,4 +68,27 @@ function Find-ReactionLauncher { return $null }
     $report=[IO.File]::ReadAllText($path) | ConvertFrom-Json
     if ($report.Error -or $report.ChatDetected -isnot [bool] -or $report.ChatDetected -ne ($state -eq 'ok')) { throw "Chat detection state $state was misreported" }
 }
-Write-Output 'PASS: argument rejection, report paths, overwrite protection and chat discovery outcomes'
+foreach ($page in @('Watch','Popout')) {
+    $fixture=@'
+function Get-Process { return [pscustomobject]@{ProcessName='brave';MainModule=[pscustomobject]@{FileVersionInfo=[pscustomobject]@{FileVersion='test'}}} }
+function Test-BrowserForeground { return $true }
+function Read-BrowserVideoId { return 'abcdefghijk' }
+$address=[pscustomobject]@{Pattern=[pscustomobject]@{Current=[pscustomobject]@{Value='https://www.youtube.com/__PAGE__?v=abcdefghijk'}}}
+$address | Add-Member ScriptMethod GetCurrentPattern { param($kind) return $this.Pattern }
+$script:AddressBarCache=@{}
+$script:AddressBarCache[[long]-1]=$address
+function Find-ChatInput { return @{State='ok';Element='test-chat'} }
+function Find-ReactionLauncher { return 'test-launcher' }
+'@
+    $urlPath=if ($page -eq 'Watch') { 'watch' } else { 'live_chat' }
+    [IO.File]::WriteAllText((Join-Path $runtime 'src\browser\browser_worker.ps1'),$fixture.Replace('__PAGE__',$urlPath),[Text.UTF8Encoding]::new($true))
+    $path=Join-Path $runtime ("page-$page.json")
+    if ((Invoke-ReportProbe $path) -ne 0) { throw "Cached address could not identify page kind: $page" }
+    $json=[IO.File]::ReadAllText($path)
+    $report=$json | ConvertFrom-Json
+    if ($report.Error -or !$report.AddressDetected -or !$report.VideoDetected -or $report.PageKind -ne $page -or
+        $report.Focus -ne 'not-run' -or $report.Hover -ne 'not-run' -or $json -match 'abcdefghijk|youtube\.com') {
+        throw "Cached address inspection changed privacy or read-only reporting: $page"
+    }
+}
+Write-Output 'PASS: argument rejection, report paths, overwrite protection, chat outcomes and cached page-kind inspection'
