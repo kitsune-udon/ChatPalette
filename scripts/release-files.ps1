@@ -34,6 +34,35 @@ function Get-ReleaseManifest([string]$Project) {
     return ($lines -join "`r`n") + "`r`n"
 }
 
+function Get-ReleaseArchiveHashes([string]$Path, [string]$ExpectedManifest) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # Bind every archived byte to the tested inputs, including the manifest itself.
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        $sourceHash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($ExpectedManifest))).Replace('-','').ToLowerInvariant()
+        $expected=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
+        foreach ($line in ($ExpectedManifest -split '\r\n' | Where-Object { $_ })) {
+            $hash,$name=$line -split '  ',2
+            $expected.Add($name,$hash)
+        }
+        $expected.Add('SHA256SUMS',$sourceHash)
+        $archive=[IO.Compression.ZipFile]::OpenRead($Path)
+        try {
+            if ($archive.Entries.Count -ne $expected.Count) { throw 'Release archive file count differs from validated inputs' }
+            foreach ($entry in $archive.Entries) {
+                $name=$entry.FullName
+                if (!$expected.ContainsKey($name)) { throw "Release archive contains an unexpected or duplicate file: $name" }
+                $stream=$entry.Open()
+                try { $actual=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
+                finally { $stream.Dispose() }
+                if ($actual -cne $expected[$name]) { throw "Release archive differs from validated inputs: $name" }
+                $null=$expected.Remove($name)
+            }
+        } finally { $archive.Dispose() }
+    } finally { $sha.Dispose() }
+    return @{ ArchiveSHA256=(Get-FileHash -LiteralPath $Path).Hash.ToLowerInvariant(); SourceManifestSHA256=$sourceHash }
+}
+
 function Copy-ReleaseFiles([string]$Project, [string]$Destination) {
     $root = (Resolve-Path -LiteralPath $Project).Path
     foreach ($file in @(Get-ReleaseFiles $root)) {

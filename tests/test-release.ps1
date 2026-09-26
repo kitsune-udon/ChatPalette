@@ -264,16 +264,16 @@ try {
     [IO.File]::WriteAllBytes($runnerPath,$runnerSource)
 }
 # Validate the artifact actually produced, not just a successful test run or a self-reported manifest.
-$corruptArchive=@'
+function Set-ArchiveFault([string]$Path, [string]$Fault) {
     function Write-ProbeEntry($archive, $name, $text) {
         $entry=$archive.GetEntry($name)
         if ($entry) { $entry.Delete() }
         $writer=[IO.StreamWriter]::new($archive.CreateEntry($name).Open(),[Text.UTF8Encoding]::new($false))
         try { $writer.Write($text) } finally { $writer.Dispose() }
     }
-    $archive=[IO.Compression.ZipFile]::Open($zipPath,[IO.Compression.ZipArchiveMode]::Update)
+    $archive=[IO.Compression.ZipFile]::Open($Path,[IO.Compression.ZipArchiveMode]::Update)
     try {
-        switch ('ARCHIVE_FAULT') {
+        switch ($Fault) {
             'content' { Write-ProbeEntry $archive 'README.md' 'changed archive body' }
             'missing' { $archive.GetEntry('README.md').Delete() }
             'extra' { Write-ProbeEntry $archive 'unexpected.txt' 'extra' }
@@ -290,7 +290,7 @@ $corruptArchive=@'
             default {
                 $reader=[IO.StreamReader]::new($archive.GetEntry('README.md').Open())
                 try { $text=$reader.ReadToEnd() } finally { $reader.Dispose() }
-                if ('ARCHIVE_FAULT' -eq 'case') {
+                if ($Fault -eq 'case') {
                     $archive.GetEntry('README.md').Delete()
                     Write-ProbeEntry $archive 'readme.md' $text
                 } else {
@@ -302,21 +302,35 @@ $corruptArchive=@'
             }
         }
     } finally { $archive.Dispose() }
-'@
+}
+$expectedManifest=Get-ReleaseManifest $release
+$hashes=Get-ReleaseArchiveHashes -Path $zipPath -ExpectedManifest $expectedManifest
+if ($hashes.ArchiveSHA256 -cne $before.ToLowerInvariant()) { throw 'Archive validation returned the wrong archive hash' }
+foreach ($fault in @('content','missing','extra','manifest','consistent','case','duplicate')) {
+    $corruptZip=Join-Path $out ('bad-'+$fault+'.zip')
+    Copy-Item -LiteralPath $zipPath -Destination $corruptZip
+    Set-ArchiveFault -Path $corruptZip -Fault $fault
+    $failure=''
+    try { Get-ReleaseArchiveHashes -Path $corruptZip -ExpectedManifest $expectedManifest | Out-Null }
+    catch { $failure=$_.Exception.Message }
+    if ($failure -notlike 'Release archive*') { throw "Corrupt archive was accepted: $fault / $failure" }
+}
+# Keep one end-to-end check that an invalid artifact prevents a validation record.
 try {
     [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath, [switch]`$Sandbox)`r`n# Artifact fixture: no nested tests.`r`n",[Text.UTF8Encoding]::new($true))
-    foreach ($fault in @('content','missing','extra','manifest','consistent','case','duplicate')) {
-        [IO.File]::WriteAllBytes($builderPath,$builderBytes)
-        Edit-TestSource $release 'scripts/build-release.ps1' '    Write-Output $zipPath' ($corruptArchive.Replace('ARCHIVE_FAULT',$fault)+"`r`n    Write-Output `$zipPath")
-        $corruptOutput=Join-Path $release ('bad-'+$fault)
-        $failure=''
-        try { & $verifierPath -OutputDirectory $corruptOutput -WarningAction SilentlyContinue | Out-Null }
-        catch { $failure=$_.Exception.Message }
-        if ($failure -notlike 'Release archive*' -or (Test-Path -LiteralPath (Join-Path $corruptOutput "ChatPalette-$version.validation.json"))) {
-            throw "Corrupt archive received a validation record: $fault / $failure"
-        }
-        if (!(Test-Path -LiteralPath (Join-Path $corruptOutput "ChatPalette-$version.zip"))) { throw 'Failed archive was not retained for diagnosis' }
+    $damage=@'
+    $archive=[IO.Compression.ZipFile]::Open($zipPath,[IO.Compression.ZipArchiveMode]::Update)
+    try { $archive.GetEntry('README.md').Delete() } finally { $archive.Dispose() }
+'@
+    Edit-TestSource $release 'scripts/build-release.ps1' '    Write-Output $zipPath' ($damage+"`r`n    Write-Output `$zipPath")
+    $corruptOutput=Join-Path $release 'bad-artifact'
+    $failure=''
+    try { & $verifierPath -OutputDirectory $corruptOutput -WarningAction SilentlyContinue | Out-Null }
+    catch { $failure=$_.Exception.Message }
+    if ($failure -notlike 'Release archive*' -or (Test-Path -LiteralPath (Join-Path $corruptOutput "ChatPalette-$version.validation.json"))) {
+        throw "Corrupt archive received a validation record: $failure"
     }
+    if (!(Test-Path -LiteralPath (Join-Path $corruptOutput "ChatPalette-$version.zip"))) { throw 'Failed archive was not retained for diagnosis' }
 } finally {
     [IO.File]::WriteAllBytes($builderPath,$builderBytes)
     [IO.File]::WriteAllBytes($runnerPath,$runnerSource)

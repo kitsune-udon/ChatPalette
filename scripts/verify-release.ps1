@@ -23,35 +23,12 @@ try {
     # Tests may alter only their isolated runtimes. Compare staged inputs with initial manifest.
     if ($inputManifest -cne (Get-ReleaseManifest $stage)) { throw 'Validated source changed during tests' }
     & (Join-Path $stage 'scripts\build-release.ps1') -OutputDirectory $output | Out-Null
-    # Bind every archived byte to the tested inputs, including the manifest itself.
-    $sha=[Security.Cryptography.SHA256]::Create()
-    try {
-        $sourceHash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($inputManifest))).Replace('-','').ToLowerInvariant()
-        $expected=[Collections.Generic.Dictionary[string,string]]::new([StringComparer]::Ordinal)
-        foreach ($line in ($inputManifest -split '\r\n' | Where-Object { $_ })) {
-            $hash,$name=$line -split '  ',2
-            $expected.Add($name,$hash)
-        }
-        $expected.Add('SHA256SUMS',$sourceHash)
-        $archive=[IO.Compression.ZipFile]::OpenRead($zip)
-        try {
-            if ($archive.Entries.Count -ne $expected.Count) { throw 'Release archive file count differs from validated inputs' }
-            foreach ($entry in $archive.Entries) {
-                $name=$entry.FullName
-                if (!$expected.ContainsKey($name)) { throw "Release archive contains an unexpected or duplicate file: $name" }
-                $stream=$entry.Open()
-                try { $actual=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
-                finally { $stream.Dispose() }
-                if ($actual -cne $expected[$name]) { throw "Release archive differs from validated inputs: $name" }
-                $null=$expected.Remove($name)
-            }
-        } finally { $archive.Dispose() }
-    } finally { $sha.Dispose() }
+    $hashes=Get-ReleaseArchiveHashes -Path $zip -ExpectedManifest $inputManifest
     $result=[ordered]@{Version=$version;CheckedAt=[DateTime]::UtcNow.ToString('o');Tests='All';
         TestEnvironment=$(if ($Sandbox) { 'WindowsSandbox' } else { 'Host' });
         TestGroups=@(Get-ChildItem -LiteralPath (Join-Path $stage 'tests') -Filter 'test-*.ps1' -File).Count;
-        Archive=[IO.Path]::GetFileName($zip);ArchiveSHA256=(Get-FileHash -LiteralPath $zip).Hash.ToLowerInvariant();
-        SourceManifestSHA256=$sourceHash;RealBrowser='Separate check-browser.ps1 reports required; not implied by automated tests'}
+        Archive=[IO.Path]::GetFileName($zip);ArchiveSHA256=$hashes.ArchiveSHA256;
+        SourceManifestSHA256=$hashes.SourceManifestSHA256;RealBrowser='Separate check-browser.ps1 reports required; not implied by automated tests'}
     [IO.File]::WriteAllText($temporaryReport,($result | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
     # Publish the complete report without overwriting a file created during validation.
     [IO.File]::Move($temporaryReport,$report)
