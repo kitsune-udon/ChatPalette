@@ -1,4 +1,4 @@
-﻿# Test-Session: Desktop
+﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 # Re-entry while releasing controls or rendering a final result must preserve the successor.
