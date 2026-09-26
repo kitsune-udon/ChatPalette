@@ -18,6 +18,7 @@ countBefore := PaletteCount.Value
 ReturnToPalette()
 Assert(GetInputProfile().Id=added.ProfileId,"return resolves new channel association")
 Assert(PaletteRows.Length=1 && PaletteRows[1].Text="new danmaku","new danmaku visible on return")
+Assert(A_IconTip=="ChatPalette：Linked","tray identifies the detected input profile")
 Assert(PaletteCount.Value=countBefore,"session reaction options retained")
 TestChannel := {State:"ok",Channel:"/channel/previous",Author:"Previous",Video:"bbbbbbbbbbb"}
 ReturnToPalette()
@@ -25,12 +26,14 @@ Assert(GetInputProfile().Id=old.ProfileId && PaletteRows.Length=0,"video change 
 TestChannel := {State:"unavailable",Channel:"",Author:"",Video:""}
 ReturnToPalette()
 Assert(PaletteRows.Length=0 && InStr(PaletteContext.Text,"共通の弾幕のみ"),"failed detection never shows stale profile")
+Assert(A_IconTip=="ChatPalette：配信者未選択" && InputProfileId==old.ProfileId,"failed detection clears the tray profile without erasing the saved selection")
 AutoMode := false
 before := ResolveCalls
 SaveInputProfileId(added.ProfileId)
 PaletteSearch.Value := "new"
 ReturnToPalette()
 Assert(ResolveCalls=before && GetInputProfile().Id=added.ProfileId,"manual selection is preserved without detection")
+Assert(A_IconTip=="ChatPalette：Linked","tray preserves the manual input profile")
 Assert(PaletteSearch.Value="new" && PaletteRows.Length=1,"search is preserved")
 PaletteSearch.Value := ""
 for scenario in ["linked-auto","unlinked-auto","failed-auto","unlinked-manual"] {
@@ -47,6 +50,7 @@ for scenario in ["linked-auto","unlinked-auto","failed-auto","unlinked-manual"] 
         itemId := (scope="" ? SharedDanmakuItems : FindProfileById(Profiles,scope).Items)[first.Index].Id
         ReturnToPalette()
         Assert(HasReturnRow(prefix "-added")=expectedVisible,"add refresh: " prefix)
+        Assert(A_IconTip=="ChatPalette：" (visible ? scenario : "配信者未選択"),"tray and palette use the same effective profile: " prefix)
         ExecuteDanmakuCommand("edit",scope,itemId,{Name:prefix " renamed",Text:prefix "-edited",Slot:2})
         ReturnToPalette()
         Assert(!HasReturnRow(prefix "-added") && HasReturnRow(prefix "-edited")=expectedVisible,"edit refresh: " prefix)

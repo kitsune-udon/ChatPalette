@@ -63,7 +63,7 @@ SelectProfileFromBrowser(hwnd) {
 }
 
 UpdateTray() {
-    profile := GetInputProfile()
+    profile := GetPaletteInputProfile()
     A_IconTip := "ChatPalette：" (profile ? profile.Name : "配信者未選択")
 }
 
