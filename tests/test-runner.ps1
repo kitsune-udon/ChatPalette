@@ -60,13 +60,31 @@ if ($output -notcontains 'fixture-beta' -or $output -contains 'fixture-alpha' -o
 $output=@(& $runner)
 if (@($output | Where-Object { $_ -eq 'fixture-source' }).Count -ne 1) { throw 'Default run skipped or repeated source validation' }
 if ($output -notcontains 'fixture-alpha' -or $output -notcontains 'fixture-beta' -or ($output -join "`n") -notmatch 'PASS: All / 2 test groups') { throw 'Default run did not execute every test' }
-[IO.File]::WriteAllText($headless,"# Test-Session: Headless`r`nthrow 'fixture failure'`r`n",[Text.UTF8Encoding]::new($true))
+# Unhandled runtime errors must identify the failing helper and its test caller.
+$faultHelper=Join-Path $fixture 'failure-helper.ps1'
+[IO.File]::WriteAllText($faultHelper,@'
+function Invoke-FixtureFailure {
+    $value=$null
+    $value.Trim()
+}
+'@,[Text.UTF8Encoding]::new($true))
+[IO.File]::WriteAllText($headless,@'
+# Test-Session: Headless
+. (Join-Path $PSScriptRoot 'failure-helper.ps1')
+try { Invoke-FixtureFailure }
+finally { [IO.File]::WriteAllText((Join-Path $env:HELPER_TEST_ROOT 'finally.txt'),'completed') }
+'@,[Text.UTF8Encoding]::new($true))
 $failed=$false
 try { & $runner -Name 'test-alpha.ps1' -AutoHotkeyPath 'fixture-runtime.exe' -WarningAction SilentlyContinue | Out-Null } catch { $failed=$true }
 $retained=@(Get-ChildItem -LiteralPath $base -Directory)
 if (!$failed -or $retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk -or $env:PSModulePath -cne $oldModulePath) { throw 'Failed named run did not retain evidence or restore its environment' }
 $stderr=Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'
-if (!(Test-Path -LiteralPath $stderr) -or [IO.File]::ReadAllText($stderr) -notmatch 'fixture failure') { throw 'Failed test stderr was not retained' }
+$errorText=[IO.File]::ReadAllText($stderr)
+if ($errorText -notmatch 'InvokeMethodOnNull' -or
+    $errorText -notmatch ([regex]::Escape($faultHelper) + ': [^\r\n]*\b3\b') -or
+    $errorText -notmatch ([regex]::Escape($headless) + ': [^\r\n]*\b3\b') -or
+    $errorText -notmatch 'Invoke-FixtureFailure') { throw "Unhandled error lost its helper location or call stack: $errorText" }
+if ([IO.File]::ReadAllText((Join-Path $retained[0].FullName 'finally.txt')) -ne 'completed') { throw 'Unhandled error skipped test cleanup' }
 # Source failure stops before any selected test starts; listing still remains read-only.
 try {
     [IO.File]::WriteAllText($sourceCheck,"throw 'fixture source failure'",[Text.UTF8Encoding]::new($true))
