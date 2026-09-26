@@ -83,16 +83,21 @@ RunPageAction(action, hwnd, releaseBinding := "") {
             stage := "クリア前の確認"
             result := VerifyChatFocus(hwnd,result)
             if result.State = "ok" {
-                if !CanContinuePageAction(operation) {
-                    result := {State:"cancelled"}
-                    return false
-                }
-                stage := "クリアキー送信", result := {State:"unknown"}
-                if RuntimePorts.ClearChat
-                    RuntimePorts.ClearChat.Call()
-                else
-                    Send("^a{Backspace}")
-                result := {State:"cleared"}
+                previousCritical := A_IsCritical
+                Critical("On")
+                try {
+                    ; Keep app callbacks out of the final target check and the one deletion.
+                    if !CanContinuePageAction(operation) {
+                        result := {State:"cancelled"}
+                        return false
+                    }
+                    stage := "クリアキー送信", result := {State:"unknown"}
+                    if RuntimePorts.ClearChat
+                        RuntimePorts.ClearChat.Call()
+                    else
+                        Send("^a{Backspace}")
+                    result := {State:"cleared"}
+                } finally Critical(previousCritical)
             }
         }
         if operation.Pending && result.State = "focused" {
