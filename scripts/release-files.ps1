@@ -1,6 +1,10 @@
 ﻿function Get-ReleaseVersion([string]$Project) {
     $version = ([IO.File]::ReadAllText((Join-Path $Project 'VERSION'))).Trim()
-    if ($version -notmatch '^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$') { throw 'Invalid VERSION' }
+    # SemVer 2.0.0: core numbers, optional prerelease, optional build metadata.
+    $semver = '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' +
+        '(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?' +
+        '(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z'
+    if ($version -cnotmatch $semver) { throw 'Invalid VERSION' }
     return $version
 }
 

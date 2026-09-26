@@ -97,6 +97,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release
 
 `.validation.json`には版、検査日時、テスト群数、ZIPとソースマニフェストのSHA-256を記録します。実ブラウザーでの成功を示す記録ではありません。ブラウザー確認は別レポートとして保管します。
 
+`VERSION`の形式は[SemVer 2.0.0](https://semver.org/spec/v2.0.0.html)に従います。major・minor・patchとプレリリースの数値識別子の先頭ゼロ、空の識別子を拒否します。プレリリース名・ビルド情報（例：`0.5.1-rc.1+build.001`）も同じ共通チェックで検証し、ZIP名と検証記録には版番号全体を使います。
+
 ### 配布物の範囲
 
 収録対象は[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。直下に列挙したファイルはすべて必須です。欠落しているか、同名のフォルダーに置き換わっている場合は、対象名を示してコピー開始前に失敗します。バージョンの読み込みと形式判定も同ファイルの`Get-ReleaseVersion`に集約し、ソース検査・梱包・配布検証で共有します。同ファイルの`Copy-ReleaseFiles`を検証用コピー・ZIP梱包・配布テストの準備で共有します。

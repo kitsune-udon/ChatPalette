@@ -5,7 +5,7 @@ $release=New-TestRuntime
 . (Join-Path $ProjectRoot 'scripts\release-files.ps1')
 Copy-ReleaseFiles $ProjectRoot $release
 # A version change needs no README rewrite; validation and both outputs use VERSION.
-[IO.File]::WriteAllText((Join-Path $release 'VERSION'),"99.99.99-test`n",[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $release 'VERSION'),"99.99.99-test+build.001`n",[Text.UTF8Encoding]::new($false))
 foreach ($relative in @('data\settings.db','data\private-registration.txt','tests\.tmp\private.txt','private.txt')) {
     $path=Join-Path $release $relative
     New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($path)) -Force | Out-Null
@@ -34,6 +34,23 @@ foreach($invalid in @('version','encoding','link')) {
 $versionFile=Join-Path $release 'VERSION'
 $originalVersion=[IO.File]::ReadAllBytes($versionFile)
 try {
+    foreach ($invalidVersion in @('01.2.3','1.02.3','1.2.03','1.2.3-01','1.2.3-alpha.01',
+        '1.2.3-alpha..1','1.2.3-.alpha','1.2.3-alpha.','1.2.3-','1.2.3+',
+        '1.2.3+build..1','1.2.3+build_1','１.2.3','1.2.3-α','v1.2.3','1.2.3.4')) {
+        [IO.File]::WriteAllText($versionFile,$invalidVersion)
+        $rejected=$false
+        try { Get-ReleaseVersion $release | Out-Null }
+        catch {
+            if ($_.Exception.Message -ne 'Invalid VERSION') { throw }
+            $rejected=$true
+        }
+        if (!$rejected) { throw "Version validator accepted invalid SemVer: $invalidVersion" }
+    }
+    foreach ($validVersion in @('0.0.0','1.2.3','1.2.3-alpha.0','1.2.3-01a','1.2.3-x-y-z.--',
+        '1.2.3+001','1.2.3-alpha.1+build.001','99999999999999999999.0.0')) {
+        [IO.File]::WriteAllText($versionFile,($validVersion+"`n"))
+        if ((Get-ReleaseVersion $release) -cne $validVersion) { throw "Version validator changed SemVer: $validVersion" }
+    }
     [IO.File]::WriteAllText($versionFile,'invalid-version')
     # A misspelled option must fail before source inspection or output preparation.
     foreach ($script in @('build-release.ps1','verify-release.ps1','check-source.ps1')) {
