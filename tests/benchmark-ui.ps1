@@ -3,7 +3,7 @@ param([ValidateRange(1,9)][int]$Repeats=3, [ValidateNotNullOrEmpty()][int[]]$Cou
 . (Join-Path $PSScriptRoot 'support.ps1')
 if (@($Counts | Where-Object { $_ -lt 1 -or $_ -gt 100000 }).Count) { throw 'Counts must be between 1 and 100000' }
 $runtime=New-TestRuntime
-$source="#Requires AutoHotkey v2.0`r`n#Include %A_ScriptDir%\src\app\app_modules.ahk`r`n#Include %A_ScriptDir%\library-model.ahk`r`n"
+$source="#Requires AutoHotkey v2.0`r`n#Include %A_ScriptDir%\src\app\app_modules.ahk`r`n"
 $source += 'Counts := [' + ($Counts -join ',') + "]`r`nRepeats := $Repeats`r`n"
 $source += @'
 DllCall("QueryPerformanceFrequency","Int64*",&frequency := 0)
@@ -13,7 +13,7 @@ initializedMs := Round(Tick()-started,3)
 FileAppend("items,operation,median_ms,max_ms`n0,cold_initialize," initializedMs "," initializedMs "`n","*")
 AutoMode := false
 for count in Counts {
-    draft := CreateTestSettingsSnapshot(), draft.SharedDanmakuItems := [], draft.Profiles := [], draft.InputProfileId := ""
+    draft := CreatePreferences(), draft.SharedDanmakuItems := [], draft.Profiles := [], draft.InputProfileId := ""
     Loop count
         draft.SharedDanmakuItems.Push({Id:"bench-" A_Index,Name:"item " A_Index,Text:"synthetic body " A_Index,Slot:0})
     OpenSettingsRepository(SettingsDatabasePath).SaveAll(draft)
