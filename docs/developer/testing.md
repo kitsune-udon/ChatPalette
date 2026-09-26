@@ -65,7 +65,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 登録の検証・保存・同期を区別し、中止時と同期失敗時のデータ・失敗理由を保全。再同期まで操作を拒否 |
 | 登録状態の表示 | [test-registration-display.ps1](../../tests/test-registration-display.ps1) | DBを直接読み、通信・操作制限・診断更新を行わないこと。読み取り失敗と回復も非表示コントロールで確認するHeadless検査 |
 | 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面・キー解放は代替処理を使うHeadless検査 |
-| 設定整合性 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・空・不正な設定やIDを拒否し、呼び出し元データとDB原本を保持 |
+| 設定整合性・復旧 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・不正な設定や上限超過の拒否、DB原本の保持、初期化前の退避・付随ファイルの保全・途中失敗の復元を画面不要で検査 |
 | 起動・復旧 | [test-startup.ps1](../../tests/test-startup.ps1) | 標準の`/Validate`による構文検査・起動中プロセスとDBの保持、空・破損DBの原本保持、初期作成中断後の再試行 |
 | 空のライブラリ | [test-empty-settings.ps1](../../tests/test-empty-settings.ps1) | 新規状態・最後の削除・配信者なしの共通弾幕・再読み込み |
 | 画面復帰 | [test-palette-return.ps1](../../tests/test-palette-return.ps1) | 画面復帰時の編集反映、入力対象の独立、処理中の表示・復帰の拒否 |

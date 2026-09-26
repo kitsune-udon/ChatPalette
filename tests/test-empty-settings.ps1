@@ -3,10 +3,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
 
-# Fail one rollback move only in the isolated runtime.
-Edit-TestSource $release 'src/app/app_lifecycle.ahk' 'try FileMove(pair[2],pair[1],false)' 'try ProbeResetRestore(pair)'
 $tests = @'
-global ProbeRollbackFailure := false
 Assert(FileExist(SettingsDatabasePath), "fresh settings created")
 Assert(DefaultReactionIntervalMs = 200, "new settings default to 200ms start interval")
 Assert(InStr(SettingsDatabasePath, "\data\"), "settings live in data directory")
@@ -28,54 +25,6 @@ UndoLibraryChange()
 Assert(Profiles.Length=0,"undo returns to empty state")
 ReloadAppSettings()
 Assert(Profiles.Length=0,"empty state persists")
-brokenPath := AppDataDirectory "\broken.db"
-FileAppend("invalid database", brokenPath)
-invalidMessage := ""
-try LoadSettings(brokenPath)
-catch as failure
-    invalidMessage := failure.Message
-Assert(invalidMessage != "", "invalid database is rejected")
-backup := BackupSettingsForReset(brokenPath)
-Assert(FileExist(backup) && !FileExist(brokenPath) && FileRead(backup)="invalid database", "reset preserves corrupt original")
-resetDirectory := A_ScriptDir "\recovery-target"
-DirCreate(resetDirectory)
-resetPath := resetDirectory "\settings.db"
-resetFiles := ["settings.db","settings.db-journal","settings.db-wal","settings.db-shm"]
-currentDatabase := FileRead(SettingsDatabasePath,"RAW")
-for name in resetFiles
-    FileAppend(name,resetDirectory "\" name)
-for blockRollback in [false,true] {
-    ProbeRollbackFailure := blockRollback
-    ; Lock the last file so every preceding move must be rolled back.
-    locked := DllCall("CreateFileW","Str",resetDirectory "\settings.db-shm","UInt",0x80000000,"UInt",0,"Ptr",0,"UInt",3,"UInt",0,"Ptr",0,"Ptr")
-    Assert(locked != -1,"reset failure fixture holds the final file exclusively")
-    try {
-        resetError := ""
-        try BackupSettingsForReset(resetPath)
-        catch as failure
-            resetError := failure.Message
-        Assert(resetError != "","reset aborts when a source cannot be moved")
-    } finally DllCall("CloseHandle","Ptr",locked)
-    remainingBackups := []
-    Loop Files resetDirectory "\*.backup-*"
-        remainingBackups.Push(A_LoopFileFullPath)
-    if blockRollback {
-        Assert(remainingBackups.Length=1 && FileRead(remainingBackups[1])="settings.db-wal","rollback failure preserves the unmoved backup")
-        Assert(InStr(resetError,remainingBackups[1]) && InStr(resetError,resetDirectory "\settings.db-wal"),"rollback failure identifies saved file and original destination")
-        Assert(!FileExist(resetDirectory "\settings.db-wal"),"failed restoration is not reported as complete")
-        FileMove(remainingBackups[1],resetDirectory "\settings.db-wal",false)
-    } else
-        Assert(remainingBackups.Length=0,"successful rollback leaves no partial backup set")
-    for name in resetFiles
-        Assert(FileExist(resetDirectory "\" name) && FileRead(resetDirectory "\" name)=name,"reset preserves every original despite intermediate failures")
-}
-ProbeRollbackFailure := false
-backup := BackupSettingsForReset(resetPath)
-for name in resetFiles {
-    saved := backup SubStr(name,StrLen("settings.db")+1)
-    Assert(!FileExist(resetDirectory "\" name) && FileExist(saved) && FileRead(saved)=name,"reset preserves target files and sidecar names")
-}
-Assert(SameFileBytes(FileRead(SettingsDatabasePath,"RAW"),currentDatabase),"reset never changes the database in a different directory")
 Assert(AppSourceStatus()="起動時のソースと一致","startup source matches")
 versionFile := A_ScriptDir "\VERSION", originalVersion := FileRead(versionFile,"RAW")
 try {
@@ -129,12 +78,6 @@ for operation in [["chat_focus","focused"],["verify_chat","ok"],["reactions_show
 }
 FileAppend("PASS: empty initialization, UI, shared library, profile lifecycle and reload`n", "*")
 ExitApp(0)
-ProbeResetRestore(pair) {
-    global ProbeRollbackFailure
-    if ProbeRollbackFailure && RegExMatch(pair[1],"\\settings\.db-wal$")
-        throw Error("Injected reset rollback failure")
-    FileMove(pair[2],pair[1],false)
-}
 CountRestart() {
     global RestartChecks
     RestartChecks++

@@ -2,6 +2,8 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+# Fail one rollback move only in the isolated runtime.
+Edit-TestSource $release 'src/app/app_lifecycle.ahk' 'try FileMove(pair[2],pair[1],false)' 'try ProbeResetRestore(pair)'
 
 $tests = @'
 #Requires AutoHotkey v2.0
@@ -140,8 +142,68 @@ try {
     Assert(loaded.SharedDanmakuItems.Length=1 && loaded.SharedDanmakuItems[1].Id="orphan"
         && loaded.SharedDanmakuItems[1].Text="important","backup retries after explicit repair and preserves the item")
 } finally restored.Close()
+; Reset preserves the corrupt source and every sidecar without opening recovery dialogs.
+CloseSettingsStore()
+SettingsDatabasePath := A_ScriptDir "\reset-control.db"
+OpenSettingsRepository(SettingsDatabasePath)
+global ProbeRollbackFailure := false
+brokenPath := A_ScriptDir "\broken.db"
+FileAppend("invalid database", brokenPath)
+invalidMessage := ""
+try LoadSettings(brokenPath)
+catch as failure
+    invalidMessage := failure.Message
+Assert(invalidMessage != "", "invalid database is rejected")
+backup := BackupSettingsForReset(brokenPath)
+Assert(FileExist(backup) && !FileExist(brokenPath) && FileRead(backup)="invalid database", "reset preserves corrupt original")
+resetDirectory := A_ScriptDir "\recovery-target"
+DirCreate(resetDirectory)
+resetPath := resetDirectory "\settings.db"
+resetFiles := ["settings.db","settings.db-journal","settings.db-wal","settings.db-shm"]
+currentDatabase := FileRead(SettingsDatabasePath,"RAW")
+for name in resetFiles
+    FileAppend(name,resetDirectory "\" name)
+for blockRollback in [false,true] {
+    ProbeRollbackFailure := blockRollback
+    ; Lock the last file so every preceding move must be rolled back.
+    locked := DllCall("CreateFileW","Str",resetDirectory "\settings.db-shm","UInt",0x80000000,"UInt",0,"Ptr",0,"UInt",3,"UInt",0,"Ptr",0,"Ptr")
+    Assert(locked != -1,"reset failure fixture holds the final file exclusively")
+    try {
+        resetError := ""
+        try BackupSettingsForReset(resetPath)
+        catch as failure
+            resetError := failure.Message
+        Assert(resetError != "","reset aborts when a source cannot be moved")
+    } finally DllCall("CloseHandle","Ptr",locked)
+    remainingBackups := []
+    Loop Files resetDirectory "\*.backup-*"
+        remainingBackups.Push(A_LoopFileFullPath)
+    if blockRollback {
+        Assert(remainingBackups.Length=1 && FileRead(remainingBackups[1])="settings.db-wal","rollback failure preserves the unmoved backup")
+        Assert(InStr(resetError,remainingBackups[1]) && InStr(resetError,resetDirectory "\settings.db-wal"),"rollback failure identifies saved file and original destination")
+        Assert(!FileExist(resetDirectory "\settings.db-wal"),"failed restoration is not reported as complete")
+        FileMove(remainingBackups[1],resetDirectory "\settings.db-wal",false)
+    } else
+        Assert(remainingBackups.Length=0,"successful rollback leaves no partial backup set")
+    for name in resetFiles
+        Assert(FileExist(resetDirectory "\" name) && FileRead(resetDirectory "\" name)=name,"reset preserves every original despite intermediate failures")
+}
+ProbeRollbackFailure := false
+backup := BackupSettingsForReset(resetPath)
+for name in resetFiles {
+    saved := backup SubStr(name,StrLen("settings.db")+1)
+    Assert(!FileExist(resetDirectory "\" name) && FileExist(saved) && FileRead(saved)=name,"reset preserves target files and sidecar names")
+}
+actual := FileRead(SettingsDatabasePath,"RAW")
+Assert(actual.Size=currentDatabase.Size && DllCall("msvcrt\memcmp","Ptr",actual,"Ptr",currentDatabase,"UPtr",actual.Size,"CDecl Int")=0,"reset never changes the database in a different directory")
 FileAppend("PASS: " Checks " settings integrity checks; no application startup`n","*")
 ExitApp()
+ProbeResetRestore(pair) {
+    global ProbeRollbackFailure
+    if ProbeRollbackFailure && RegExMatch(pair[1],"\\settings\.db-wal$")
+        throw Error("Injected reset rollback failure")
+    FileMove(pair[2],pair[1],false)
+}
 '@
 Invoke-AhkTest -Runtime $release -Source $tests
 
