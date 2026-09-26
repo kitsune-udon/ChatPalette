@@ -19,6 +19,9 @@ function Invoke-FixtureRequest($Request) {
     return Invoke-WorkerRequest $Request
 }
 function Read-BrowserVideoId([long]$WindowHandle) { return 'abcdefghijk' }
+function Fetch-Metadata([string]$Video) {
+    return @{ Author='テスト投稿者'; Channel='/channel/fixture'; Time=[DateTime]::UtcNow }
+}
 function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
 function Test-BrowserForeground([long]$WindowHandle) { return $true }
 $script:fakeTarget = [pscustomobject]@{ Current=[pscustomobject]@{IsOffscreen=$false; IsEnabled=$true} }

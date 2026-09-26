@@ -114,3 +114,19 @@ try {
 FileAppend("PASS: " Checks " metadata failure reply and palette explanation checks; no network or browser operations`n","*")
 ExitApp()
 '@
+# The common app fixture must resolve its synthetic profile without reaching HTTP.
+. (Join-Path $PSScriptRoot 'app-fixture.ps1')
+$fixtureRuntime=New-TestRuntime
+Edit-TestSource $fixtureRuntime 'src/browser/video_metadata.ps1' '    $data = Invoke-RestMethod -Uri $url -TimeoutSec 4 -UseBasicParsing' "    throw 'Unexpected HTTP request in app fixture'"
+Invoke-AppFixture -Runtime $fixtureRuntime -Body @'
+    reply := SendWorkerRequest(123,"resolve")
+    Assert(reply.State="ok" && reply.Video="abcdefghijk",
+        "default fixture resolves metadata with HTTP blocked: " reply.State "/" reply.Detail)
+    Assert(reply.Author==Profiles[1].Name && reply.Channel==Profiles[1].Channel,
+        "fixture metadata identifies the profile supplied by the same setup")
+    selected := SelectProfileFromBrowser(123)
+    Assert(selected && selected.ProfileId==Profiles[1].Id && selected.Video==reply.Video,
+        "automatic selection uses the common fixture through the real pipe")
+    Assert(!IsBrowserOperationBusy && !WorkerState.RequestActive,
+        "fixture metadata resolution releases both request gates")
+'@
