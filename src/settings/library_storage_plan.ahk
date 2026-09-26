@@ -47,18 +47,22 @@ BuildScopeStorageDelta(items, old, force := false) {
         while end >= first && oldEnd >= first && items[end] = old.Items[oldEnd]
             end--, oldEnd--
     }
-    previous := Map(), previous.CaseSense := "On", changedItems := []
-    if old {
+    ; Whole-scope reconciliation already has the complete index and item sequence.
+    previous := old ? old.Rows : Map(), changedItems := items
+    if !old
+        previous.CaseSense := "On"
+    if old && (first > 1 || oldEnd < old.Items.Length) {
+        previous := Map(), previous.CaseSense := "On", changedItems := []
         Loop Max(0,oldEnd-first+1) {
             id := old.Items[first+A_Index-1].Id
             previous[id] := old.Rows[id]
         }
-    }
-    Loop Max(0,end-first+1) {
-        item := items[first+A_Index-1]
-        if old && item.HasOwnProp("Id") && old.Rows.Has(item.Id) && !previous.Has(item.Id)
-            throw Error("弾幕の識別子が重複しています。")
-        changedItems.Push(item)
+        Loop Max(0,end-first+1) {
+            item := items[first+A_Index-1]
+            if item.HasOwnProp("Id") && old.Rows.Has(item.Id) && !previous.Has(item.Id)
+                throw Error("弾幕の識別子が重複しています。")
+            changedItems.Push(item)
+        }
     }
     preceding := old && first > 1 ? old.Rows[old.Items[first-1].Id].Position : 0
     boundary := old && oldEnd < old.Items.Length ? old.Rows[old.Items[oldEnd+1].Id].Position : 0
