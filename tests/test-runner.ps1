@@ -107,6 +107,44 @@ try { $null=$target.Read() } catch { }
         if ($kind -ne 'stderr' -and $stderr -notmatch 'test-alpha\.ps1:\d+') { throw 'Assertion caller was not recorded' }
     }
 }
+# Timeout diagnostics must reach the console as well as the retained files.
+$runnerBytes=[IO.File]::ReadAllBytes($runner)
+try {
+    Edit-TestSource $runtime 'tests/run.ps1' '-TimeoutMs 120000' '-TimeoutMs 5000'
+    [IO.File]::WriteAllText($headless,@'
+# Test-Session: Headless
+Write-Output 'last PowerShell step before timeout'
+[Console]::Error.WriteLine('PowerShell diagnostic before timeout')
+Start-Sleep -Seconds 30
+'@,[Text.UTF8Encoding]::new($true))
+    $before=@(Get-ChildItem -LiteralPath $base -Directory | Select-Object -ExpandProperty FullName)
+    $observed=[Collections.Generic.List[string]]::new()
+    $failure=''
+    try { & $runner -Name 'test-alpha.ps1' -WarningAction SilentlyContinue | ForEach-Object { $observed.Add([string]$_) } }
+    catch { $failure=$_.Exception.Message }
+    if ($failure -notmatch '^Test process timed out after 5000ms' -or
+        !$observed.Contains('last PowerShell step before timeout') -or !$observed.Contains('PowerShell diagnostic before timeout')) {
+        throw 'Group timeout hid its last output or original timeout error'
+    }
+    $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
+    if ($retained.Count -ne 1 -or $env:HELPER_TEST_ROOT -cne $oldRoot -or $env:AHK_EXE -cne $oldAhk) { throw 'Group timeout lost evidence or environment restoration' }
+} finally { [IO.File]::WriteAllBytes($runner,$runnerBytes) }
+$ahkTimeout=Join-Path $runtime 'ahk-timeout'
+New-Item -ItemType Directory -Path $ahkTimeout | Out-Null
+$observed=[Collections.Generic.List[string]]::new()
+$failure=''
+try {
+    Invoke-AhkTest -Runtime $ahkTimeout -TimeoutMs 2000 -Source @'
+#Requires AutoHotkey v2.0
+FileAppend("last AHK step before timeout`n","*")
+FileAppend("AHK diagnostic before timeout`n","**")
+Sleep(30000)
+'@ | ForEach-Object { $observed.Add([string]$_) }
+} catch { $failure=$_.Exception.Message }
+if ($failure -notmatch '^Test process timed out after 2000ms' -or
+    !$observed.Contains('last AHK step before timeout') -or !$observed.Contains('AHK diagnostic before timeout')) {
+    throw 'AHK timeout hid its last output or original timeout error'
+}
 # Benchmark options use the same binding boundary as the test runner.
 foreach ($benchmark in Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'benchmark-*.ps1' -File) {
     $benchmarkPath=Join-Path $fixture $benchmark.Name

@@ -111,8 +111,8 @@ RequireTestWindowActive(hwnd) {
     $out = Join-Path $Runtime 'stdout.txt'
     $err = Join-Path $Runtime 'stderr.txt'
     $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + $entry + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
-    $exitCode = Wait-TestProcess -Process $run -TimeoutMs $TimeoutMs
-    Get-Content -LiteralPath $out,$err
+    try { $exitCode = Wait-TestProcess -Process $run -TimeoutMs $TimeoutMs }
+    finally { Get-Content -LiteralPath $out,$err }
     if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Test failed ($exitCode): $Runtime" }
 }
 
