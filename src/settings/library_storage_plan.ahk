@@ -4,9 +4,8 @@ BuildLibraryStoragePlan(state, previous, force := false) {
         throw Error("配信者数は10000件までです。")
     scopes := Map(), changes := [], channels := Map(), total := 0, textBytes := 0
     channels.CaseSense := "On", scopes.CaseSense := "On"
-    candidates := [{Id:"@shared",Name:"",Channel:"",Items:state.SharedDanmakuItems}]
-    for profile in state.Profiles
-        candidates.Push(profile)
+    candidates := state.Profiles.Clone()
+    candidates.InsertAt(1,{Id:"@shared",Name:"",Channel:"",Items:state.SharedDanmakuItems})
     for index, profile in candidates {
         if !profile.Id || scopes.Has(profile.Id) || (index > 1 && profile.Id = "@shared")
             throw Error("配信者の識別子が重複しています。")
