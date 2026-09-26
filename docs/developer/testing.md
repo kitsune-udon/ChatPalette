@@ -68,7 +68,10 @@ Desktop区分は通常の操作用デスクトップで実行します。`CodexS
 | 順序操作 | [test-management-order.ps1](../../tests/test-management-order.ps1) | 上下移動後の保存順・選択・スクロールの保持 |
 | 一覧表示 | [test-list-visibility.ps1](../../tests/test-list-visibility.ps1) | タブ切替・再表示と一覧の表示状態 |
 | 小さい画面 | [test-viewports.ps1](../../tests/test-viewports.ps1) | 狭い画面での配置・スクロール・フォーカス追従、監視とオブジェクトの解放 |
-| UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の画面公開、再入防止、最新のスクロール要求の保持、保存後の描画失敗からの復旧、親画面と選択の保全 |
+| UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の画面・一覧公開、再入防止、最新のスクロール要求の保持、情報画面とviewportの構築失敗からの復旧 |
+| 編集画面の生成・終了 | [test-editor-lifecycle.ps1](../../tests/test-editor-lifecycle.ps1) | 構築・表示・終了の失敗時の資源解放、親画面の保全、不完全な弾幕候補の保存抑止、古い編集画面からの解除拒否 |
+| 編集保存と画面更新 | [test-editor-commit.ps1](../../tests/test-editor-commit.ps1) | 保存後の描画失敗と未保存変更の区別、古い選択による別項目の操作抑止、保存中に届いた次の編集の保持 |
+| 親画面の操作制限 | [test-window-suspension.ps1](../../tests/test-window-suspension.ps1) | 通信待ち・編集の準備と復旧、元の有効状態と対象画面の保持、部分的な復旧失敗・入れ子・割り込み時の所有 |
 | 診断画面の生成・更新 | [test-diagnostics.ps1](../../tests/test-diagnostics.ps1) | 構築失敗時の資源解放、表示とコピーの一致、更新失敗からの復旧。他の画面の故障注入とは独立した環境で検証 |
 | 通知の寿命 | [test-status-tip.ps1](../../tests/test-status-tip.ps1) | 実ツールチップの期限・置換・継続表示・消去 |
 | 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 診断・補助画面・開始失敗・中止・小画面配置の連携 |
