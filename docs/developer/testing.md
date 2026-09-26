@@ -59,6 +59,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 入力計画 | [test-app-input-plan.ps1](../../tests/test-app-input-plan.ps1) | IDと本文の固定、並べ替え・管理画面からの復帰後の選択保持、入力前のパレット表示・前面確認、送信直前の再検証、対象変更時の中止、部分入力を再送しないこと |
 | 設定往復 | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定の独立保存、キーの巻き戻し、競合・Unicode・長文の保持 |
 | 通信・実行 | [test-app-worker.ps1](../../tests/test-app-worker.ps1) | 実パイプ通信、起動・終了・再起動の資源所有、失敗時の復旧、登録同期と操作制限の解除 |
+| ワーカー単体の寿命 | [test-worker-lifetime.ps1](../../tests/test-worker-lifetime.ps1) | パイプ切断・通知イベント欠落・接続先不在での終了とハンドル解放。実ワーカーを使い、画面・キー・ブラウザー操作を要しないHeadless検査 |
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
 | SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、バックアップと復旧 |
 | 登録保存・同期・表示 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 登録の検証・保存・同期を区別し、中止時と同期失敗時のデータ・失敗理由を保全。再同期まで操作を拒否。登録状態の表示はDBを直接読み、通信・操作制限・診断更新を行わない |
