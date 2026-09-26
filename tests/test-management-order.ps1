@@ -61,6 +61,15 @@ for scope in ["shared","profile"] {
     UndoLibraryChange()
     Assert(GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},id)[60].Name="row60","undo restores order")
 }
+; A stale owner must not replace profile rows with unrelated shared items.
+beforeRows := [ManagedList.GetText(1,4),ManagedList.GetText(2,4)]
+EditingProfileId := "missing-profile", missingOwner := ""
+try RenderManagedOrder(1,2)
+catch as failure
+    missingOwner := failure.Message
+finally EditingProfileId := id
+Assert(InStr(missingOwner,"対象の配信者が見つかりません"),"partial reorder rejects a missing owner")
+Assert(ManagedList.GetText(1,4)==beforeRows[1] && ManagedList.GetText(2,4)==beforeRows[2],"missing owner preserves displayed identities instead of using shared items")
 ; A partial update has the same owner, recovery and tab visibility as a full refresh.
 for fails in [false,true] {
     ShowManagement(1)

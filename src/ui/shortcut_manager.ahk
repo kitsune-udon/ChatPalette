@@ -150,7 +150,7 @@ ShowShortcutManager(selectedAction := "reaction",*) {
             itemStatus.Text := "弾幕の候補を更新しています。"
             RefreshItemLabels()
             id := GetSelectedProfileId(scope)
-            items := id = "" ? SharedDanmakuItems : FindProfileById(Profiles,id).Items
+            items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},id)
             labels := ["未割当"], ids := [""], choices := [1,1]
             for item in items {
                 labels.Push(item.Name), ids.Push(item.Id)

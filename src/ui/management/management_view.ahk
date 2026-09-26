@@ -257,8 +257,8 @@ SetManagementNotice(message) {
 
 ; Reordering updates the two affected rows without rebuilding the list or resetting its viewport.
 RenderManagedOrder(previous, current) {
-    profile := FindProfileById(Profiles,EditingProfileId)
-    id := profile ? profile.Id : "", items := profile ? profile.Items : SharedDanmakuItems
+    id := EditingProfileId
+    items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},id)
     rows := [BuildPresentationRow(items[previous],previous,id,ShortcutKeys), BuildPresentationRow(items[current],current,id,ShortcutKeys)]
     position := BeginListRefresh(ManagedList,4)
     position.Selected := current ; The moved identity is now at this index; avoid a full-list search.
