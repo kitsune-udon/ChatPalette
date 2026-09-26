@@ -107,8 +107,7 @@ RunPageAction(action, hwnd, releaseBinding := "") {
         if ActivePageAction = operation {
             try {
                 RecordBrowserOperation({Mode:action,State:result.State,Stage:stage,Window:hwnd,Duration:Round(AppClockMs()-started)})
-                info := BrowserResultInfo(result.State)
-                message := info.Summary (info.Advice != "" ? "。" info.Advice : "。")
+                message := BrowserResultInfo(result.State).Message
                 PaletteHint.Text := message
                 ShowStatusTip(message,3000)
             } finally {

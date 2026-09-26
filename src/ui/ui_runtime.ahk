@@ -56,8 +56,7 @@ EndWorkerWait(view) {
 }
 
 ShowInputFailure(state) {
-    info := BrowserResultInfo(state)
-    PaletteHint.Text := info.Summary "。" info.Advice
+    PaletteHint.Text := BrowserResultInfo(state).Message
     ShowStatusTip(PaletteHint.Text,3500)
 }
 

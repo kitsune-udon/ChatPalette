@@ -24,7 +24,8 @@ BrowserResultInfo(state) {
         "chat_ambiguous","操作する欄をクリックしてください。", "focus_failed","入力欄をクリックしてください。",
         "wrong_input","入力欄をクリックしてやり直してください。", "unsupported","YouTube側の操作対象を確認してください。",
         "unknown","自動では再実行しません。", "unavailable","YouTubeの動画ページを最前面にしてやり直してください。")
-    return {Summary:states.Get(state,"不明な結果：" state),Advice:advice.Get(state,"")}
+    summary := states.Get(state,"不明な結果：" state)
+    return {Summary:summary,Message:summary "。" advice.Get(state,"")}
 }
 RecordBrowserOperation(values) {
     global LastBrowserOperation
