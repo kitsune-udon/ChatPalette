@@ -12,7 +12,7 @@ function Assert($condition, [string]$label) {
 }
 function New-TestRuntime {
     $base = if ($env:HELPER_TEST_ROOT) { $env:HELPER_TEST_ROOT } else { Join-Path $PSScriptRoot '.tmp' }
-    $path = Join-Path $base ([guid]::NewGuid().ToString('N'))
+    $path = Join-Path $base ([guid]::NewGuid().ToString('N').Substring(0,16))
     New-Item -ItemType Directory -Path $path -Force | Out-Null
     Get-ChildItem -LiteralPath $ProjectRoot -File | Where-Object { $_.Extension -in '.ahk','.ps1' -or $_.Name -eq 'VERSION' } | Copy-Item -Destination $path
     Copy-Item -LiteralPath (Join-Path $ProjectRoot 'src') -Destination $path -Recurse

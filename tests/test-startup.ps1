@@ -1,6 +1,7 @@
 ﻿# Test-Session: Desktop
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
+[IO.File]::WriteAllText((Join-Path $release 'VERSION'),"99.98.97-test`r`n",[Text.UTF8Encoding]::new($false))
 $dbPath = Join-Path $release 'data\settings.db'
 function Run-Startup([string[]]$Options=@('--smoke')) {
     $arguments = @('/ErrorStdOut', ('"' + (Join-Path $release 'main.ahk') + '"')) + $Options
@@ -44,4 +45,6 @@ if ((Run-Startup) -ne 0) { throw 'Restart after interrupted creation failed' }
 $before = (Get-FileHash -LiteralPath $dbPath).Hash
 if ((Run-Startup) -ne 0) { throw 'Existing database startup failed' }
 if ((Get-FileHash -LiteralPath $dbPath).Hash -ne $before) { throw 'Startup unexpectedly rewrote settings' }
+Invoke-AppTest -Runtime $release -Body 'Assert(AppVersion == "99.98.97-test","displayed version excludes the file line ending")
+ExitApp()'
 Write-Output 'PASS: startup argument validation, explicit unattended initialization, invalid database preservation, interrupted creation, retry and unchanged startup'

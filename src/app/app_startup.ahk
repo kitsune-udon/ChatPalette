@@ -2,7 +2,7 @@
 InitializeApplication(showRecoveryDialogs := true) {
     global StartupSource := "", AppStartedAt := FormatTime(, "yyyy/MM/dd HH:mm:ss")
     try StartupSource := CaptureAppSource()
-    global AppVersion := Trim(FileRead(A_ScriptDir "\VERSION", "UTF-8"))
+    global AppVersion := Trim(FileRead(A_ScriptDir "\VERSION", "UTF-8"), " `t`r`n")
     global ApplicationShortcutsInstalled := false
     RecordBrowserOperation({Mode:"なし", State:"未実行", Duration:0})
     global AppDataDirectory := A_ScriptDir "\data"

@@ -94,7 +94,7 @@ CreateStorageRow(item, position) {
 }
 
 BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary := 0) {
-    rows := Map(), slots := Map(), positions := [], existing := []
+    rows := Map(), slots := Map(), existing := [], ordered := true, last := 0
     rows.CaseSense := "On"
     for item in items {
         if !item.HasOwnProp("Id") || !item.Id
@@ -116,25 +116,21 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
             slots[slot] := true
         row := unchanged ? priorRow : CreateStorageRow(item,priorRow ? priorRow.Position : 0)
         rows[item.Id] := row
-        if previous.Has(item.Id) {
-            positions.Push(previous[item.Id].Position)
+        if priorRow {
+            ordered := ordered && priorRow.Position > last
+            last := priorRow.Position
             existing.Push(item.Id)
         }
     }
     ; Sorted available ranks preserve gaps on deletion and only swap two ranks on up/down.
-    ranks := "", ordered := true, last := 0
-    for position in positions {
-        ordered := ordered && position > last
-        last := position
-    }
-    sorted := positions
     if !ordered {
-        for position in positions
-            ranks .= position "`n"
+        ranks := ""
+        for id in existing
+            ranks .= rows[id].Position "`n"
         sorted := StrSplit(RTrim(Sort(ranks,"N"),"`n"),"`n")
+        for i, id in existing
+            SetStorageRowPosition(rows,id,Integer(sorted[i]))
     }
-    for i, id in existing
-        SetStorageRowPosition(rows,id,Integer(sorted[i]))
     ; Existing IDs already follow the requested order; use their next rank directly.
     prior := preceding, rebalance := false, nextExisting := 1
     for item in items {

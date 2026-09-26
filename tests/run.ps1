@@ -12,7 +12,8 @@ if (!$tests.Count) { throw 'No matching test scripts found. Use -List to inspect
 if ($List) { $tests.Name; return }
 . (Join-Path $PSScriptRoot 'support.ps1')
 $base = Join-Path $PSScriptRoot '.tmp'
-$runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N'))
+# Nested release verification must leave room for source paths on Windows PowerShell 5.1.
+$runRoot = Join-Path $base ('run-' + [guid]::NewGuid().ToString('N').Substring(0,16))
 New-Item -ItemType Directory -Path $runRoot -Force | Out-Null
 $completed = $false
 $oldRoot = $env:HELPER_TEST_ROOT
