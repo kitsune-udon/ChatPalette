@@ -263,6 +263,64 @@ try {
     [IO.File]::WriteAllBytes($verifierPath,$verifierBytes)
     [IO.File]::WriteAllBytes($runnerPath,$runnerSource)
 }
+# Validate the artifact actually produced, not just a successful test run or a self-reported manifest.
+$corruptArchive=@'
+    function Write-ProbeEntry($archive, $name, $text) {
+        $entry=$archive.GetEntry($name)
+        if ($entry) { $entry.Delete() }
+        $writer=[IO.StreamWriter]::new($archive.CreateEntry($name).Open(),[Text.UTF8Encoding]::new($false))
+        try { $writer.Write($text) } finally { $writer.Dispose() }
+    }
+    $archive=[IO.Compression.ZipFile]::Open($zipPath,[IO.Compression.ZipArchiveMode]::Update)
+    try {
+        switch ('ARCHIVE_FAULT') {
+            'content' { Write-ProbeEntry $archive 'README.md' 'changed archive body' }
+            'missing' { $archive.GetEntry('README.md').Delete() }
+            'extra' { Write-ProbeEntry $archive 'unexpected.txt' 'extra' }
+            'manifest' { Write-ProbeEntry $archive 'SHA256SUMS' 'incorrect manifest' }
+            'consistent' {
+                $reader=[IO.StreamReader]::new($archive.GetEntry('SHA256SUMS').Open())
+                try { $text=$reader.ReadToEnd() } finally { $reader.Dispose() }
+                $sha=[Security.Cryptography.SHA256]::Create()
+                try { $hash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes('changed archive body'))).Replace('-','').ToLowerInvariant() }
+                finally { $sha.Dispose() }
+                Write-ProbeEntry $archive 'README.md' 'changed archive body'
+                Write-ProbeEntry $archive 'SHA256SUMS' ($text -replace '(?m)^[a-f0-9]{64}  README\.md',($hash+'  README.md'))
+            }
+            default {
+                $reader=[IO.StreamReader]::new($archive.GetEntry('README.md').Open())
+                try { $text=$reader.ReadToEnd() } finally { $reader.Dispose() }
+                if ('ARCHIVE_FAULT' -eq 'case') {
+                    $archive.GetEntry('README.md').Delete()
+                    Write-ProbeEntry $archive 'readme.md' $text
+                } else {
+                    # Keep the entry count unchanged so a count-only check cannot pass.
+                    $archive.GetEntry('LICENSE').Delete()
+                    $writer=[IO.StreamWriter]::new($archive.CreateEntry('README.md').Open(),[Text.UTF8Encoding]::new($false))
+                    try { $writer.Write($text) } finally { $writer.Dispose() }
+                }
+            }
+        }
+    } finally { $archive.Dispose() }
+'@
+try {
+    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath, [switch]`$Sandbox)`r`n# Artifact fixture: no nested tests.`r`n",[Text.UTF8Encoding]::new($true))
+    foreach ($fault in @('content','missing','extra','manifest','consistent','case','duplicate')) {
+        [IO.File]::WriteAllBytes($builderPath,$builderBytes)
+        Edit-TestSource $release 'scripts/build-release.ps1' '    Write-Output $zipPath' ($corruptArchive.Replace('ARCHIVE_FAULT',$fault)+"`r`n    Write-Output `$zipPath")
+        $corruptOutput=Join-Path $release ('bad-'+$fault)
+        $failure=''
+        try { & $verifierPath -OutputDirectory $corruptOutput -WarningAction SilentlyContinue | Out-Null }
+        catch { $failure=$_.Exception.Message }
+        if ($failure -notlike 'Release archive*' -or (Test-Path -LiteralPath (Join-Path $corruptOutput "ChatPalette-$version.validation.json"))) {
+            throw "Corrupt archive received a validation record: $fault / $failure"
+        }
+        if (!(Test-Path -LiteralPath (Join-Path $corruptOutput "ChatPalette-$version.zip"))) { throw 'Failed archive was not retained for diagnosis' }
+    }
+} finally {
+    [IO.File]::WriteAllBytes($builderPath,$builderBytes)
+    [IO.File]::WriteAllBytes($runnerPath,$runnerSource)
+}
 # A failed Sandbox runner or changed validated source must produce no release output.
 try {
     foreach ($scenario in @('failure','edit','add','remove')) {
