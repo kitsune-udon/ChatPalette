@@ -1,4 +1,4 @@
-﻿# Test-Session: Desktop
+﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
@@ -230,10 +230,15 @@ $focused=Request 'chat_focus'
 $script:FocusedChat.Window=999; $script:reads=0
 Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=5;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'token for another window rejected'
 $focused=Request 'chat_focus'
-$other=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition)
-Assert ($null -ne $other) 'desktop supplies a distinct element for identity rejection'
-$script:FocusedChat.Element=$other; $script:reads=0
-Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=6;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'another chat-kind element cannot substitute for the focused target'
+# Own a distinct native element; never depend on another application being open.
+Add-Type -AssemblyName System.Windows.Forms
+$identityWindow=[System.Windows.Forms.Form]::new()
+try {
+    $other=[System.Windows.Automation.AutomationElement]::FromHandle($identityWindow.Handle)
+    Assert (!$identityWindow.Visible -and ![System.Windows.Automation.Automation]::Compare($script:target,$other)) 'hidden fixture supplies a distinct element for identity rejection'
+    $script:FocusedChat.Element=$other; $script:reads=0
+    Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=6;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'another chat-kind element cannot substitute for the focused target'
+} finally { $identityWindow.Dispose() }
 $focused=Request 'chat_focus'; $script:kind='comment'; $script:reads=0
 Assert ((Invoke-WorkerRequest @{Mode='verify_chat';Window=123;Seq=7;Video='abcdefghijk';FocusToken=$focused.Detail}).State -eq 'wrong_input') 'comment field rejects deferred delivery'
 $script:kind='chat'; $script:reads=0

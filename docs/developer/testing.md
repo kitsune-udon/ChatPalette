@@ -87,7 +87,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 時間制御 | [test-timing.ps1](../../tests/test-timing.ps1) | 送信間隔・中止・単調増加時計、タイマー精度と実行ジョブの解放 |
 | リアクション検出 | [test-reactions.ps1](../../tests/test-reactions.ps1) | 5種類の識別、登録情報の妥当性、一括取得の整合性、操作直前の対象確認 |
 | UIA参照 | [test-cache.ps1](../../tests/test-cache.ps1) | UIA参照の再検証・失効・登録置換、不正な検索計画の拒否 |
-| ページ操作 | [test-page-actions.ps1](../../tests/test-page-actions.ps1) | チャット・表示用UIの識別と対象確認。クリックや送信をしないこと |
+| ページ操作 | [test-page-actions.ps1](../../tests/test-page-actions.ps1) | チャット・表示用UIの識別と対象確認。クリックや送信をしないこと。比較用の別UIA要素はテスト所有の非表示ウィンドウから取得し、他アプリを必要としないHeadless検査 |
 | フォーカス後の保留入力 | [test-focused-input.ps1](../../tests/test-focused-input.ps1) | 1件だけの保留、期限とキー解放、対象変更時の中止、保留状態の解放 |
 | ページ操作キー | [test-page-shortcuts.ps1](../../tests/test-page-shortcuts.ps1) | クリア前の再検証、操作競合の拒否、ページ操作の受付から結果通知までの所有 |
 | キー管理画面 | [test-shortcut-manager.ps1](../../tests/test-shortcut-manager.ps1) | キーの変更・競合・保存と復元、対象別の弾幕割当 |
