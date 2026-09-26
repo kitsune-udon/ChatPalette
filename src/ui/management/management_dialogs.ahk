@@ -58,10 +58,6 @@ OpenDanmakuEditor(isNew) {
         local commitCritical := A_IsCritical
         Critical("On")
         try {
-            if !Trim(name.Value) || !Trim(text.Value) {
-                status.Text := "弾幕名と本文を入力してください。"
-                return
-            }
             try result := ExecuteDanmakuCommand(isNew ? "add" : "edit",editId,isNew ? "" : original.Id,{Name:name.Value,Text:text.Value,Slot:slot.Value-1})
             catch as failure {
                 status.Text := "保存できませんでした。" failure.Message

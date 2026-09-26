@@ -42,14 +42,34 @@ Invoke-AppFixture -Body @'
     WinActivate("ahk_id " ActiveEditorDialog.Window.Hwnd)
     RequireTestWindowActive(ActiveEditorDialog.Window.Hwnd)
     Assert(WinActive("ahk_id " ActiveEditorDialog.Window.Hwnd),"editor activated before save")
-    editNumber := 0
+    editNumber := 0, inputControls := []
     for control in ActiveEditorDialog.Window {
         if control.Type = "Edit" {
             editNumber++
             control.Value := editNumber=1 ? "focus regression" : "fixture text"
+            inputControls.Push(control)
         }
         if control.Type = "Button" && control.Text = "保存"
             saveButton := control
+    }
+    historyBefore := LibraryHistory.Length, draftWindow := ActiveEditorDialog.Window
+    for input in inputControls {
+        submitted := input.Value, input.Value := "   "
+        SendMessage(0xF5,0,0,saveButton.Hwnd)
+        message := "", deadline := A_TickCount+2000
+        while message="" && A_TickCount<deadline {
+            Sleep(10)
+            for control in draftWindow
+                if control.Type="Text" && InStr(control.Text,"弾幕名と本文を入力してください。")
+                    message := control.Text
+        }
+        Assert(message!="" && ActiveEditorDialog.Window=draftWindow && input.Value=="   ","required-field rejection explains the failure and retains the draft")
+        Assert(SharedDanmakuItems.Length=beforeFocusSave && LibraryHistory.Length=historyBefore
+            && LoadSettings(SettingsDatabasePath).SharedDanmakuItems.Length=beforeFocusSave,"required-field rejection preserves saved items and undo history")
+        for control in draftWindow
+            if control.Type="Text" && control.Text==message
+                control.Text := ""
+        input.Value := submitted
     }
     SendMessage(0xF5,0,0,saveButton.Hwnd) ; BM_CLICK keeps native button dispatch independent of pointer movement.
     deadline := A_TickCount+2000
