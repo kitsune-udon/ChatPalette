@@ -120,8 +120,12 @@ class SqliteConnection {
         } catch as failure {
             if !DllCall(SqliteConnection.Library "\sqlite3_get_autocommit", "Ptr", this.Handle, "CDecl Int") {
                 try this.Exec("ROLLBACK")
-                catch {
-                    this.Close()
+                catch as rollbackFailure {
+                    ; Keep the original error and location, including each cleanup failure.
+                    failure.Message .= "`nロールバック: " rollbackFailure.Message
+                    try this.Close()
+                    catch as closeFailure
+                        failure.Message .= "`n接続の終了: " closeFailure.Message
                 }
             }
             throw failure

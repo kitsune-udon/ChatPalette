@@ -54,6 +54,38 @@ try {
     Assert(rows.Length=1 && rows[1][1]=="Ω","failed decoding resets the statement and clears every binding before reuse")
     Assert(reuse.Scalar("SELECT hex(value) FROM sample WHERE id=6")=="70726566697800737566666978","read rejection preserves all stored bytes")
 } finally reuse.Close()
+; Cleanup failures must not replace or hide the original transaction error.
+for cleanup in ["normal","rollback","rollback-close"] {
+    transactionPath := A_ScriptDir "\transaction-" cleanup ".db"
+    connection := SqliteConnection(transactionPath,true)
+    connection.Exec("CREATE TABLE sample(value TEXT); INSERT INTO sample VALUES('before')")
+    original := ValueError("transaction write failure",-1,"original detail"), originalStack := original.Stack
+    connection.Probe := {Cleanup:cleanup,Failure:original,Rollbacks:0,Closes:0}
+    connection.DefineProp("Exec",{Call:TransactionFailureExec})
+    connection.DefineProp("Close",{Call:TransactionFailureClose})
+    caught := 0
+    try {
+        try connection.Transaction(TransactionFailureAction.Bind(connection))
+        catch as failure
+            caught := failure
+        Assert(caught=original && caught is ValueError && caught.Stack=originalStack && caught.Extra="original detail",
+            cleanup ": transaction preserves its original error object, type and location")
+        Assert(InStr(caught.Message,"transaction write failure"),cleanup ": original write error is reported")
+        Assert(!!InStr(caught.Message,"rollback probe failure")=(cleanup!="normal"),cleanup ": rollback failure is reported only when observed")
+        Assert(!!InStr(caught.Message,"close probe failure")=(cleanup="rollback-close"),cleanup ": close failure is reported only when observed")
+        Assert(connection.Probe.Rollbacks=1 && connection.Probe.Closes=(cleanup!="normal"),cleanup ": cleanup does not retry implicitly")
+        Assert(!!connection.Handle=(cleanup!="rollback"),cleanup ": unclosed connection ownership is retained")
+    } finally {
+        connection.DeleteProp("Exec"), connection.DeleteProp("Close")
+        connection.Close()
+    }
+    recovered := SqliteConnection(transactionPath)
+    try {
+        Assert(recovered.Scalar("SELECT value FROM sample")=="before",cleanup ": failed transaction never publishes its write")
+        recovered.Transaction((*) => recovered.Exec("UPDATE sample SET value='retry'"))
+        Assert(recovered.Scalar("SELECT value FROM sample")=="retry",cleanup ": a fresh connection can commit after cleanup")
+    } finally recovered.Close()
+}
 ; Reordering must keep distinct 64-bit ranks distinct without a floating-point sort.
 rankStore := SettingsRepository(A_ScriptDir "\exact-ranks.db",true)
 try {
@@ -386,6 +418,24 @@ SnapshotExec(db,sql) {
     if SnapshotFailurePoint="commit" && sql="COMMIT"
         throw Error("snapshot publication failure")
     return SqliteConnection.Prototype.Exec.Call(db,sql)
+}
+TransactionFailureAction(db) {
+    db.Exec("UPDATE sample SET value='uncommitted'")
+    throw db.Probe.Failure
+}
+TransactionFailureExec(db,sql) {
+    if sql="ROLLBACK" {
+        db.Probe.Rollbacks++
+        if db.Probe.Cleanup!="normal"
+            throw Error("rollback probe failure")
+    }
+    return SqliteConnection.Prototype.Exec.Call(db,sql)
+}
+TransactionFailureClose(db) {
+    db.Probe.Closes++
+    if db.Probe.Cleanup="rollback-close"
+        throw Error("close probe failure")
+    return SqliteConnection.Prototype.Close.Call(db)
 }
 '@
 Invoke-AhkTest -Runtime $release -Source $tests
