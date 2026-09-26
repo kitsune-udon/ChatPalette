@@ -36,10 +36,18 @@ Invoke-AppFixture -Body @'
         Assert(!ActivePageAction && !IsBrowserOperationBusy,"deadline decision releases focus ownership: " Scenario)
     }
     RuntimePorts.Clock := 0
+    verificationFailures := Map("changed_field",["wrong_input","入力欄を確認できません"],
+        "verified_video_changed",["changed","動画が変わった"],"verified_video_empty",["changed","動画が変わった"])
     for scenarioName in ["failure","throw","expired","release_failed","changed_video","changed_field","missing_token","verified_video_changed","verified_video_empty","expired_after_verify","background","background_after_verify","edited","editor","reaction","send_unknown"] {
         Scenario := scenarioName, Sent := [], Calls := [], ForegroundOk := true
         Assert(!RunPageAction("chat_focus",123) && !Sent.Length,"rejected input has no effect: " Scenario)
         Assert(!ActivePageAction && !IsBrowserOperationBusy,"failed operation releases ownership: " Scenario)
+        if verificationFailures.Has(Scenario) {
+            expected := verificationFailures[Scenario]
+            Assert(LastBrowserOperation.State=expected[1] && InStr(PaletteHint.Text,expected[2]),
+                "queued verification preserves its reason in diagnostics and guidance: " Scenario)
+            Assert(Calls.Length=3 && Calls[3].Mode="verify_chat","failed queued verification is not retried: " Scenario)
+        }
         if Scenario="missing_token"
             Assert(Calls.Length=1,"missing proof prevents target resolution as well as verification")
         if Scenario="send_unknown"

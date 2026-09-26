@@ -39,7 +39,7 @@ CompleteFocusedDanmaku(focus,result) {
             return cancelled
         verified := VerifyChatFocus(focus.Window,result)
         if verified.State != "ok"
-            return cancelled
+            return verified
         ; The sender checks continuation after its final item validation.
         return SendPlannedDanmaku(plan,focus)
     } catch {
