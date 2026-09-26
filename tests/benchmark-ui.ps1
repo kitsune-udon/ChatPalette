@@ -12,23 +12,29 @@ InitializeApplication(false)
 initializedMs := Round(Tick()-started,3)
 FileAppend("items,operation,median_ms,max_ms`n0,cold_initialize," initializedMs "," initializedMs "`n","*")
 AutoMode := false
-PaletteViewport.Show()
 for count in Counts {
     draft := CreateTestSettingsSnapshot(), draft.SharedDanmakuItems := [], draft.Profiles := [], draft.InputProfileId := ""
     Loop count
         draft.SharedDanmakuItems.Push({Id:"bench-" A_Index,Name:"item " A_Index,Text:"synthetic body " A_Index,Slot:0})
     OpenSettingsRepository(SettingsDatabasePath).SaveAll(draft)
     ReloadAppSettings()
-    for operation in ["load","list","search"] {
+    PaletteViewport.Show()
+    for operation in ["load","list","search","management"] {
+        if operation="management"
+            ShowManagement(1)
         samples := ""
         Loop Repeats+1 {
             PaletteSearch.Value := operation="search" ? "body 9" : ""
             started := Tick()
             if operation="load"
                 ReloadAppSettings()
+            else if operation="management"
+                RefreshManagement()
             else
                 RefreshPaletteItems()
             elapsed := Tick()-started
+            if operation="management" && ManagedList.GetCount()!=count
+                throw Error("Management measurement did not render the complete fixture")
             if A_Index>1
                 samples .= elapsed "`n"
         }

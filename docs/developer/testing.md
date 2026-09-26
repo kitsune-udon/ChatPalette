@@ -237,7 +237,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.
 | 計測 | 範囲と既定条件 | 引数 |
 |---|---|---|
 | `benchmark-storage.ps1` | 合成データ1千・1万・10万件の編集・隣接交換・Undoで、保存計画の計算時間を測る。ウォームアップ1回後の7回の中央値と最大値。DB書き込み・描画・ブラウザー操作は含まない | `-Repeats`は1以上。`-SourceRoot`で同じモジュール構成の比較対象を指定可能 |
-| `benchmark-ui.ps1` | 隔離DBの合成データ1千・1万件で設定読み込み・実際のパレット描画・検索を測る。ウォームアップ1回後の3回の中央値と最大値 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9 |
+| `benchmark-ui.ps1` | 隔離DBの合成データ1千・1万件で設定読み込み・実際のパレット描画・検索・管理一覧の全件更新を測る。ウォームアップ1回後の3回の中央値と最大値 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9 |
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-storage.ps1
@@ -246,7 +246,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-ui.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-storage.ps1 -SourceRoot '比較対象の場所'
 ```
 
-画面計測の`cold_initialize`は、空DBの初期化と画面構築を1回測った値で、プロセス起動時間を含みません。パレットの描画は先頭500件、検索は全データが対象です。管理画面の全件表示とは測定範囲が異なります。[改善時の計測記録](complexity-results.md)には、比較条件・結果・判断を残しています。
+画面計測の`cold_initialize`は、空DBの初期化と画面構築を1回測った値で、プロセス起動時間を含みません。パレットの描画は先頭500件、検索は全データが対象です。`management`は管理画面を表示した状態で一覧の全件更新を測り、行数も確認します。管理画面の初回構築とDB保存は含みません。[改善時の計測記録](complexity-results.md)には、比較条件・結果・判断を残しています。
 
 ## 確認記録
 
