@@ -1,4 +1,4 @@
-﻿# Test-Session: Desktop
+﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 # Independent lifecycle scenario: the final result must describe the queued attempt.
@@ -34,8 +34,39 @@ ActiveReactionJob := CreateReactionJob({Mode:"queued",Window:123})
 QuickReaction()
 Assert(!ActiveReactionJob && QuickRequests=2 && LastReactionResult.Reason="completed"
     && LastReactionResult.Mode="reaction_send" && LastReactionResult.Completed=1,"successful handoff keeps the send result")
+QuickScenario := "before_switch"
+ActiveReactionJob := CreateReactionJob({Mode: "queued", Cancelled: false, Window: 0})
+SetReactionStatus("文言を変更した開始待ち", false)
+PaletteStatusControl.Text := "表示だけを書き換えた文言"
+QuickReaction()
+Assert(!ActiveReactionJob && ReactionExecutionStatus.Phase = "finished", "early exit finalizes regardless of displayed wording")
+Assert(LastReactionResult.Reason="wrong_window" && InStr(ReactionExecutionStatus.Message, "操作先が変わった"), "early exit preserves the specific target failure")
+ActiveReactionJob := CreateReactionJob({Mode: "queued", Cancelled: false, Window: 0})
+SetReactionStatus("開始待ち", false)
+CancelReaction()
+cancelledMessage := ReactionExecutionStatus.Message
+QuickReaction()
+Assert(ReactionExecutionStatus.Message = cancelledMessage, "queued cancellation result is retained")
+for released in [false, true] {
+    replacementJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
+    RuntimePorts.ShortcutRelease := ReplaceShortcutJob.Bind(replacementJob,released)
+    ActiveReactionJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
+    SetReactionStatus("新しい開始待ち", false)
+    QuickReaction()
+    Assert(ActiveReactionJob = replacementJob && ReactionExecutionStatus.Phase = "queued", "old shortcut cleanup preserves replacement job")
+}
+RuntimePorts.ShortcutRelease := QuickRelease
+CancelReaction()
+Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd) && !ManagementWindow && !ReactionOverlay && !ActiveEditorDialog,
+    "quick reaction checks keep all application views hidden")
+Assert(!ApplicationShortcutsInstalled && !WorkerState.ProcessHandle,"quick reaction checks need no live shortcuts or worker")
 FileAppend("PASS: " Checks " quick reaction result checks; no real browser operations`n","*")
 ExitApp()
+; Model Esc and a replacement shortcut while the original KeyWait is suspended.
+ReplaceShortcutJob(replacement, released, keys) {
+    global ActiveReactionJob := replacement
+    return released
+}
 QuickRelease(keys) {
     if QuickScenario="release_error"
         throw Error("key exception")

@@ -118,28 +118,6 @@ Invoke-AppFixture -Runtime $release -Body @'
         && !WorkerState.PipeHandle && !WorkerState.SignalHandle,"mismatched reply cleans up without replay")
     Assert(RequestBrowserOperation(123,"browser_context").State="ok","transport recovers after rejected request frames")
     StopBrowserWorker()
-    ActiveReactionJob := CreateReactionJob({Mode: "queued", Cancelled: false, Window: 0})
-    SetReactionStatus("文言を変更した開始待ち", false)
-    PaletteStatusControl.Text := "表示だけを書き換えた文言"
-    QuickReaction()
-    Assert(!ActiveReactionJob && ReactionExecutionStatus.Phase = "finished", "early exit finalizes regardless of displayed wording")
-    Assert(LastReactionResult.Reason="wrong_window" && InStr(ReactionExecutionStatus.Message, "操作先が変わった"), "early exit preserves the specific target failure")
-    ActiveReactionJob := CreateReactionJob({Mode: "queued", Cancelled: false, Window: 0})
-    SetReactionStatus("開始待ち", false)
-    CancelReaction()
-    cancelledMessage := ReactionExecutionStatus.Message
-    QuickReaction()
-    Assert(ReactionExecutionStatus.Message = cancelledMessage, "queued cancellation result is retained")
-    for released in [false, true] {
-        replacementJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
-        RuntimePorts.ShortcutRelease := ReplaceShortcutJob.Bind(replacementJob,released)
-        ActiveReactionJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
-        SetReactionStatus("新しい開始待ち", false)
-        QuickReaction()
-        Assert(ActiveReactionJob = replacementJob && ReactionExecutionStatus.Phase = "queued", "old shortcut cleanup preserves replacement job")
-    }
-    RuntimePorts.ShortcutRelease := 0
-    CancelReaction()
     global FixtureStarts := []
     RuntimePorts.BrowserRequest := RecordReactionStart
     Assert(ReactionIntervalLabels()[1] = "待機なし", "待機なし is an explicit UI option")
@@ -188,11 +166,6 @@ Invoke-AppFixture -Runtime $release -Body @'
     StopBrowserWorker()
 
 '@ -Helpers @'
-; Model Esc and a replacement shortcut while the original KeyWait is suspended.
-ReplaceShortcutJob(replacement, released, keys) {
-    global ActiveReactionJob := replacement
-    return released
-}
 RecordReactionStart(hwnd,mode,video,extra) {
     if mode = "reaction_send" && ActiveReactionJob
         FixtureStarts.Push(ActiveReactionJob.StartedAt)

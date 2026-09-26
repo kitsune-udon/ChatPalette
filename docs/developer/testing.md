@@ -79,7 +79,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 診断画面の生成・更新 | [test-diagnostics.ps1](../../tests/test-diagnostics.ps1) | 構築失敗時の資源解放、表示とコピーの一致、更新失敗からの復旧。他の画面の故障注入とは独立した環境で検証 |
 | 通知の寿命 | [test-status-tip.ps1](../../tests/test-status-tip.ps1) | 実ツールチップの期限・置換・継続表示・消去 |
 | 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 診断・補助画面・開始失敗・中止・小画面配置の連携 |
-| 即時リアクション | [test-quick-reaction.ps1](../../tests/test-quick-reaction.ps1) | キー解放・動画確認・開始前の中止と交代、実行への引き継ぎ |
+| 即時リアクション | [test-quick-reaction.ps1](../../tests/test-quick-reaction.ps1) | キー解放・動画確認・開始前の中止と交代、実行への引き継ぎ。非表示画面と代替処理を使い、実キー・ワーカー・前面操作は不要 |
 | 送信中の所有 | [test-reaction-send-ownership.ps1](../../tests/test-reaction-send-ownership.ps1) | 前面確認・応答中に交代したジョブの資源解放と後続処理の保護。前面・通信・タイマー精度を代替処理にし、非表示コントロールを扱うHeadless検査 |
 | カウントダウン | [test-reaction-countdown.ps1](../../tests/test-reaction-countdown.ps1) | 待機・登録再試行・通知中の交代と中止、古いタイマーの抑止 |
 | リアクション開始 | [test-reaction-start.ps1](../../tests/test-reaction-start.ps1) | 開始途中の交代と中止、後続ジョブへのタイマー・結果の誤反映防止 |
