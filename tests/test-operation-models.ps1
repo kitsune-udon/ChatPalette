@@ -21,12 +21,12 @@ bulk := []
 Loop 501
     bulk.Push({Id:"bulk-" A_Index,Name:"row",Text:"text " A_Index,Slot:0})
 limited := BuildPaletteItems(0,bulk,"",modelKeys)
-Assert(limited.Rows.Length=500 && limited.Truncated && InStr(limited.Hint,"500"),"large palette caps drawing with explanation")
+Assert(limited.Rows.Length=500 && limited.Hint="先頭500件を表示しています。検索で絞り込んでください。","large palette caps drawing with explanation")
 last := BuildPaletteItems(0,bulk,"text 501",modelKeys)
-Assert(last.Rows.Length=1 && last.Rows[1].ItemId="bulk-501" && last.Rows[1].Index=501 && !last.Truncated,"search reaches records past display limit without changing identity")
+Assert(last.Rows.Length=1 && last.Rows[1].ItemId="bulk-501" && last.Rows[1].Index=501 && last.Hint="弾幕は入力のみ。内容を確認してYouTubeで送信します。","search reaches records past display limit without changing identity")
 Assert(BuildManagementPresentation([],bulk,"",modelKeys).Content.Items.Length=501,"management retains all rows")
 bulk.Pop()
-Assert(!BuildPaletteItems(0,bulk,"",modelKeys).Truncated,"exact limit is not reported as truncated")
+Assert(BuildPaletteItems(0,bulk,"",modelKeys).Hint="弾幕は入力のみ。内容を確認してYouTubeで送信します。","exact limit is not reported as truncated")
 ; Every busy-state combination: stopping always works; the owning editor may save preferences.
 for refreshing in [false,true]
     for browserBusy in [false,true]

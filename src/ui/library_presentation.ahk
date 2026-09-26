@@ -11,7 +11,7 @@ BuildPaletteItems(profile, sharedItems, query, keys) {
     limit := 500
     truncated := profile ? CollectPresentationItems(rows,profile.Items,profile.Id,query,limit,keys) : false
     truncated := truncated || CollectPresentationItems(rows,sharedItems,"",query,limit,keys)
-    return {Rows:rows, Truncated:truncated, Hint:truncated ? "先頭" limit "件を表示しています。検索で絞り込んでください。"
+    return {Rows:rows, Hint:truncated ? "先頭" limit "件を表示しています。検索で絞り込んでください。"
         : rows.Length ? "弾幕は入力のみ。内容を確認してYouTubeで送信します。"
         : (query != "" ? "一致する弾幕がありません。検索条件を変えてください。" : "「弾幕を追加・編集」から登録できます。共通弾幕は配信者不要です。")}
 }

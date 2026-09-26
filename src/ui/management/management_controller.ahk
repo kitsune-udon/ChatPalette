@@ -11,7 +11,7 @@ GetSelectedManagedTarget() {
     try {
         items := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},EditingProfileId)
         if index <= items.Length && items[index].Id == ManagedList.GetText(index,4)
-            return {ProfileId:EditingProfileId, Index:index, Item:items[index]}
+            return {ProfileId:EditingProfileId, Item:items[index]}
     } catch as failure {
         message := failure.Message
     }
