@@ -16,12 +16,12 @@ for count in [1000,10000,100000] {
         items.Push({Id:"item-" A_Index,Name:"name" A_Index,Text:"synthetic text " A_Index,Slot:0})
     state := {Profiles:[],SharedDanmakuItems:items}
     base := BuildLibraryStoragePlan(state,Map())
-    for operation in ["edit","swap","undo"] {
+    for operation in ["edit","swap","undo","validate"] {
         draftItems := items.Clone(), middle := count//2
         if operation = "edit" {
             draftItems[middle] := items[middle].Clone()
             draftItems[middle].Text := "edited"
-        } else {
+        } else if operation != "validate" {
             draftItems[middle] := items[middle+1], draftItems[middle+1] := items[middle]
         }
         draft := {Profiles:[],SharedDanmakuItems:draftItems}, benchmarkPrevious := base.Scopes
@@ -32,7 +32,7 @@ for count in [1000,10000,100000] {
         samples := ""
         Loop Repeats+1 {
             DllCall("QueryPerformanceCounter","Int64*",&started := 0)
-            plan := BuildLibraryStoragePlan(draft,benchmarkPrevious)
+            plan := BuildLibraryStoragePlan(draft,benchmarkPrevious,operation="validate")
             DllCall("QueryPerformanceCounter","Int64*",&finished := 0)
             if A_Index > 1
                 samples .= (finished-started)*1000/frequency "`n"

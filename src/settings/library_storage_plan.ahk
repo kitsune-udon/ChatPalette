@@ -134,6 +134,9 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
         for i, id in existing
             SetStorageRowPosition(rows,id,Integer(sorted[i]))
     }
+    ; Existing rows already have ranks; only additions need gap allocation.
+    if existing.Length = items.Length
+        return rows
     ; Existing IDs already follow the requested order; use their next rank directly.
     prior := preceding, rebalance := false, nextExisting := 1
     for item in items {
