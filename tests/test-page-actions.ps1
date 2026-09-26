@@ -95,11 +95,12 @@ $script:ChatTestRoot=[pscustomobject]@{Candidates=@()}
 $script:ChatTestRoot | Add-Member ScriptMethod FindAll { param($scope,$condition) return $this.Candidates }
 function Test-ElementWindow($Element,$WindowHandle) { return $Element.Window -eq $WindowHandle }
 function Get-YouTubeInputRecords($Target,$WindowHandle) {
+    $Target.Reads++
     if ($Target.Detached) { throw 'Candidate detached during observation' }
     return $Target.Records
 }
 function ChatCandidate {
-    return [pscustomobject]@{Window=123;Detached=$false;Records=@(
+    return [pscustomobject]@{Window=123;Detached=$false;Reads=0;Records=@(
         @{Id='input';Name='';Class='yt-live-chat-text-input-field-renderer';Type=50004;Enabled=$true;Hidden=$false;Editable=$true},
         $document)}
 }
@@ -125,6 +126,18 @@ try {
         $result=Find-ChatInput 123
         Assert ($result.State -eq 'ok' -and [object]::ReferenceEquals($result.Element,$valid)) "$invalidKind candidate does not hide the unique valid chat"
     }
+    # A unique candidate must be checked against later candidates as well.
+    $invalid=ChatCandidate
+    $invalid.Records[0].Hidden=$true
+    $script:ChatTestRoot.Candidates=@($valid,$invalid)
+    $result=Find-ChatInput 123
+    Assert ($result.State -eq 'ok' -and [object]::ReferenceEquals($result.Element,$valid) -and $invalid.Reads -eq 1) 'a first match still inspects later candidates before reporting uniqueness'
+    # UIA ancestry reads stop once two matches make safe selection impossible.
+    $first=ChatCandidate; $second=ChatCandidate; $later=ChatCandidate
+    $script:ChatTestRoot.Candidates=@($first,$invalid,$second,$later)
+    $result=Find-ChatInput 123
+    Assert ($result.State -eq 'chat_ambiguous' -and $null -eq $result.Element) 'two matches separated by an invalid field remain ambiguous'
+    Assert ($first.Reads -eq 1 -and $second.Reads -eq 1 -and $later.Reads -eq 0) 'ambiguity avoids further candidate observations'
     $other=ChatCandidate
     foreach ($candidates in @(@($valid,$other),@($other,$valid))) {
         $script:ChatTestRoot.Candidates=$candidates

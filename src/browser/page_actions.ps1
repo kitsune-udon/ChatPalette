@@ -9,18 +9,19 @@ function Find-ChatInput([long]$WindowHandle) {
         [System.Windows.Automation.AutomationElement]::IsTextPatternAvailableProperty, $true)
     $editable = [System.Windows.Automation.OrCondition]::new($value,$text)
     $condition = [System.Windows.Automation.AndCondition]::new($focusable,$editable)
-    $matches = @(
-        foreach ($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
-            try {
-                if (!(Test-ElementWindow $element $WindowHandle)) { continue }
-                $records = @(Get-YouTubeInputRecords $element $WindowHandle)
-                # Discovery checks the same editable/chat ancestry before moving focus.
-                if ((Get-YouTubeInputKind $records) -eq 'chat') { $element }
-            } catch { }
-        }
-    )
-    if ($matches.Count -eq 1) { return @{State='ok'; Element=$matches[0]} }
-    if ($matches.Count -gt 1) { return @{State='chat_ambiguous'; Element=$null} }
+    $candidate = $null
+    foreach ($element in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)) {
+        try {
+            if (!(Test-ElementWindow $element $WindowHandle)) { continue }
+            $records = @(Get-YouTubeInputRecords $element $WindowHandle)
+            # Discovery checks the same editable/chat ancestry before moving focus.
+            if ((Get-YouTubeInputKind $records) -ne 'chat') { continue }
+            # A second match settles ambiguity; no later candidate can make it unique.
+            if ($null -ne $candidate) { return @{State='chat_ambiguous'; Element=$null} }
+            $candidate = $element
+        } catch { }
+    }
+    if ($null -ne $candidate) { return @{State='ok'; Element=$candidate} }
     return @{State='chat_missing'; Element=$null}
 }
 
