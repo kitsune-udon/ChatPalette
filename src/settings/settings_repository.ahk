@@ -2,8 +2,8 @@
 class SettingsRepository {
     static ApplicationId := 1129335892
     __New(path, create := false) {
-        if FileExist(path) && FileGetSize(path)>128*1024*1024
-            throw Error("設定データベースが上限128MiBを超えています。")
+        if FileExist(path) && FileGetSize(path)>SettingsLimits.DatabaseBytes
+            throw Error("設定データベースが上限" (SettingsLimits.DatabaseBytes//1024//1024) "MiBを超えています。")
         this.Path := path, this.Saved := 0
         this.Db := SqliteConnection(path,create)
         try {
@@ -18,7 +18,7 @@ class SettingsRepository {
                     throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
                 this.Db.ConfigureStorage()
             }
-            this.Db.Exec("PRAGMA max_page_count=" (128*1024*1024//Integer(this.Db.Scalar("PRAGMA page_size"))))
+            this.Db.Exec("PRAGMA max_page_count=" (SettingsLimits.DatabaseBytes//Integer(this.Db.Scalar("PRAGMA page_size"))))
             if create {
                 scopes := Map(), scopes.CaseSense := "On"
                 this.Saved := {Scopes:scopes,Preferences:0,DataVersion:this.Db.Scalar("PRAGMA data_version")}
@@ -45,7 +45,7 @@ class SettingsRepository {
         return loaded.State
     }
     ReadState() {
-        if Integer(this.Db.Scalar("SELECT COUNT(*) FROM scopes"))>10001 || Integer(this.Db.Scalar("SELECT COUNT(*) FROM items"))>100000
+        if Integer(this.Db.Scalar("SELECT COUNT(*) FROM scopes"))>SettingsLimits.Profiles+1 || Integer(this.Db.Scalar("SELECT COUNT(*) FROM items"))>SettingsLimits.Items
             throw Error("設定の件数が上限を超えています。")
         state := {Profiles:[],SharedDanmakuItems:[],InputProfileId:""}, scopes := Map()
         scopes.CaseSense := "On"

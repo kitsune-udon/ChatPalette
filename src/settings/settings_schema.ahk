@@ -1,4 +1,10 @@
 ﻿; Shared option values and defaults. No GUI or runtime-controller dependencies.
+; Storage limits shared by read preflight, write validation and SQLite growth control.
+class SettingsLimits {
+    static Profiles => 10000
+    static Items => 100000
+    static DatabaseBytes => 128*1024*1024
+}
 global ReactionCounts := [1, 10, 100, 1000, 10000]
 global ReactionIntervals := [0, 25, 50, 100, 150, 200, 250, 500, 1000]
 

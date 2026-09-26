@@ -1,7 +1,7 @@
 ﻿; Build a transactional delta. Published arrays are immutable; cached rows own values.
 BuildLibraryStoragePlan(state, previous, force := false) {
-    if state.Profiles.Length > 10000
-        throw Error("配信者数は10000件までです。")
+    if state.Profiles.Length > SettingsLimits.Profiles
+        throw Error("配信者数は" SettingsLimits.Profiles "件までです。")
     scopes := Map(), changes := [], channels := Map(), total := 0, textBytes := 0
     channels.CaseSense := "On", scopes.CaseSense := "On"
     candidates := state.Profiles.Clone()
@@ -30,8 +30,8 @@ BuildLibraryStoragePlan(state, previous, force := false) {
         textBytes += scope.TextBytes+(StrLen(scope.Name)+StrLen(scope.Channel))*2
         scopes[scope.Id] := scope
     }
-    if total > 100000
-        throw Error("弾幕の総数は100000件までです。")
+    if total > SettingsLimits.Items
+        throw Error("弾幕の総数は" SettingsLimits.Items "件までです。")
     if textBytes > 32*1024*1024
         throw Error("設定の文字列合計が上限32MiBを超えます。")
     ; Cross-scope ID uniqueness is checked by the database PRIMARY KEY.

@@ -144,3 +144,68 @@ FileAppend("PASS: " Checks " settings integrity checks; no application startup`n
 ExitApp()
 '@
 Invoke-AhkTest -Runtime $release -Source $tests
+
+# Exercise all storage boundaries with small fixtures in a separate runtime.
+$limitsRuntime = New-TestRuntime
+Edit-TestSource $limitsRuntime 'src/settings/settings_schema.ahk' 'static Profiles => 10000' 'static Profiles => 2'
+Edit-TestSource $limitsRuntime 'src/settings/settings_schema.ahk' 'static Items => 100000' 'static Items => 3'
+Edit-TestSource $limitsRuntime 'src/settings/settings_schema.ahk' 'static DatabaseBytes => 128*1024*1024' 'static DatabaseBytes => 1024*1024'
+$limitsTests = @'
+#Requires AutoHotkey v2.0
+#Include %A_ScriptDir%\src\app\app_modules.ahk
+path := A_ScriptDir "\limits.db"
+repository := SettingsRepository(path,true)
+state := CreateDefaultSettings()
+state.Profiles := [{Id:"a",Name:"A",Channel:"",Items:[]},{Id:"b",Name:"B",Channel:"",Items:[]}]
+state.SharedDanmakuItems := [{Id:"one",Name:"1",Text:"first",Slot:0},{Id:"two",Name:"2",Text:"second",Slot:0}]
+state.Profiles[1].Items := [{Id:"three",Name:"3",Text:"third",Slot:0}]
+repository.SaveAll(state)
+VerifySettingsRoundTrip(state,repository.Load())
+Assert(true,"exact profile and total item limits allow save and load, including the shared scope")
+for kind in ["profiles","items"] {
+    candidate := CreateDefaultSettings()
+    candidate.Profiles := state.Profiles.Clone(), candidate.SharedDanmakuItems := state.SharedDanmakuItems.Clone()
+    if kind="profiles"
+        candidate.Profiles.Push({Id:"extra",Name:"extra",Channel:"",Items:[]})
+    else
+        candidate.SharedDanmakuItems.Push({Id:"extra",Name:"extra",Text:"extra",Slot:0})
+    baseline := repository.Saved, rejected := false
+    try repository.SaveAll(candidate)
+    catch
+        rejected := true
+    Assert(rejected && repository.Saved=baseline,"over-limit save preserves the published baseline: " kind)
+    VerifySettingsRoundTrip(state,repository.Load())
+    if kind="profiles"
+        repository.Db.Exec("INSERT INTO scopes VALUES('extra','extra',NULL,3)")
+    else
+        repository.Db.Exec("INSERT INTO items VALUES('extra','@shared',3072,'extra','extra',NULL)")
+    original := FileRead(path,"RAW"), baseline := repository.Saved, rejected := false
+    try repository.Load()
+    catch
+        rejected := true
+    actual := FileRead(path,"RAW")
+    Assert(rejected && repository.Saved=baseline,"over-limit load preserves the published baseline: " kind)
+    Assert(actual.Size=original.Size && DllCall("msvcrt\memcmp","Ptr",actual,"Ptr",original,"UPtr",actual.Size,"CDecl Int")=0,"over-limit load preserves database bytes: " kind)
+    repository.Db.Exec("DELETE FROM " (kind="profiles" ? "scopes" : "items") " WHERE id='extra'")
+}
+; A physical growth failure must roll back the update and remain readable.
+candidate := CreateDefaultSettings()
+candidate.SharedDanmakuItems := [{Id:"large",Name:"large",Text:Format("{:1100000}","x"),Slot:0}]
+baseline := repository.Saved, rejected := false
+try repository.SaveAll(candidate)
+catch
+    rejected := true
+Assert(rejected && repository.Saved=baseline && FileGetSize(path)<=1024*1024,"SQLite growth limit rejects the write without publishing its state")
+VerifySettingsRoundTrip(state,repository.Load())
+repository.Close()
+; Check the physical file boundary before SQLite interprets the contents.
+oversize := A_ScriptDir "\oversize.db", oversizeFile := FileOpen(oversize,"w")
+oversizeFile.Length := 1024*1024+1, oversizeFile.Close(), message := ""
+try SettingsRepository(oversize)
+catch as failure
+    message := failure.Message
+Assert(InStr(message,"上限1MiB") && FileGetSize(oversize)=1024*1024+1,"oversized database is rejected before open and left intact")
+FileAppend("PASS: " Checks " storage boundary checks with reduced isolated limits`n","*")
+ExitApp()
+'@
+Invoke-AhkTest -Runtime $limitsRuntime -Source $limitsTests
