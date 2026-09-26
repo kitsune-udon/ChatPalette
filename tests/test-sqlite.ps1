@@ -222,7 +222,7 @@ try {
         Assert(true,"all values survive preference update and reload: " change.Property)
     }
     for index, definition in ShortcutDefinitions() {
-        ; Reuse and mutate the same Map, including the key stored in preferences.
+        ; Every operation uses the same binding table and mutable draft Map.
         preferenceState.ShortcutKeys[definition.Id] := "^+F" index
         before := Integer(preferenceStore.Db.Scalar("SELECT total_changes()"))
         preferenceStore.SavePreferences(preferenceState)
@@ -256,7 +256,7 @@ try {
     callerState.InputProfileId := "preference-profile"
     before := Integer(preferenceStore.Db.Scalar("SELECT total_changes()"))
     preferenceStore.SavePreferences(callerState)
-    Assert(Integer(preferenceStore.Db.Scalar("SELECT total_changes()"))-before=1,"saved baseline stays independent of the loaded preference object and key map")
+    Assert(Integer(preferenceStore.Db.Scalar("SELECT total_changes()"))-before=2,"preference and key changes update their own rows from an independent saved baseline")
     VerifySettingsRoundTrip(callerState,preferenceStore.Load())
     Assert(true,"explicit preference save persists the caller edits after library save")
 } finally preferenceStore.Close()

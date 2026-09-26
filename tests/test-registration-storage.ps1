@@ -42,9 +42,17 @@ Loop 5
 tokens .= "]"
 payload := '{"browser":"fixture","tokens":' tokens '}'
 SaveReactionRegistration(payload)
-Assert(db.Scalar("PRAGMA user_version")="3","schema version")
+Assert(db.Scalar("PRAGMA user_version")="4","schema version")
 snapshot := LoadReactionRegistrationSnapshot()
 Assert(db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="1","saved registration")
+Assert(db.Scalar("SELECT COUNT(*) FROM reaction_registrations WHERE json_type(payload,'$.browser') IS NOT NULL")=0,"browser identity is stored only in its column")
+Assert(db.Scalar("SELECT json_extract(?,'$.profiles[0].browser')",snapshot)=="fixture","snapshot derives browser identity from its column")
+Assert(db.Scalar("SELECT json_extract(?,'$.profiles[0].tokens')",snapshot)==tokens,"snapshot preserves every ordered token")
+failed := false
+try db.Run("UPDATE reaction_registrations SET payload=?",payload)
+catch
+    failed := true
+Assert(failed && LoadReactionRegistrationSnapshot()==snapshot,"database rejects a second browser identity without changing registration")
 reply := SendWorkerRequest(0,"reaction_configure","","Payload=" snapshot "`n")
 Assert(reply.State="configured","worker accepts snapshot over pipe")
 StopBrowserWorker()

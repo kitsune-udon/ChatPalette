@@ -15,7 +15,7 @@ for sql in ["DELETE FROM preferences", "DELETE FROM scopes WHERE id='@shared'",
     "DELETE FROM shortcut_bindings WHERE action='chat_focus'",
     "UPDATE shortcut_bindings SET action='CHAT_FOCUS' WHERE action='chat_focus'",
     "INSERT INTO shortcut_bindings VALUES('CHAT_FOCUS','^!f')",
-    "INSERT INTO shortcut_bindings VALUES('reaction','^+F12')",
+    "DELETE FROM shortcut_bindings WHERE action='reaction'",
     "UPDATE preferences SET reaction_count=7",
     "UPDATE preferences SET reaction_kind=1.5",
     "UPDATE preferences SET reaction_count=10.5",
@@ -41,6 +41,8 @@ for sql in ["DELETE FROM preferences", "DELETE FROM scopes WHERE id='@shared'",
     OpenSettingsRepository(path).SaveAll(state)
     CloseSettingsStore()
     db := SqliteConnection(path)
+    ; Deliberately bypass CHECKs to exercise defensive reads of damaged data.
+    db.Exec("PRAGMA ignore_check_constraints=ON")
     db.Exec(sql), db.Close()
     original := FileRead(path,"RAW"), message := ""
     try LoadSettings(path)
@@ -70,7 +72,7 @@ try {
     VerifySettingsRoundTrip(numericState,numericStore.Load())
     Assert(true,"integral numeric values normalized by SQLite remain readable")
     baseline := numericStore.Saved, rejected := false
-    numericStore.Db.Exec("UPDATE preferences SET reaction_kind=1.5")
+    numericStore.Db.Exec("PRAGMA ignore_check_constraints=ON; UPDATE preferences SET reaction_kind=1.5; PRAGMA ignore_check_constraints=OFF")
     try numericStore.Load()
     catch
         rejected := true
@@ -79,6 +81,32 @@ try {
     VerifySettingsRoundTrip(numericState,numericStore.Load())
     Assert(true,"load succeeds after an explicit repair of the invalid numeric value")
 } finally numericStore.Close()
+; Database constraints reject invalid writes before they become stored state.
+constraintStore := SettingsRepository(A_ScriptDir "\constraints.db",true)
+try {
+    valid := CreateDefaultSettings()
+    valid.SharedDanmakuItems := [{Id:"constraint-item",Name:"kept",Text:"important",Slot:0}]
+    constraintStore.SaveAll(valid)
+    for sql in ["UPDATE items SET id=''", "UPDATE scopes SET id=''",
+        "UPDATE scopes SET name='unexpected' WHERE id='@shared'",
+        "UPDATE scopes SET channel='unexpected' WHERE id='@shared'",
+        "UPDATE scopes SET position=1 WHERE id='@shared'",
+        "UPDATE scopes SET position=0.5", "UPDATE items SET position=1.5",
+        "UPDATE items SET slot=1.5", "UPDATE preferences SET active_scope='@shared'",
+        "UPDATE preferences SET auto_mode=0.5", "UPDATE preferences SET reaction_kind=1.5",
+        "UPDATE preferences SET reaction_kind=0", "UPDATE preferences SET reaction_count=0",
+        "UPDATE preferences SET reaction_count=10.5", "UPDATE preferences SET reaction_interval=-1",
+        "UPDATE preferences SET reaction_interval=200.5",
+        "UPDATE preferences SET reaction_kind=CAST('1' AS BLOB)"] {
+        rejected := false
+        try constraintStore.Db.Exec(sql)
+        catch
+            rejected := true
+        Assert(rejected,"database rejects invalid write: " sql)
+        VerifySettingsRoundTrip(valid,constraintStore.Load())
+        constraintStore.Db.CheckIntegrity()
+    }
+} finally constraintStore.Close()
 state := CreateDefaultSettings()
 OpenSettingsRepository(path).SaveAll(state)
 VerifySettingsRoundTrip(state,LoadSettings(path))

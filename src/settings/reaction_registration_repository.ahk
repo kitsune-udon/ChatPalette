@@ -1,6 +1,6 @@
 ﻿; Durable browser registrations. JSON is a validated document inside SQLite, never a second settings file.
 CreateReactionRegistrationSchema(db) {
-    db.Exec("CREATE TABLE reaction_registrations(browser TEXT PRIMARY KEY NOT NULL, payload TEXT NOT NULL CHECK(json_valid(payload)))")
+    db.Exec("CREATE TABLE reaction_registrations(browser TEXT PRIMARY KEY NOT NULL CHECK(browser!=''), payload TEXT NOT NULL CHECK(json_valid(payload) AND json_type(payload)='object' AND json_type(payload,'$.browser') IS NULL))")
 }
 ValidateReactionRegistration(db,payload) {
     if StrPut(payload,"UTF-8")>8192 || db.Scalar("SELECT json_valid(?)",payload) != "1"
@@ -31,14 +31,14 @@ ApplyReactionRegistration(repository,payload) {
     repository.VerifyDataVersion()
     db := repository.Db
     browser := ValidateReactionRegistration(db,payload)
-    db.Run("INSERT INTO reaction_registrations VALUES(?,json_set(?,'$.browser',?)) ON CONFLICT(browser) DO UPDATE SET payload=excluded.payload",browser,payload,browser)
+    db.Run("INSERT INTO reaction_registrations VALUES(?,json_remove(?,'$.browser')) ON CONFLICT(browser) DO UPDATE SET payload=excluded.payload",browser,payload)
     ; Keep the complete startup snapshot within the existing pipe frame limit.
-    if Integer(db.Scalar("SELECT COALESCE(SUM(length(CAST(payload AS BLOB))),0) FROM reaction_registrations"))>24000
+    if Integer(db.Scalar("SELECT COALESCE(SUM(length(CAST(json_set(payload,'$.browser',browser) AS BLOB))),0) FROM reaction_registrations"))>24000
         throw Error("リアクション登録情報の合計サイズが上限を超えています。")
 }
 LoadReactionRegistrationSnapshot() {
     db := OpenSettingsRepository(SettingsDatabasePath).Db
-    return db.Scalar("SELECT json_object('version',1,'profiles',json_group_array(json(payload))) FROM reaction_registrations")
+    return db.Scalar("SELECT json_object('version',1,'profiles',json_group_array(json_set(payload,'$.browser',browser))) FROM reaction_registrations")
 }
 HasReactionRegistration(browser) {
     db := OpenSettingsRepository(SettingsDatabasePath).Db

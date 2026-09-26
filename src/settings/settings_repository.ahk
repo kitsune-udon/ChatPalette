@@ -1,6 +1,7 @@
 ﻿; SQLite schema and persistence. No UI, shortcut registration, or browser ownership.
 class SettingsRepository {
     static ApplicationId := 1129335892
+    static SchemaVersion := 4
     __New(path, create := false) {
         if FileExist(path) && FileGetSize(path)>SettingsLimits.DatabaseBytes
             throw Error("設定データベースが上限" (SettingsLimits.DatabaseBytes//1024//1024) "MiBを超えています。")
@@ -14,7 +15,7 @@ class SettingsRepository {
                 if this.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
                     throw Error("ChatPaletteの設定データベースではありません。")
                 version := this.Db.Scalar("PRAGMA user_version")
-                if version != "3"
+                if version != SettingsRepository.SchemaVersion
                     throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
                 this.Db.ConfigureStorage()
             }
@@ -32,10 +33,10 @@ class SettingsRepository {
         }
     }
     CreateSchema() {
-        this.Db.Exec("CREATE TABLE scopes(id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, channel TEXT UNIQUE, position INTEGER NOT NULL CHECK(position>=0));"
-            . "CREATE TABLE items(id TEXT PRIMARY KEY NOT NULL, scope_id TEXT NOT NULL REFERENCES scopes(id) ON DELETE CASCADE, position INTEGER NOT NULL, name TEXT NOT NULL, body TEXT NOT NULL, slot INTEGER CHECK(slot IS NULL OR slot IN(1,2)), UNIQUE(scope_id,position), UNIQUE(scope_id,slot));"
-            . "CREATE TABLE preferences(id INTEGER PRIMARY KEY CHECK(id=1), active_scope TEXT REFERENCES scopes(id) ON DELETE SET NULL, auto_mode INTEGER NOT NULL CHECK(auto_mode IN(0,1)), reaction_kind INTEGER NOT NULL, reaction_count INTEGER NOT NULL, reaction_interval INTEGER NOT NULL, reaction_key TEXT NOT NULL);"
-            . "PRAGMA application_id=" SettingsRepository.ApplicationId "; PRAGMA user_version=3")
+        this.Db.Exec("CREATE TABLE scopes(id TEXT PRIMARY KEY NOT NULL CHECK(id!=''), name TEXT NOT NULL, channel TEXT UNIQUE, position INTEGER NOT NULL CHECK(typeof(position)='integer' AND position>=0), CHECK(id!='@shared' OR (name='' AND channel IS NULL AND position=0)));"
+            . "CREATE TABLE items(id TEXT PRIMARY KEY NOT NULL CHECK(id!=''), scope_id TEXT NOT NULL REFERENCES scopes(id) ON DELETE CASCADE, position INTEGER NOT NULL CHECK(typeof(position)='integer'), name TEXT NOT NULL, body TEXT NOT NULL, slot INTEGER CHECK(slot IS NULL OR (typeof(slot)='integer' AND slot IN(1,2))), UNIQUE(scope_id,position), UNIQUE(scope_id,slot));"
+            . "CREATE TABLE preferences(id INTEGER PRIMARY KEY CHECK(id=1), active_scope TEXT REFERENCES scopes(id) ON DELETE SET NULL CHECK(active_scope IS NULL OR active_scope!='@shared'), auto_mode INTEGER NOT NULL CHECK(typeof(auto_mode)='integer' AND auto_mode IN(0,1)), reaction_kind INTEGER NOT NULL CHECK(typeof(reaction_kind)='integer' AND reaction_kind>=1), reaction_count INTEGER NOT NULL CHECK(typeof(reaction_count)='integer' AND reaction_count>0), reaction_interval INTEGER NOT NULL CHECK(typeof(reaction_interval)='integer' AND reaction_interval>=0));"
+            . "PRAGMA application_id=" SettingsRepository.ApplicationId "; PRAGMA user_version=" SettingsRepository.SchemaVersion)
         CreateReactionRegistrationSchema(this.Db)
         CreateShortcutSchema(this.Db)
     }
@@ -70,7 +71,7 @@ class SettingsRepository {
             scope.Items.Push(item)
             scope.Rows[item.Id] := CreateStorageRow(item,position)
         }
-        prefs := this.Db.Rows("SELECT active_scope,auto_mode,reaction_kind,reaction_count,reaction_interval,reaction_key FROM preferences WHERE id=1")
+        prefs := this.Db.Rows("SELECT active_scope,auto_mode,reaction_kind,reaction_count,reaction_interval FROM preferences WHERE id=1")
         if prefs.Length != 1
             throw Error("共通設定がありません。")
         row := prefs[1]
@@ -79,7 +80,7 @@ class SettingsRepository {
             throw Error("選択中の配信者がありません。")
         state.AutoMode := this.ReadInteger(row[2]), state.DefaultReactionKind := this.ReadInteger(row[3]), state.DefaultReactionCount := this.ReadInteger(row[4])
         state.DefaultReactionIntervalMs := this.ReadInteger(row[5])
-        state.ShortcutKeys := ReadShortcutKeys(this.Db,row[6])
+        state.ShortcutKeys := ReadShortcutKeys(this.Db)
         ValidateSettingsPreferences(state)
         validated := BuildLibraryStoragePlan(state,scopes,true)
         for id, scope in scopes
@@ -143,13 +144,12 @@ class SettingsRepository {
             || preferences.AutoMode != previous.AutoMode || preferences.DefaultReactionKind != previous.DefaultReactionKind
             || preferences.DefaultReactionCount != previous.DefaultReactionCount
             || preferences.DefaultReactionIntervalMs != previous.DefaultReactionIntervalMs
-            || !(preferences.ShortcutKeys["reaction"] == previous.ShortcutKeys["reaction"])
         if baseChanged
-            this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?,?)",
+            this.Db.Run("INSERT OR REPLACE INTO preferences VALUES(1,NULLIF(?,''),?,?,?,?)",
                 preferences.InputProfileId,preferences.AutoMode,preferences.DefaultReactionKind,
-                preferences.DefaultReactionCount,preferences.DefaultReactionIntervalMs,preferences.ShortcutKeys["reaction"])
+                preferences.DefaultReactionCount,preferences.DefaultReactionIntervalMs)
         for action, key in preferences.ShortcutKeys {
-            if action != "reaction" && (!previous || !(key == previous.ShortcutKeys[action]))
+            if !previous || !(key == previous.ShortcutKeys[action])
                 this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=?",key,action)
         }
         return version
