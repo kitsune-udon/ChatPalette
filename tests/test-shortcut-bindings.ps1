@@ -7,16 +7,20 @@ Invoke-AhkTest -Runtime $startup -Source @'
 #Include %A_ScriptDir%\src\app\app_modules.ahk
 global ApplicationShortcutsInstalled := false, ShortcutKeys := DefaultShortcutKeys()
 global StartupBindings := Map(), StartupCalls := [], StartupFailure := "shared1", CleanupFailure := ""
-global PublishedDuringInstall := false
+global PublishedDuringInstall := false, StartupFailureRecord := 0
 RuntimePorts.ShortcutKey := StartupBindingAdapter
 ApplyPreferences(CreateDefaultSettings(),false)
 Assert(!ApplicationShortcutsInstalled && StartupCalls.Length=0,"loading preferences before startup does not register hotkeys")
 ShortcutKeys["chat_clear"] := "", ShortcutKeys["palette"] := "^+q"
-beforeCritical := A_IsCritical, message := ""
+beforeCritical := A_IsCritical, message := "", caught := 0
 try InstallApplicationShortcuts()
-catch as failure
-    message := failure.Message
+catch as failure {
+    message := failure.Message, caught := failure
+}
 Assert(InStr(message,"startup registration failure"),"initial registration reports its failure")
+Assert(caught=StartupFailureRecord.Error && caught is ValueError && caught.Stack==StartupFailureRecord.Stack
+    && caught.File==StartupFailureRecord.File && caught.Line=StartupFailureRecord.Line && caught.Extra=="startup detail",
+    "successful rollback preserves the original registration exception and location")
 Assert(!ApplicationShortcutsInstalled,"failed initial registration is not published as installed")
 Assert(!PublishedDuringInstall,"initial registration remains unpublished while bindings are being installed")
 Assert(StartupBindings.Count=0,"failed initial registration removes every installed binding")
@@ -34,22 +38,29 @@ InstallApplicationShortcuts()
 Assert(StartupCalls.Length=callCount,"repeated installation does not register the same bindings again")
 ; Simulate a new startup whose rollback has one failure; other cleanup must continue.
 ApplicationShortcutsInstalled := false, StartupBindings := Map(), StartupCalls := []
-StartupFailure := "shared1", CleanupFailure := "palette", message := ""
+StartupFailure := "shared1", CleanupFailure := "palette", message := "", caught := 0
 try InstallApplicationShortcuts()
-catch as failure
-    message := failure.Message
+catch as failure {
+    message := failure.Message, caught := failure
+}
 Assert(InStr(message,"startup registration failure") && InStr(message,"startup cleanup failure")
     && InStr(message,"再起動"),"incomplete startup rollback reports original and cleanup failures")
+Assert(caught=StartupFailureRecord.Error && caught is ValueError && caught.Stack==StartupFailureRecord.Stack
+    && caught.File==StartupFailureRecord.File && caught.Line=StartupFailureRecord.Line && caught.Extra=="startup detail",
+    "incomplete rollback preserves the original registration exception and location")
 Assert(!ApplicationShortcutsInstalled && StartupBindings.Count=1 && StartupBindings.Has("palette"),"failed cleanup does not prevent remaining bindings from being removed")
 Assert(A_IsCritical=beforeCritical,"cleanup failure restores caller interruption state")
 FileAppend("PASS: " Checks " shortcut installation checks`n","*")
 ExitApp()
 StartupBindingAdapter(action,key,enabled) {
-    global PublishedDuringInstall
+    global PublishedDuringInstall, StartupFailureRecord
     PublishedDuringInstall := PublishedDuringInstall || ApplicationShortcutsInstalled
     StartupCalls.Push({Action:action,Key:key,Enabled:enabled})
-    if enabled && action=StartupFailure
-        throw Error("startup registration failure")
+    if enabled && action=StartupFailure {
+        failure := ValueError("startup registration failure",,"startup detail")
+        StartupFailureRecord := {Error:failure,Stack:failure.Stack,File:failure.File,Line:failure.Line}
+        throw failure
+    }
     if !enabled && action=CleanupFailure
         throw Error("startup cleanup failure")
     if enabled
@@ -90,6 +101,7 @@ rejected := false, persistenceFailure := ""
 try SaveShortcutMap(keys)
 catch as failure {
     rejected := true, persistenceFailure := failure.Message
+    persistenceOrigin := {Type:Type(failure),File:failure.File,Line:failure.Line,Extra:failure.Extra}
 }
 SettingsDatabasePath := savedPath
 Assert(rejected && GetShortcutKey("chat_focus")=baseline["chat_focus"],"persistence failure restores active key")
@@ -102,10 +114,11 @@ Assert(rejected && GetShortcutKey("chat_focus")=baseline["chat_focus"],"registra
 FailBinding := ""
 keys := baseline.Clone(), keys["chat_focus"] := "^+f", keys["chat_clear"] := "^+d", keys["reactions_show"] := "^+e"
 FailCleanup := keys["chat_focus"], FailRestore := baseline["chat_focus"], BindingCalls := []
-SettingsDatabasePath := A_ScriptDir "\missing\keys.db", rollbackMessage := ""
+SettingsDatabasePath := A_ScriptDir "\missing\keys.db", rollbackMessage := "", rollbackError := 0
 try SaveShortcutMap(keys)
-catch as failure
-    rollbackMessage := failure.Message
+catch as failure {
+    rollbackMessage := failure.Message, rollbackError := failure
+}
 SettingsDatabasePath := savedPath
 cleanupAttempts := 0, restoreAttempts := 0
 for call in BindingCalls {
@@ -117,6 +130,9 @@ for call in BindingCalls {
 Assert(cleanupAttempts=3 && restoreAttempts=3,"rollback attempts every removal and restoration despite two failures")
 Assert(InStr(rollbackMessage,persistenceFailure) && InStr(rollbackMessage,"synthetic cleanup failure")
     && InStr(rollbackMessage,"synthetic restore failure") && InStr(rollbackMessage,"再起動"),"incomplete rollback reports original cause and every recovery failure")
+Assert(Type(rollbackError)==persistenceOrigin.Type && rollbackError.File==persistenceOrigin.File
+    && rollbackError.Line=persistenceOrigin.Line && rollbackError.Extra==persistenceOrigin.Extra,
+    "failed key recovery retains the same underlying storage failure location and details")
 persisted := LoadSettings(SettingsDatabasePath).ShortcutKeys
 Assert(persisted["chat_focus"]==baseline["chat_focus"] && GetShortcutKey("chat_focus")==baseline["chat_focus"],"incomplete native rollback does not publish or persist the rejected draft")
 FailCleanup := "", FailRestore := ""

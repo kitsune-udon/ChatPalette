@@ -70,7 +70,7 @@ CommitShortcutBindings(previous,next,commit := 0) {
                 recoveryFailures .= "`n以前の割当の復元（" ShortcutKeyLabel(previous.Get(action, "")) "）: " recoveryFailure.Message
         }
         if recoveryFailures != ""
-            throw Error(failure.Message "`n一部のキー割当を元に戻せませんでした。ChatPaletteを再起動してください。" recoveryFailures)
+            failure.Message .= "`n一部のキー割当を元に戻せませんでした。ChatPaletteを再起動してください。" recoveryFailures
         throw failure
     }
 }
