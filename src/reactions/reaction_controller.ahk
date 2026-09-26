@@ -147,9 +147,12 @@ ReactionCountdown() {
         }
         if !SetReactionJobPhase(job,"running")
             return
-        point := Buffer(8, 0)
-        DllCall("GetPhysicalCursorPos", "Ptr", point)
-        extra := "Reaction=" job.Choice "`nX=" NumGet(point, 0, "Int") "`nY=" NumGet(point, 4, "Int") "`n"
+        extra := ""
+        if job.Mode = "reaction_capture" {
+            point := Buffer(8, 0)
+            DllCall("GetPhysicalCursorPos", "Ptr", point)
+            extra := "X=" NumGet(point, 0, "Int") "`nY=" NumGet(point, 4, "Int") "`n"
+        }
         started := AppClockMs()
         reply := RequestBrowserOperation(job.Window, job.Mode, job.Video, extra)
         if ActiveReactionJob != job
