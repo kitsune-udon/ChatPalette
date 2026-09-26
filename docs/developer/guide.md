@@ -8,15 +8,17 @@ Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。ブ�
 
 実行確認はWindows 11・64bit版AutoHotkey v2で行っています。これ以外の環境を対応済みとする場合は、その環境で保存・ブラウザー検出・入力・配布の検証を追加してください。
 
-リポジトリを取得したら、通常利用するアプリとは**別フォルダー**を開発用に使います。同じスクリプトの起動は `#SingleInstance Force` により既存インスタンスを置き換えます。構文確認だけでも、正式版のパスを使って実行しないでください。
+リポジトリを取得したら、通常利用するアプリとは**別フォルダー**を開発用に使います。同じスクリプトの通常起動や`--smoke`・`--quiet`・`--check`は、`#SingleInstance Force`により既存インスタンスを置き換えます。
+
+構文確認にはAutoHotkey標準の[`/Validate`](https://github.com/AutoHotkey/AutoHotkeyDocs/blob/v2/docs/Scripts.htm#validate)を使います。スクリプトを実行せず、動作中のアプリを置き換えずに確認できます。既存の`--check`も受け付けますが、構文確認の手順では使用しません。
 
 `main.ahk`は引数なし、または`--check`・`--smoke`・`--quiet`のいずれか一つを指定して起動します。未知の引数や複数指定は、設定の読み込み・画面構築前に標準エラーへ理由を出して終了コード1で終了します。
 
 以下の例はリポジトリ直下で実行します。AutoHotkeyのインストール場所が違う場合は読み替えます。 配布・検査・テスト・計測コマンドは、未知の引数名を処理開始前に拒否します。引数名の誤記を既定値での実行として扱いません。
 
 ```powershell
-# 構文を読み込み、アプリ初期化前に終了
-& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' /ErrorStdOut .\main.ahk --check
+# 実行せずに構文を確認。動作中のアプリとdata/は変更しない
+& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' /ErrorStdOut /Validate .\main.ahk
 
 # 設定読み込みと画面構築を行って終了。data/を作る場合がある
 & 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' /ErrorStdOut .\main.ahk --smoke

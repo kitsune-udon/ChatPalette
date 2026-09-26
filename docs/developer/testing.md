@@ -64,7 +64,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | 登録保存・同期・表示 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 登録の検証・保存・同期を区別し、中止時と同期失敗時のデータ・失敗理由を保全。再同期まで操作を拒否。登録状態の表示はDBを直接読み、通信・操作制限・診断更新を行わない |
 | 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有 |
 | 設定整合性 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・空・不正な設定やIDを拒否し、呼び出し元データとDB原本を保持 |
-| 起動・復旧 | [test-startup.ps1](../../tests/test-startup.ps1) | 空・破損DBの原本保持、初期作成中断後の再試行 |
+| 起動・復旧 | [test-startup.ps1](../../tests/test-startup.ps1) | 標準の`/Validate`による構文検査・起動中プロセスとDBの保持、空・破損DBの原本保持、初期作成中断後の再試行 |
 | 空のライブラリ | [test-empty-settings.ps1](../../tests/test-empty-settings.ps1) | 新規状態・最後の削除・配信者なしの共通弾幕・再読み込み |
 | 画面復帰 | [test-palette-return.ps1](../../tests/test-palette-return.ps1) | 画面復帰時の編集反映、入力対象の独立、処理中の表示・復帰の拒否 |
 | 順序操作 | [test-management-order.ps1](../../tests/test-management-order.ps1) | 上下移動後の保存順・選択・スクロールの保持 |
@@ -138,7 +138,7 @@ GUI操作では、前提と結果を別々に確認します。最前面であ�
 
 生成した入口は`Assert(条件, 説明)`と、プロセスごとに0から始まる成功件数`Checks`も提供します。成功時だけ件数を増やし、失敗時は呼び出し元の位置を記録して終了コード1で終了します。製品側の`catch`が判定失敗を捕捉して成功終了に変えることはできません。故障の注入には通常の`Error`を使い、期待結果の判定には`Assert`を使います。個別テストで同じ判定関数やカウンターを再定義する必要はありません。操作回数などシナリオ固有の観測値は、そのテスト内で管理します。
 
-このエラーハンドラーはテスト入口だけに追加します。`InitializeApplication`を使う試験は、設定DB・ワーカーの終了コールバックも製品の初期化に任せ、個別シナリオから再登録しません。画面テストと計測は`InitializeApplication(false)`で起動失敗時の復旧ダイアログ待ちを避けます。テスト入口へ製品用のコマンド引数は渡しません。製品の`main.ahk`と`--check`・`--smoke`・不正引数の拒否は起動テストで別途確認します。通知表示や処理中のボタン状態は、初期化不要の試験に持ち込まず、対応する画面テストで確認します。
+このエラーハンドラーはテスト入口だけに追加します。`InitializeApplication`を使う試験は、設定DB・ワーカーの終了コールバックも製品の初期化に任せ、個別シナリオから再登録しません。画面テストと計測は`InitializeApplication(false)`で起動失敗時の復旧ダイアログ待ちを避けます。テスト入口へ製品用のコマンド引数は渡しません。製品の`main.ahk`、AutoHotkeyの`/Validate`、既存の`--check`・`--smoke`・不正引数の拒否は起動テストで別途確認します。通知表示や処理中のボタン状態は、初期化不要の試験に持ち込まず、対応する画面テストで確認します。
 
 PowerShell側も`support.ps1`の`Assert 条件 説明`と`$script:checks`を共有します。判定失敗は呼び出し元のファイル・行を標準エラーへ記録してから例外を出します。製品の`catch`や疑似UI要素の`ScriptProperty`・`ScriptMethod`が例外を吸収しても、ランナーがこの記録を検出して失敗とし、調査用コピーを残します。故障注入には通常の`throw`、呼ばれてはいけない処理には`Assert $false`を使います。プロセスを強制終了せず、シナリオの`finally`による後始末を維持します。
 

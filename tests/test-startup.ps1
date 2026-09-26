@@ -3,11 +3,14 @@
 $release = New-TestRuntime
 [IO.File]::WriteAllText((Join-Path $release 'VERSION'),"99.98.97-test`r`n",[Text.UTF8Encoding]::new($false))
 $dbPath = Join-Path $release 'data\settings.db'
-function Run-Startup([string[]]$Options=@('--smoke')) {
-    $arguments = @('/ErrorStdOut', ('"' + (Join-Path $release 'main.ahk') + '"')) + $Options
+function Run-Startup([string[]]$Options=@('--smoke'), [switch]$Validate) {
+    $arguments = @('/ErrorStdOut')
+    if ($Validate) { $arguments += '/Validate' }
+    $arguments += @(('"' + (Join-Path $release 'main.ahk') + '"')) + $Options
     $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $release 'error.txt')
     return Wait-TestProcess -Process $run -TimeoutMs 10000
 }
+if ((Run-Startup -Validate) -ne 0 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Native validation initialized application data' }
 if ((Run-Startup -Options '--check') -ne 0 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Syntax check initialized application data' }
 foreach ($options in @(@('--smkoe'),@('--check','unexpected'),@('--smoke','unexpected'),@('--quiet','unexpected'))) {
     if ((Run-Startup -Options $options) -ne 1 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Invalid startup arguments initialized the application' }
@@ -47,4 +50,30 @@ if ((Run-Startup) -ne 0) { throw 'Existing database startup failed' }
 if ((Get-FileHash -LiteralPath $dbPath).Hash -ne $before) { throw 'Startup unexpectedly rewrote settings' }
 Invoke-AppTest -Runtime $release -Body 'Assert(AppVersion == "99.98.97-test","displayed version excludes the file line ending")
 ExitApp()'
-Write-Output 'PASS: startup argument validation, explicit unattended initialization, invalid database preservation, interrupted creation, retry and unchanged startup'
+# Native syntax validation must not replace an existing instance at the same path.
+$mainPath = Join-Path $release 'main.ahk'
+$mainSource = [IO.File]::ReadAllText($mainPath)
+$ready = Join-Path $release 'ready'
+Edit-TestSource $release 'main.ahk' 'UpdateTray()' ('UpdateTray()' + "`r`nFileAppend(""ready"",A_ScriptDir ""\ready"")")
+$live = $null
+$before = (Get-FileHash -LiteralPath $dbPath).Hash
+try {
+    $live = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"' + $mainPath + '"'),'--quiet' -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $release 'live-error.txt')
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while (!(Test-Path -LiteralPath $ready) -and !$live.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+    if ($live.HasExited -or !(Test-Path -LiteralPath $ready)) { throw 'Isolated application did not finish startup' }
+    if ((Run-Startup -Validate) -ne 0 -or $live.HasExited) { throw 'Native validation replaced the running application' }
+    [IO.File]::AppendAllText($mainPath,"`r`nunterminated := (`r`n",[Text.UTF8Encoding]::new($true))
+    if ((Run-Startup -Validate) -eq 0 -or $live.HasExited) { throw 'Invalid source was accepted or the running application was replaced' }
+    if (!(Get-Item -LiteralPath (Join-Path $release 'error.txt')).Length) { throw 'Native validation did not report the syntax error' }
+} finally {
+    try { [IO.File]::WriteAllText($mainPath,$mainSource,[Text.UTF8Encoding]::new($true)) }
+    finally {
+        if ($null -ne $live) {
+            if (!$live.HasExited) { $live.Kill() }
+            $null = Wait-TestProcess -Process $live -TimeoutMs 10000
+        }
+    }
+}
+if ((Get-FileHash -LiteralPath $dbPath).Hash -ne $before) { throw 'Native validation changed the application database' }
+Write-Output 'PASS: native syntax validation without replacing a running app, startup argument validation, explicit unattended initialization, invalid database preservation, interrupted creation, retry and unchanged startup'
