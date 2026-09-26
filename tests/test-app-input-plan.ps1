@@ -132,8 +132,15 @@ Invoke-AppFixture -Body @'
     RefreshPalette()
     for ordering in [[2,"Sort"],[2,"SortDesc"],[1,"Sort"],[3,"SortDesc"]] {
         PaletteList.ModifyCol(ordering[1],ordering[2])
-        Loop PaletteList.GetCount() {
-            index := A_Index, id := PaletteList.GetText(index,4), item := expected[id]
+        ; Visit every fixture ID once even if equal sort values exchange positions.
+        for id, item in expected {
+            index := 0
+            Loop PaletteList.GetCount()
+                if PaletteList.GetText(A_Index,4)==id {
+                    index := A_Index
+                    break
+                }
+            Assert(index>0,"sorted fixture still contains the item " id)
             PaletteList.Modify(0,"-Select"), PaletteList.Modify(index,"Select Focus")
             PreviewPaletteItem()
             Assert(PaletteList.GetText(index,1)==(item.ProfileId="" ? "共通" : "配信者")
@@ -143,6 +150,13 @@ Invoke-AppFixture -Body @'
             Assert(GetEditingProfileId()==item.ProfileId && ManagedList.GetNext()=item.Index
                 && ManagedList.GetText(ManagedList.GetNext(),4)==id,"sorted selection opens the matching library item " id)
             Assert(InputProfileId=="sort-profile","opening sorted shared/profile items preserves the input profile")
+            ; Input starts from the palette, never from its hidden controls behind management.
+            ReturnToPalette()
+            PaletteList.ModifyCol(ordering[1],ordering[2])
+            Assert(RequireTestWindowActive(PaletteWindow.Hwnd) && !DllCall("IsWindowVisible","Ptr",ManagementWindow.Hwnd),
+                "sorted input starts with the palette active and management hidden")
+            Assert(PaletteList.GetNext()>0 && PaletteList.GetText(PaletteList.GetNext(),4)==id,
+                "returning to the sorted palette preserves the selected identity " id)
             before := sent.Length, foregroundChecks.Length := 0
             InsertPaletteItem()
             Assert(sent.Length=before+1 && sent[-1]==item.Text,"sorted input sends exactly the displayed item " id
