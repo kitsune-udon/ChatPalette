@@ -16,7 +16,10 @@ foreach($file in @(Get-ReleaseFiles $ProjectRoot)) {
     if ($file.Extension -eq '.ps1') {
         $tokens=$null; $errors=$null
         $null=[Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors)
-        if ($errors.Count) { throw "PowerShell parse failure: $($file.Name): $($errors[0].Message)" }
+        if ($errors.Count) {
+            $parseError = $errors[0]
+            throw "PowerShell parse failure: $($file.FullName):$($parseError.Extent.StartLineNumber):$($parseError.Extent.StartColumnNumber): $($parseError.Message)"
+        }
     }
     # Application Gui.Show calls belong only to the shared presenter (menus/viewport wrappers excluded).
     if ($file.Extension -eq '.ahk' -and $file.Name -ne 'window_presenter.ahk' -and

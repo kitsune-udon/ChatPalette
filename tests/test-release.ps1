@@ -19,15 +19,20 @@ $sourceProcess=Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -Arg
 if ((Wait-TestProcess -Process $sourceProcess -TimeoutMs 30000) -ne 0 -or [IO.File]::ReadAllText($sourceOut) -notmatch '^PASS:') {
     throw ('Direct source validation failed: '+[IO.File]::ReadAllText($sourceError))
 }
-foreach($invalid in @('version','encoding','link')) {
-    $target=Join-Path $release $(if($invalid -eq 'version') {'VERSION'} elseif($invalid -eq 'encoding') {'main.ahk'} else {'README.md'})
+foreach($invalid in @('version','encoding','link','syntax')) {
+    $target=Join-Path $release $(if($invalid -eq 'version') {'VERSION'} elseif($invalid -eq 'encoding') {'main.ahk'} elseif($invalid -eq 'syntax') {'src\browser\page_actions.ps1'} else {'README.md'})
     $original=[IO.File]::ReadAllBytes($target)
     try {
         if($invalid -eq 'version') { [IO.File]::WriteAllText($target,'invalid-version') }
         elseif($invalid -eq 'encoding') { [IO.File]::WriteAllText($target,"#Requires AutoHotkey v2.0`n",[Text.UTF8Encoding]::new($false)) }
+        elseif($invalid -eq 'syntax') { [IO.File]::WriteAllText($target,"# syntax fixture`r`n`r`n    )`r`n",[Text.UTF8Encoding]::new($true)) }
         else { [IO.File]::AppendAllText($target,"`n[missing](not-a-real-file.md)`n",[Text.UTF8Encoding]::new($false)) }
         $rejected=$false
-        try { & (Join-Path $release 'scripts\check-source.ps1') -ProjectRoot $release | Out-Null } catch { $rejected=$true }
+        try { & (Join-Path $release 'scripts\check-source.ps1') -ProjectRoot $release | Out-Null }
+        catch {
+            if ($invalid -eq 'syntax' -and !$_.Exception.Message.StartsWith("PowerShell parse failure: ${target}:3:5: ")) { throw }
+            $rejected=$true
+        }
         if(!$rejected) { throw "Source validator accepted invalid $invalid" }
     } finally { [IO.File]::WriteAllBytes($target,$original) }
 }
