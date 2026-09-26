@@ -16,6 +16,15 @@ Invoke-AppFixture -Body @'
     Assert(RunPageAction("chat_focus",123) && Sent.Length=1 && Sent[1]="first draft","focus then one input succeeds")
     Assert(Calls.Length=3 && Calls[3].Mode="verify_chat" && Calls[3].Extra="FocusToken=proof","delivery pins exact focus token")
     Assert(!ActivePageAction && !IsBrowserOperationBusy && LastBrowserOperation.State="inserted","completed queue releases state")
+    for character in [Chr(8),Chr(9)] {
+        invalidBody := "prefix" character "suffix"
+        invalid := ExecuteDanmakuCommand("add","","",{Name:"control character",Text:invalidBody,Slot:1})
+        Sent := [], Calls := []
+        Assert(!RunPageAction("chat_focus",123) && !Sent.Length && LastBrowserOperation.State="invalid_text","queued control characters never reach the input adapter")
+        Assert(!ActivePageAction && !IsBrowserOperationBusy && InStr(PaletteHint.Text,"弾幕を編集"),"rejected queued text releases ownership and explains the correction")
+        Assert(LoadSettings(SettingsDatabasePath).SharedDanmakuItems[invalid.Index].Text==invalidBody,"input rejection preserves the original stored body")
+        UndoLibraryCommand()
+    }
     ; Cross the 32-bit uptime boundary without a multi-day or five-second wait.
     global QueueClock := 0
     RuntimePorts.Clock := (*) => QueueClock

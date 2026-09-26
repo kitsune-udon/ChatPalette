@@ -35,6 +35,15 @@ literal := "日本語の弾幕 {Enter} ^!+#"
 result := SendInputText(literal)
 Sleep(100)
 Assert(result.State="inserted" && FixtureChat.Value=literal,"IME-off delivery preserves Unicode and literal key syntax")
+for character in [Chr(8),Chr(9),Chr(10),Chr(13)] {
+    FixtureChat.Value := "unchanged", FixtureChat.Focus()
+    result := SendInputText("prefix" character "suffix")
+    Sleep(50)
+    Assert(result.State="invalid_text","control character is rejected before native input: " Ord(character) " state=" result.State " text=" FixtureChat.Value)
+    Assert(FixtureChat.Value="unchanged" && DllCall("GetFocus","Ptr")=FixtureChat.Hwnd,"rejected text changes neither content nor focus")
+}
+ShowInputFailure("invalid_text")
+Assert(InStr(PaletteHint.Text,"制御文字") && InStr(PaletteHint.Text,"弾幕を編集"),"invalid text explains how to correct the stored body")
 ExecuteDanmakuCommand("add","","",{Name:"queued",Text:"queued text",Slot:1})
 global QueueSent := []
 RuntimePorts.Text := (text) => QueueSent.Push(text)

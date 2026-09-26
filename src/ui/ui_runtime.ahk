@@ -56,7 +56,7 @@ EndWorkerWait(view) {
 }
 
 ShowInputFailure(state) {
-    if state = "unknown" {
+    if state = "unknown" || state = "invalid_text" {
         info := BrowserResultInfo(state)
         PaletteHint.Text := info.Summary "。" info.Advice
     } else

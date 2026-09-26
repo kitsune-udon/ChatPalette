@@ -13,12 +13,14 @@ BrowserResultInfo(state) {
         "configured","設定済み（認識は未確認）", "ready","操作対象を確認できました", "operated","ボタンを操作しました（受理は未確認）",
         "chat_missing","入力可能なチャット欄が見つかりません", "chat_ambiguous","チャット入力欄が複数あります",
         "focus_failed","チャット欄へのフォーカス移動を確認できませんでした",
+        "invalid_text","本文に文字入力できない制御文字が含まれています",
         "wrong_input","入力欄を確認できませんでした", "changed","動画が変わったため中止しました",
         "wrong_window","操作先が変わったため中止しました", "unavailable","情報を取得できませんでした",
         "unknown","操作結果を確認できませんでした", "cancelled","中止しました", "not_registered","操作ボタンが未登録です",
         "menu_closed","リアクションメニューが見つかりません", "unsupported","操作対象を識別できませんでした",
         "save_failed","登録情報を保存できませんでした", "sync_failed","登録情報を同期できませんでした")
     static advice := Map("chat_missing","チャットの表示と入力可能な状態を確認してください。",
+        "invalid_text","弾幕を編集し、タブ・改行などの制御文字を取り除いてください。",
         "chat_ambiguous","操作する欄をクリックしてください。", "focus_failed","入力欄をクリックしてください。",
         "wrong_input","入力欄をクリックしてやり直してください。", "unsupported","YouTube側の操作対象を確認してください。",
         "unknown","自動では再実行しません。", "unavailable","YouTubeの動画ページを最前面にしてやり直してください。")
