@@ -108,8 +108,8 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
         if rows.Has(item.Id)
             throw Error("弾幕の識別子が重複しています。")
         priorRow := previous.Get(item.Id,0)
-        unchanged := !force && priorRow && priorRow.Item = item
-        if !unchanged {
+        sameItem := priorRow && priorRow.Item = item
+        if force || !sameItem {
             ValidateSettingsText(item.Name,"弾幕名",true)
             ValidateSettingsText(item.Text,"弾幕本文",true)
         }
@@ -120,7 +120,9 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
             throw Error("弾幕キーの割当が重複または不正です。")
         if slot
             slots[slot] := true
-        row := unchanged ? priorRow : CreateStorageRow(item,priorRow ? priorRow.Position : 0)
+        ; Forced validation still runs above; matching persisted values can share a row.
+        row := sameItem && (!force || StorageRowContentMatches(priorRow,item))
+            ? priorRow : CreateStorageRow(item,priorRow ? priorRow.Position : 0)
         rows[item.Id] := row
         if priorRow {
             ordered := ordered && priorRow.Position > last
@@ -164,7 +166,10 @@ BuildItemStorageRows(items, previous, force := false, preceding := 0, boundary :
     return rows
 }
 SameStoredItem(a,b) {
-    return a.Name == b.Name && a.Text == b.Text && a.Slot = b.Slot && a.Position = b.Position
+    return a=b || (a.Position=b.Position && StorageRowContentMatches(a,b))
+}
+StorageRowContentMatches(a,b) {
+    return a.Name == b.Name && a.Text == b.Text && a.Slot = b.Slot
 }
 ; Published storage rows are immutable, just like library items and undo snapshots.
 SetStorageRowPosition(rows, id, position) {

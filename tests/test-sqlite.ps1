@@ -87,6 +87,35 @@ try {
         Assert(true,"save and reload succeed after a failed read: " point)
     }
 } finally snapshotStore.Close()
+; Forced validation may reuse rows only when the caller's current values still match.
+itemStore := SettingsRepository(A_ScriptDir "\item-values.db",true)
+itemState := CreateDefaultSettings(), mutableItem := {Id:"mutable",Name:"original",Text:"before",Slot:0}
+itemState.SharedDanmakuItems := [mutableItem]
+try {
+    itemStore.SaveAll(itemState)
+    for change in [{Property:"Name",Column:"name",Value:"Original 日本語"},
+        {Property:"Text",Column:"body",Value:"changed👏"},{Property:"Slot",Column:"slot",Value:1}] {
+        oldRow := itemStore.Saved.Scopes["@shared"].Rows["mutable"], oldValue := oldRow.%change.Property%
+        mutableItem.%change.Property% := change.Value
+        itemStore.SaveAll(itemState)
+        Assert(oldRow.%change.Property%==oldValue,"forced validation preserves the prior stored scalar: " change.Property)
+        Assert(itemStore.Db.Scalar("SELECT " change.Column " FROM items WHERE id='mutable'")==change.Value,"same-object mutation reaches the database: " change.Property)
+        before := Integer(itemStore.Db.Scalar("SELECT total_changes()"))
+        itemStore.SaveAll(itemState)
+        Assert(Integer(itemStore.Db.Scalar("SELECT total_changes()"))=before,"revalidating the same values performs no write: " change.Property)
+    }
+    for change in [{Property:"Name",Value:" "},{Property:"Text",Value:"invalid`nbody"}] {
+        baselineBefore := itemStore.Saved, oldValue := mutableItem.%change.Property%, failed := false
+        mutableItem.%change.Property% := change.Value
+        try itemStore.SaveAll(itemState)
+        catch
+            failed := true
+        Assert(failed && itemStore.Saved=baselineBefore,"same-object reuse never bypasses forced validation: " change.Property)
+        Assert(Integer(itemStore.Db.Scalar("SELECT total_changes()"))=before,"rejected mutation never writes: " change.Property)
+        mutableItem.%change.Property% := oldValue
+    }
+    VerifySettingsRoundTrip(itemState,itemStore.Load())
+} finally itemStore.Close()
 ; Mutating a caller-owned draft must not change the saved comparison values.
 preferenceStore := SettingsRepository(A_ScriptDir "\preference-values.db",true)
 preferenceState := CreateDefaultSettings()
