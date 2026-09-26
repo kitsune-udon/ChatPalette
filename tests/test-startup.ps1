@@ -4,7 +4,7 @@ $release = New-TestRuntime
 [IO.File]::WriteAllText((Join-Path $release 'VERSION'),"99.98.97-test`r`n",[Text.UTF8Encoding]::new($false))
 $dbPath = Join-Path $release 'data\settings.db'
 function Run-Startup([string[]]$Options=@('--smoke'), [switch]$Validate) {
-    $arguments = @('/ErrorStdOut')
+    $arguments = @('/ErrorStdOut=UTF-8')
     if ($Validate) { $arguments += '/Validate' }
     $arguments += @(('"' + (Join-Path $release 'main.ahk') + '"')) + $Options
     $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $release 'error.txt')
@@ -14,12 +14,12 @@ if ((Run-Startup -Validate) -ne 0 -or (Test-Path -LiteralPath (Join-Path $releas
 if ((Run-Startup -Options '--check') -ne 0 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Syntax check initialized application data' }
 foreach ($options in @(@('--smkoe'),@('--check','unexpected'),@('--smoke','unexpected'),@('--quiet','unexpected'))) {
     if ((Run-Startup -Options $options) -ne 1 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Invalid startup arguments initialized the application' }
-    if ([IO.File]::ReadAllText((Join-Path $release 'error.txt'),[Text.Encoding]::Default) -notmatch '起動引数が不正') { throw 'Missing startup argument error' }
+    if ([IO.File]::ReadAllText((Join-Path $release 'error.txt'),[Text.Encoding]::UTF8) -notmatch '起動引数が不正') { throw 'Missing startup argument error' }
 }
 $dataPath=Join-Path $release 'data'
 [IO.File]::WriteAllText($dataPath,'preserved file')
 if ((Run-Startup) -ne 1 -or [IO.File]::ReadAllText($dataPath) -ne 'preserved file') { throw 'Failed data-directory preparation did not preserve the existing file' }
-if ([IO.File]::ReadAllText((Join-Path $release 'error.txt'),[Text.Encoding]::Default) -notmatch 'データフォルダーの準備失敗') { throw 'Missing data-directory failure message' }
+if ([IO.File]::ReadAllText((Join-Path $release 'error.txt'),[Text.Encoding]::UTF8) -notmatch 'データフォルダーの準備失敗') { throw 'Missing data-directory failure message' }
 Remove-Item -LiteralPath $dataPath
 New-Item -ItemType Directory -Path $dataPath | Out-Null
 foreach ($bytes in @([byte[]]@(),[Text.Encoding]::UTF8.GetBytes('invalid database'))) {
@@ -27,13 +27,13 @@ foreach ($bytes in @([byte[]]@(),[Text.Encoding]::UTF8.GetBytes('invalid databas
     $before = (Get-FileHash -LiteralPath $dbPath).Hash
     if ((Run-Startup) -ne 1) { throw 'Empty or corrupt database must fail without automatic reset' }
     if ((Get-FileHash -LiteralPath $dbPath).Hash -ne $before) { throw 'Rejected database was altered' }
-    if ([IO.File]::ReadAllText((Join-Path $release 'error.txt'),[Text.Encoding]::Default) -notmatch '設定の読み込み失敗') { throw 'Missing startup failure message' }
+    if ([IO.File]::ReadAllText((Join-Path $release 'error.txt'),[Text.Encoding]::UTF8) -notmatch '設定の読み込み失敗') { throw 'Missing startup failure message' }
 }
 # The shared initializer also fails without dialogs when the test caller requests it explicitly.
 $failed=$false
 try { Invoke-AppTest -Runtime $release -Body 'throw Error("Initialization unexpectedly succeeded")' | Out-Null }
 catch { $failed=$_.Exception.Message -match '^Test failed \(1\):' }
-if (!$failed -or [IO.File]::ReadAllText((Join-Path $release 'stderr.txt'),[Text.Encoding]::Default) -notmatch '設定の読み込み失敗') { throw 'Explicit unattended initialization did not report failure without CLI arguments' }
+if (!$failed -or [IO.File]::ReadAllText((Join-Path $release 'stderr.txt'),[Text.Encoding]::UTF8) -notmatch '設定の読み込み失敗') { throw 'Explicit unattended initialization did not report failure without CLI arguments' }
 if ((Get-FileHash -LiteralPath $dbPath).Hash -ne $before) { throw 'Unattended initialization altered the rejected database' }
 Remove-Item -LiteralPath $dbPath
 # Interrupt fresh creation after validation/close but before publication.
@@ -58,7 +58,7 @@ Edit-TestSource $release 'main.ahk' 'UpdateTray()' ('UpdateTray()' + "`r`nFileAp
 $live = $null
 $before = (Get-FileHash -LiteralPath $dbPath).Hash
 try {
-    $live = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut',('"' + $mainPath + '"'),'--quiet' -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $release 'live-error.txt')
+    $live = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut=UTF-8',('"' + $mainPath + '"'),'--quiet' -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $release 'live-error.txt')
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while (!(Test-Path -LiteralPath $ready) -and !$live.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
     if ($live.HasExited -or !(Test-Path -LiteralPath $ready)) { throw 'Isolated application did not finish startup' }

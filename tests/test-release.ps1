@@ -159,7 +159,7 @@ try {
     $names=@($archive.Entries | ForEach-Object { $_.FullName })
     if ($names -match '\\') { throw 'ZIP entry names must use forward slashes' }
     if ($names -match '(^data/|/\.tmp/|^private.txt$|^dist/)') { throw 'Private or temporary files included in release' }
-    foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/ui-message-probe.ahk','tests/fixtures/library-model.ahk','tests/app-fixture.ps1','tests/test-app-input-plan.ps1','tests/run.ps1','scripts/build-release.ps1')) {
+    foreach ($required in @('main.ahk','VERSION','README.md','LICENSE','SHA256SUMS','tests/fixtures/ui-message-probe.ahk','tests/fixtures/library-model.ahk','tests/app-fixture.ps1','tests/test-app-input-plan.ps1','tests/run.ps1','tests/execute-check.ps1','scripts/build-release.ps1')) {
         if ($names -cnotcontains $required) { throw "Missing release file: $required" }
     }
     foreach ($file in Get-ChildItem -LiteralPath $release -Filter '*.ahk' -File -Recurse) {

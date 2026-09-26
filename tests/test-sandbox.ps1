@@ -40,6 +40,7 @@ Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $package 'i
 # This does not claim to test virtualization, desktop activation or input delivery.
 $inputRoot = Join-Path $runtime 'guest-input'
 New-Item -ItemType Directory -Path (Join-Path $inputRoot 'project\tests') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'execute-check.ps1') -Destination (Join-Path $inputRoot 'project\tests')
 Copy-Item -LiteralPath (Get-AutoHotkeyPath) -Destination (Join-Path $inputRoot 'AutoHotkey.exe')
 @{ Name = @('first name.ps1',"quote' name.ps1") } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $inputRoot 'selection.json') -Encoding UTF8
 $probe = @'
@@ -48,11 +49,11 @@ if (($Name -join ',') -ne "first name.ps1,quote' name.ps1") { throw 'Selection w
 if (!(Test-Path -LiteralPath $AutoHotkeyPath)) { throw 'Runtime was not copied' }
 New-Item -ItemType Directory -Path (Join-Path $PSScriptRoot '.tmp\failed-case') -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $PSScriptRoot '.tmp\failed-case\evidence.txt') -Value 'evidence'
-Write-Output 'guest-output'
+Write-Output 'guest-output 日本語 🧪'
 '@
 foreach ($scenario in @('success','failure','exit-code')) {
     $body = $probe
-    if ($scenario -eq 'failure') { $body += "`r`nthrow 'guest-failure'" }
+    if ($scenario -eq 'failure') { $body += "`r`nthrow 'guest-failure 日本語 🧪'" }
     if ($scenario -eq 'exit-code') { $body += "`r`nexit 7" }
     [IO.File]::WriteAllText((Join-Path $inputRoot 'project\tests\run.ps1'),$body,[Text.UTF8Encoding]::new($true))
     $outputRoot = Join-Path $runtime ($scenario + '-results')
@@ -60,11 +61,11 @@ foreach ($scenario in @('success','failure','exit-code')) {
     & (Join-Path $PSScriptRoot 'sandbox-guest.ps1') -InputRoot $inputRoot -OutputRoot $outputRoot -WorkRoot (Join-Path $runtime ($scenario + '-work'))
     $result = Get-Content -LiteralPath (Join-Path $outputRoot 'result.json') -Raw | ConvertFrom-Json
     Assert (($result.ExitCode -eq 0) -eq ($scenario -eq 'success')) "$scenario reports the actual outcome"
-    Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'stdout.txt') -Raw) -match 'guest-output') "$scenario preserves stdout"
+    Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'stdout.txt') -Raw -Encoding UTF8) -match 'guest-output 日本語 🧪') "$scenario preserves stdout"
     Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'artifacts\failed-case\evidence.txt') -Raw).Trim() -eq 'evidence') "$scenario collects evidence before completion"
     Assert (!(Test-Path -LiteralPath (Join-Path $outputRoot 'result.pending.json'))) "$scenario publishes completion atomically"
     if ($scenario -eq 'failure') {
-        Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'stderr.txt') -Raw) -match 'guest-failure') 'Failure preserves stderr'
+        Assert ((Get-Content -LiteralPath (Join-Path $outputRoot 'stderr.txt') -Raw -Encoding UTF8) -match 'guest-failure 日本語 🧪') 'Failure preserves stderr'
     }
 }
 Write-Output "PASS: $script:checks Sandbox packaging and guest handoff checks (no VM launched)"

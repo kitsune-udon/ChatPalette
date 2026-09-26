@@ -67,6 +67,7 @@ function Invoke-AhkTest {
     $entry = Join-Path $Runtime 'test.ahk'
     $preamble = @'
 #Warn VarUnset, StdOut
+FileEncoding("UTF-8-RAW")
 global Checks := 0
 OnError(FailTest)
 Assert(condition, label) {
@@ -110,9 +111,9 @@ RequireTestWindowActive(hwnd) {
     [IO.File]::WriteAllText($entry, $preamble + "`r`n" + $Source, [Text.UTF8Encoding]::new($true))
     $out = Join-Path $Runtime 'stdout.txt'
     $err = Join-Path $Runtime 'stderr.txt'
-    $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + $entry + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+    $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut=UTF-8', ('"' + $entry + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     try { $exitCode = Wait-TestProcess -Process $run -TimeoutMs $TimeoutMs }
-    finally { Get-Content -LiteralPath $out,$err }
+    finally { Get-Content -LiteralPath $out,$err -Encoding UTF8 }
     if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Test failed ($exitCode): $Runtime" }
 }
 

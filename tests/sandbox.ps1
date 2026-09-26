@@ -50,6 +50,6 @@ while (!(Test-Path -LiteralPath $resultPath)) {
     Start-Sleep -Milliseconds 500
 }
 $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-Get-Content -LiteralPath (Join-Path $outputRoot 'stdout.txt'),(Join-Path $outputRoot 'stderr.txt') -ErrorAction SilentlyContinue
+Get-Content -LiteralPath (Join-Path $outputRoot 'stdout.txt'),(Join-Path $outputRoot 'stderr.txt') -Encoding UTF8 -ErrorAction SilentlyContinue
 if ($result.ExitCode -ne 0) { throw "Sandbox tests failed: $($result.Error). Results: $outputRoot" }
 Write-Output "PASS: Windows Sandbox / $($Name.Count) test groups. Results: $outputRoot"

@@ -3,7 +3,7 @@ InitializeAppSettings(showRecoveryDialogs) {
     try DirCreate(AppDataDirectory)
     catch as failure {
         if !showRecoveryDialogs
-            FileAppend("データフォルダーの準備失敗: " failure.Message "`n", "**")
+            FileAppend("データフォルダーの準備失敗: " failure.Message "`n", "**", "UTF-8-RAW")
         else
             MsgBox("データフォルダーを準備できません。書き込み権限を確認してください。`n" AppDataDirectory "`n" failure.Message, "起動エラー", "Icon!")
         return false
@@ -15,7 +15,7 @@ InitializeAppSettings(showRecoveryDialogs) {
         } catch as failure {
             ; Automated checks must fail without leaving a modal dialog behind.
             if !showRecoveryDialogs {
-                FileAppend("設定の読み込み失敗: " failure.Message "`n", "**")
+                FileAppend("設定の読み込み失敗: " failure.Message "`n", "**", "UTF-8-RAW")
                 return false
             }
             choice := MsgBox("設定を読み込めませんでした。`n`n" failure.Message

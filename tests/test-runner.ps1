@@ -7,6 +7,7 @@ New-Item -ItemType Directory -Path $fixture | Out-Null
 $runner=Join-Path $fixture 'run.ps1'
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run.ps1') -Destination $runner
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'support.ps1') -Destination $fixture
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'execute-check.ps1') -Destination $fixture
 $scripts=Join-Path $runtime 'scripts'
 New-Item -ItemType Directory -Path $scripts | Out-Null
 $sourceCheck=Join-Path $scripts 'check-source.ps1'
@@ -114,20 +115,20 @@ Assert $true 'first check'
 if ($script:checks -ne 1) { throw 'Successful assertion was not counted' }
 try {
 '@ + "`r`n" + $(switch ($kind) {
-        'stderr' { "[Console]::Error.WriteLine('PowerShell fixture failure')" }
-        'assertion' { "Assert `$false 'PowerShell fixture failure'" }
+        'stderr' { "[Console]::Error.WriteLine('PowerShell fixture failure 日本語 🧪')" }
+        'assertion' { "Assert `$false 'PowerShell fixture failure 日本語 🧪'" }
         'callback-assertion' { @'
-function Test-BrowserForeground { Assert $false 'PowerShell fixture failure' }
+function Test-BrowserForeground { Assert $false 'PowerShell fixture failure 日本語 🧪' }
 $null=Invoke-PageAction @{Seq=1;Window=123;Mode='chat_focus'}
 '@ }
         'property-assertion' { @'
 $target=[pscustomobject]@{}
-$target | Add-Member ScriptProperty Current { Assert $false 'PowerShell fixture failure' }
+$target | Add-Member ScriptProperty Current { Assert $false 'PowerShell fixture failure 日本語 🧪' }
 $null=$target.Current
 '@ }
         'method-assertion' { @'
 $target=[pscustomobject]@{}
-$target | Add-Member ScriptMethod Read { Assert $false 'PowerShell fixture failure' }
+$target | Add-Member ScriptMethod Read { Assert $false 'PowerShell fixture failure 日本語 🧪' }
 try { $null=$target.Read() } catch { }
 '@ }
         'caught' { "try { throw 'injected failure' } catch { }" }
@@ -148,7 +149,7 @@ try { $null=$target.Read() } catch { }
     } else {
         if (!$failed -or $retained.Count -ne 1) { throw "PowerShell $kind failure was swallowed" }
         $stderr=[IO.File]::ReadAllText((Join-Path $retained[0].FullName 'test-alpha.ps1.stderr.txt'))
-        if ($stderr -notmatch 'PowerShell fixture failure') { throw "PowerShell $kind failure evidence was lost" }
+        if ($stderr -notmatch 'PowerShell fixture failure 日本語 🧪') { throw "PowerShell $kind failure evidence was lost" }
         if ($kind -ne 'stderr' -and $stderr -notmatch 'test-alpha\.ps1:\d+') { throw 'Assertion caller was not recorded' }
     }
 }
@@ -158,8 +159,8 @@ try {
     Edit-TestSource $runtime 'tests/run.ps1' '-TimeoutMs 120000' '-TimeoutMs 5000'
     [IO.File]::WriteAllText($headless,@'
 # Test-Session: Headless
-Write-Output 'last PowerShell step before timeout'
-[Console]::Error.WriteLine('PowerShell diagnostic before timeout')
+Write-Output 'last PowerShell step before timeout 日本語 🧪'
+[Console]::Error.WriteLine('PowerShell diagnostic before timeout 日本語 🧪')
 Start-Sleep -Seconds 30
 '@,[Text.UTF8Encoding]::new($true))
     $before=@(Get-ChildItem -LiteralPath $base -Directory | Select-Object -ExpandProperty FullName)
@@ -168,7 +169,7 @@ Start-Sleep -Seconds 30
     try { & $runner -Name 'test-alpha.ps1' -WarningAction SilentlyContinue | ForEach-Object { $observed.Add([string]$_) } }
     catch { $failure=$_.Exception.Message }
     if ($failure -notmatch '^Test process timed out after 5000ms' -or
-        !$observed.Contains('last PowerShell step before timeout') -or !$observed.Contains('PowerShell diagnostic before timeout')) {
+        !$observed.Contains('last PowerShell step before timeout 日本語 🧪') -or !$observed.Contains('PowerShell diagnostic before timeout 日本語 🧪')) {
         throw 'Group timeout hid its last output or original timeout error'
     }
     $retained=@(Get-ChildItem -LiteralPath $base -Directory | Where-Object FullName -NotIn $before)
@@ -181,13 +182,13 @@ $failure=''
 try {
     Invoke-AhkTest -Runtime $ahkTimeout -TimeoutMs 2000 -Source @'
 #Requires AutoHotkey v2.0
-FileAppend("last AHK step before timeout`n","*")
-FileAppend("AHK diagnostic before timeout`n","**")
+FileAppend("last AHK step before timeout 日本語 🧪`n","*")
+FileAppend("AHK diagnostic before timeout 日本語 🧪`n","**")
 Sleep(30000)
 '@ | ForEach-Object { $observed.Add([string]$_) }
 } catch { $failure=$_.Exception.Message }
 if ($failure -notmatch '^Test process timed out after 2000ms' -or
-    !$observed.Contains('last AHK step before timeout') -or !$observed.Contains('AHK diagnostic before timeout')) {
+    !$observed.Contains('last AHK step before timeout 日本語 🧪') -or !$observed.Contains('AHK diagnostic before timeout 日本語 🧪')) {
     throw 'AHK timeout hid its last output or original timeout error'
 }
 # Benchmark options use the same binding boundary as the test runner.
@@ -290,7 +291,7 @@ foreach ($kind in @('synchronous','timer','assertion','callback-assertion','stde
 #Requires AutoHotkey v2.0
 OnExit((reason,code) => FileAppend(reason "," code,A_ScriptDir "\exit.txt"))
 TriggerFixtureFailure(*) {
-    throw Error("AHK fixture failure")
+    throw Error("AHK fixture failure 日本語 🧪")
 }
 '@
     $source += "`r`n" + $(if ($kind -eq 'timer') {
@@ -302,20 +303,20 @@ if Checks != 0
 Assert(true,"first check")
 if Checks != 1
     throw Error("Successful assertion was not counted")
-Assert(false,"AHK fixture failure")
+Assert(false,"AHK fixture failure 日本語 🧪")
 ExitApp(0)
 '@
     } elseif ($kind -eq 'callback-assertion') {
 @'
 #Include %A_ScriptDir%\..\src\app\runtime_ports.ahk
 #Include %A_ScriptDir%\..\src\input\text_input.ahk
-RuntimePorts.Text := (*) => Assert(false,"AHK fixture failure")
+RuntimePorts.Text := (*) => Assert(false,"AHK fixture failure 日本語 🧪")
 ; The product catches transport errors, but a failed test condition must still fail the test.
 SendInputText("fixture")
 ExitApp(0)
 '@
     } elseif ($kind -eq 'stderr') {
-        "FileAppend('AHK fixture failure', '**')`r`nExitApp(0)`r`n"
+        "FileAppend('AHK fixture failure 日本語 🧪', '**')`r`nExitApp(0)`r`n"
     } elseif ($kind -eq 'caught') {
         "try TriggerFixtureFailure()`r`ncatch {`r`n    FileAppend('caught fixture failure', '*')`r`n}`r`nExitApp(0)`r`n"
     } else { "TriggerFixtureFailure()`r`nExitApp(0)`r`n" })
@@ -328,16 +329,16 @@ ExitApp(0)
     if ($kind -eq 'caught') {
         if ($failure -or $stderr -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,0') { throw 'Caught AHK exception was incorrectly treated as unhandled' }
     } elseif ($kind -eq 'stderr') {
-        if ($failure -notmatch '^Test failed \(0\):' -or $stderr -ne 'AHK fixture failure' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,0') {
+        if ($failure -notmatch '^Test failed \(0\):' -or $stderr -ne 'AHK fixture failure 日本語 🧪' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,0') {
             throw 'AHK stderr was accepted or its output and normal exit cleanup were lost'
         }
     } else {
-        if ($failure -notmatch '^Test failed \(1\):' -or $stderr -notmatch 'AHK fixture failure' -or $stderr -notmatch 'test\.ahk:\d+' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,1') {
+        if ($failure -notmatch '^Test failed \(1\):' -or $stderr -notmatch 'AHK fixture failure 日本語 🧪' -or $stderr -notmatch 'test\.ahk:\d+' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,1') {
             throw "AHK $kind failure did not record its location and exit with cleanup: $failure"
         }
         if ($kind -in @('assertion','callback-assertion')) {
             $entry=Join-Path $ahkRuntime 'test.ahk'
-            $assertionLine=(Select-String -LiteralPath $entry -SimpleMatch 'Assert(false,"AHK fixture failure")').LineNumber
+            $assertionLine=(Select-String -LiteralPath $entry -SimpleMatch 'Assert(false,"AHK fixture failure 日本語 🧪")').LineNumber
             if (!$stderr.Contains("${entry}:$assertionLine")) { throw 'Assertion failure did not identify its caller' }
         }
     }

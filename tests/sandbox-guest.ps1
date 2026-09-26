@@ -15,15 +15,12 @@ try {
     # Keep invocation out of command-line interpolation; selected names are JSON data.
     $entry = Join-Path $WorkRoot 'sandbox-entry.ps1'
     $body = @'
-$ErrorActionPreference = 'Stop'
 $selection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'sandbox-selection.json') -Raw | ConvertFrom-Json
-$global:LASTEXITCODE = 0
 & (Join-Path $PSScriptRoot 'tests\run.ps1') -Name $selection.Name -AutoHotkeyPath (Join-Path $PSScriptRoot 'AutoHotkey.exe')
-exit $LASTEXITCODE
 '@
     [IO.File]::WriteAllText($entry,$body,[Text.UTF8Encoding]::new($true))
     $selection | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $WorkRoot 'sandbox-selection.json') -Encoding UTF8
-    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $entry + '"') -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $WorkRoot 'tests\execute-check.ps1') + '"'),'-Path',('"' + $entry + '"') -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     $exitCode = Wait-TestProcess -Process $process -TimeoutMs (120000 * (@($selection.Name).Count + 1) + 30000)
     if ($exitCode -ne 0 -or (Get-Item -LiteralPath $stderr).Length -gt 0) { throw "Test runner failed (exit $exitCode)." }
     $result.ExitCode = 0
