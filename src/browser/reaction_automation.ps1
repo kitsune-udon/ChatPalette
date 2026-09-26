@@ -229,13 +229,15 @@ function Invoke-ReactionRequest($Request) {
             $reply.Detail = $group.Detail
             return $reply
         }
-        if ($Request.Mode -eq 'reaction_check') { $reply.State = 'ready'; return $reply }
-        if ($Request.Mode -ne 'reaction_send' -or $Request.Reaction -notmatch '^[1-5]$') { return $reply }
-        $target = $group.Elements[([int]$Request.Reaction - 1)]
+        if ($Request.Mode -notin @('reaction_check','reaction_send') -or
+            ($Request.Mode -eq 'reaction_send' -and $Request.Reaction -notmatch '^[1-5]$')) { return $reply }
+        # Both checking and sending must still refer to the context that was searched.
         if (-not (Test-ReactionForeground ([long]$Request.Window))) {
             $reply.State = 'wrong_window'; return $reply
         }
         if ((Read-BrowserVideoId ([long]$Request.Window)) -cne $video) { $reply.State = 'changed'; return $reply }
+        if ($Request.Mode -eq 'reaction_check') { $reply.State = 'ready'; return $reply }
+        $target = $group.Elements[([int]$Request.Reaction - 1)]
         if ($target.Current.IsOffscreen -or -not $target.Current.IsEnabled) { $reply.State = 'menu_closed'; return $reply }
         $pattern = Get-ReactionInvoker $target
         if ($null -eq $pattern) {

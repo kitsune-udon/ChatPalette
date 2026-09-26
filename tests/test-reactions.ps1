@@ -9,6 +9,7 @@ $script:foreground = $true
 $script:menu = $true
 $script:invocations = 0
 $script:throwOnInvoke = $false
+$script:switchDuringLookup = $false
 $script:target = [pscustomobject]@{Current = [pscustomobject]@{IsOffscreen = $false; IsEnabled = $true}}
 $script:invoker = [pscustomobject]@{}
 $script:invoker | Add-Member ScriptMethod Invoke {
@@ -20,6 +21,7 @@ function Get-BrowserProcessName([long]$WindowHandle) { return 'fixture' }
 function Test-ReactionForeground([long]$WindowHandle) { return $script:foreground }
 function Get-ReactionInvoker($Target) { return $script:invoker }
 function Find-RegisteredReactions([long]$WindowHandle, $Plan) {
+    if ($script:switchDuringLookup) { $script:foreground = $false }
     if (-not $script:menu) { return @{Elements=$null; Detail='fixture menu closed'} }
     return @{Elements = @($script:target, $script:target, $script:target, $script:target, $script:target); Detail='fixture menu found'}
 }
@@ -34,6 +36,13 @@ Assert ((Request 'reaction_capture' 'ABCDEFGHIJK').State -eq 'changed') 'capture
 Assert ((Request 'reaction_send' 'ABCDEFGHIJK').State -eq 'changed') 'send rejects changed video'
 $script:foreground = $false
 Assert ((Request 'reaction_send').State -eq 'wrong_window' -and $script:invocations -eq 0) 'focus change blocks'
+Assert ((Request 'reaction_check').State -eq 'wrong_window' -and $script:invocations -eq 0) 'check does not report ready for a background target'
+$script:switchDuringLookup = $true
+foreach ($mode in @('reaction_check','reaction_send')) {
+    $script:foreground = $true
+    Assert ((Request $mode).State -eq 'wrong_window' -and $script:invocations -eq 0) "foreground change during lookup prevents success without invoking: $mode"
+}
+$script:switchDuringLookup = $false
 $script:foreground = $true
 $script:menu = $false
 $closedReply = Request 'reaction_send'
@@ -57,13 +66,15 @@ $script:video = ''
 Assert ((Request 'reaction_send').State -eq 'unavailable' -and $script:invocations -eq 3) 'unreadable URL blocks'
 $script:video='abcdefghijk'
 $script:throwOnInvoke=$false
-$script:reads=0
 function Read-BrowserVideoId([long]$WindowHandle) {
     $script:reads++
     if ($script:reads -eq 1) { return 'abcdefghijk' }
     return 'ABCDEFGHIJK'
 }
-Assert ((Request 'reaction_send').State -eq 'changed' -and $script:invocations -eq 3) 'video change during lookup never invokes'
+foreach ($mode in @('reaction_send','reaction_check')) {
+    $script:reads=0
+    Assert ((Request $mode).State -eq 'changed' -and $script:invocations -eq 3) "video change during lookup prevents success without invoking: $mode"
+}
 function Read-BrowserVideoId([long]$WindowHandle) { return $script:video }
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
