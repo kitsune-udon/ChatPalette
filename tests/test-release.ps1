@@ -306,6 +306,33 @@ function Set-ArchiveFault([string]$Path, [string]$Fault) {
 $expectedManifest=Get-ReleaseManifest $release
 $hashes=Get-ReleaseArchiveHashes -Path $zipPath -ExpectedManifest $expectedManifest
 if ($hashes.ArchiveSHA256 -cne $before.ToLowerInvariant()) { throw 'Archive validation returned the wrong archive hash' }
+# An attempted mutation between content validation and the final hash cannot change its input.
+$lockedChecker=Join-Path $release 'archive-check.ps1'
+Copy-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\release-files.ps1') -Destination $lockedChecker
+Edit-TestSource $release 'archive-check.ps1' '} finally { $archive.Dispose() }' ('} finally { $archive.Dispose() }' + "`r`n" + '            Try-ArchiveMutation $Path')
+& {
+    . $lockedChecker
+    function Try-ArchiveMutation([string]$Path) {
+        try {
+            if ($script:ArchiveMutation -eq 'write') { [IO.File]::WriteAllText($Path,'changed after validation') }
+            else {
+                [IO.File]::Move($Path,($Path+'.original'))
+                [IO.File]::WriteAllText($Path,'replaced after validation')
+            }
+        } catch [IO.IOException] { $script:ArchiveMutationBlocked=$true }
+    }
+    foreach ($script:ArchiveMutation in @('write','replace')) {
+        $script:ArchiveMutationBlocked=$false
+        $ownedZip=Join-Path $out ($script:ArchiveMutation+'.zip')
+        Copy-Item -LiteralPath $zipPath -Destination $ownedZip
+        $hashes=Get-ReleaseArchiveHashes -Path $ownedZip -ExpectedManifest $expectedManifest
+        if (!$script:ArchiveMutationBlocked -or $hashes.ArchiveSHA256 -cne $before.ToLowerInvariant()) {
+            throw "Archive validation released its input before hashing: $script:ArchiveMutation / $($hashes.ArchiveSHA256)"
+        }
+        $exclusive=[IO.File]::Open($ownedZip,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+        $exclusive.Dispose()
+    }
+}
 foreach ($fault in @('content','missing','extra','manifest','consistent','case','duplicate')) {
     $corruptZip=Join-Path $out ('bad-'+$fault+'.zip')
     Copy-Item -LiteralPath $zipPath -Destination $corruptZip
@@ -314,6 +341,8 @@ foreach ($fault in @('content','missing','extra','manifest','consistent','case',
     try { Get-ReleaseArchiveHashes -Path $corruptZip -ExpectedManifest $expectedManifest | Out-Null }
     catch { $failure=$_.Exception.Message }
     if ($failure -notlike 'Release archive*') { throw "Corrupt archive was accepted: $fault / $failure" }
+    $exclusive=[IO.File]::Open($corruptZip,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    $exclusive.Dispose()
 }
 # Keep one end-to-end check that an invalid artifact prevents a validation record.
 try {

@@ -35,7 +35,7 @@ function Get-ReleaseManifest([string]$Project) {
 }
 
 function Get-ReleaseArchiveHashes([string]$Path, [string]$ExpectedManifest) {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    Add-Type -AssemblyName System.IO.Compression
     # Bind every archived byte to the tested inputs, including the manifest itself.
     $sha=[Security.Cryptography.SHA256]::Create()
     try {
@@ -46,21 +46,27 @@ function Get-ReleaseArchiveHashes([string]$Path, [string]$ExpectedManifest) {
             $expected.Add($name,$hash)
         }
         $expected.Add('SHA256SUMS',$sourceHash)
-        $archive=[IO.Compression.ZipFile]::OpenRead($Path)
+        # Keep the same read-only file open through validation and hashing.
+        $file=[IO.File]::OpenRead($Path)
         try {
-            if ($archive.Entries.Count -ne $expected.Count) { throw 'Release archive file count differs from validated inputs' }
-            foreach ($entry in $archive.Entries) {
-                $name=$entry.FullName
-                if (!$expected.ContainsKey($name)) { throw "Release archive contains an unexpected or duplicate file: $name" }
-                $stream=$entry.Open()
-                try { $actual=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
-                finally { $stream.Dispose() }
-                if ($actual -cne $expected[$name]) { throw "Release archive differs from validated inputs: $name" }
-                $null=$expected.Remove($name)
-            }
-        } finally { $archive.Dispose() }
+            $archive=[IO.Compression.ZipArchive]::new($file,[IO.Compression.ZipArchiveMode]::Read,$true)
+            try {
+                if ($archive.Entries.Count -ne $expected.Count) { throw 'Release archive file count differs from validated inputs' }
+                foreach ($entry in $archive.Entries) {
+                    $name=$entry.FullName
+                    if (!$expected.ContainsKey($name)) { throw "Release archive contains an unexpected or duplicate file: $name" }
+                    $stream=$entry.Open()
+                    try { $actual=[BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant() }
+                    finally { $stream.Dispose() }
+                    if ($actual -cne $expected[$name]) { throw "Release archive differs from validated inputs: $name" }
+                    $null=$expected.Remove($name)
+                }
+            } finally { $archive.Dispose() }
+            $file.Position=0
+            $archiveHash=[BitConverter]::ToString($sha.ComputeHash($file)).Replace('-','').ToLowerInvariant()
+        } finally { $file.Dispose() }
     } finally { $sha.Dispose() }
-    return @{ ArchiveSHA256=(Get-FileHash -LiteralPath $Path).Hash.ToLowerInvariant(); SourceManifestSHA256=$sourceHash }
+    return @{ ArchiveSHA256=$archiveHash; SourceManifestSHA256=$sourceHash }
 }
 
 function Copy-ReleaseFiles([string]$Project, [string]$Destination) {
