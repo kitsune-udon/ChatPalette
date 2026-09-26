@@ -99,7 +99,7 @@ RequireTestWindowActive(hwnd) {
     $run = Start-Process -FilePath (Get-AutoHotkeyPath) -ArgumentList '/ErrorStdOut', ('"' + $entry + '"') -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
     $exitCode = Wait-TestProcess -Process $run -TimeoutMs $TimeoutMs
     Get-Content -LiteralPath $out,$err
-    if ($exitCode -ne 0) { throw "Test failed ($exitCode): $Runtime" }
+    if ($exitCode -ne 0 -or (Get-Item -LiteralPath $err).Length -gt 0) { throw "Test failed ($exitCode): $Runtime" }
 }
 
 function Write-TestWorker {

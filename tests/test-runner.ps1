@@ -145,7 +145,7 @@ foreach ($mode in @('success','failure','timeout','invalid-timeout')) {
     }
 }
 # Unhandled AHK failures must reach stderr and the process exit code, even from timers.
-foreach ($kind in @('synchronous','timer','assertion','callback-assertion','caught')) {
+foreach ($kind in @('synchronous','timer','assertion','callback-assertion','stderr','caught')) {
     $ahkRuntime=Join-Path $runtime ('ahk-'+$kind)
     New-Item -ItemType Directory -Path $ahkRuntime | Out-Null
     $source=@'
@@ -176,6 +176,8 @@ RuntimePorts.Text := (*) => Assert(false,"AHK fixture failure")
 SendInputText("fixture")
 ExitApp(0)
 '@
+    } elseif ($kind -eq 'stderr') {
+        "FileAppend('AHK fixture failure', '**')`r`nExitApp(0)`r`n"
     } elseif ($kind -eq 'caught') {
         "try TriggerFixtureFailure()`r`ncatch {`r`n    FileAppend('caught fixture failure', '*')`r`n}`r`nExitApp(0)`r`n"
     } else { "TriggerFixtureFailure()`r`nExitApp(0)`r`n" })
@@ -187,6 +189,10 @@ ExitApp(0)
     if (!(Test-Path -LiteralPath $exitFile)) { throw "AHK $kind failure skipped normal exit cleanup: $failure" }
     if ($kind -eq 'caught') {
         if ($failure -or $stderr -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,0') { throw 'Caught AHK exception was incorrectly treated as unhandled' }
+    } elseif ($kind -eq 'stderr') {
+        if ($failure -notmatch '^Test failed \(0\):' -or $stderr -ne 'AHK fixture failure' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,0') {
+            throw 'AHK stderr was accepted or its output and normal exit cleanup were lost'
+        }
     } else {
         if ($failure -notmatch '^Test failed \(1\):' -or $stderr -notmatch 'AHK fixture failure' -or $stderr -notmatch 'test\.ahk:\d+' -or [IO.File]::ReadAllText($exitFile) -ne 'Exit,1') {
             throw "AHK $kind failure did not record its location and exit with cleanup: $failure"
