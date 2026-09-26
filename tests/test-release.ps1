@@ -201,7 +201,7 @@ $runnerPath=Join-Path $release 'tests\run.ps1'
 $runnerSource=[IO.File]::ReadAllBytes($runnerPath)
 try {
     # An unexpected validation must stop here, not recursively run the entire suite.
-    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath)`r`nthrow 'Unexpected validation run'`r`n",[Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath, [switch]`$Sandbox)`r`nthrow 'Unexpected validation run'`r`n",[Text.UTF8Encoding]::new($true))
     $rejected=$false
     try { & (Join-Path $release 'scripts\verify-release.ps1') -OutputDirectory $protectedOutput | Out-Null }
     catch {
@@ -219,11 +219,14 @@ $verifierSource=[IO.File]::ReadAllText($verifierPath)
 $reportWrites=@($verifierSource -split '\r?\n' | Where-Object { $_ -match '^    \[IO.File\]::WriteAllText\(' })
 if ($reportWrites.Count -ne 1) { throw 'Report publication injection point missing' }
 try {
-    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath)`r`n# Isolated publication fixture: no nested tests.`r`n",[Text.UTF8Encoding]::new($true))
     foreach ($scenario in @('concurrent','interrupted','success')) {
+        $useSandbox=$scenario -eq 'success'
+        [IO.File]::WriteAllText($runnerPath,('param([string]$AutoHotkeyPath, [switch]$Sandbox)' + "`r`n" +
+            'if ($Sandbox -ne $' + $useSandbox.ToString().ToLowerInvariant() + ') { throw ''Wrong validation environment'' }'),[Text.UTF8Encoding]::new($true))
         # Keep nested release copies below Windows PowerShell 5.1 path limits.
         $publicationOutput=Join-Path $release ('['+$scenario.Substring(0,1)+']')
         $publicationReport=Join-Path $publicationOutput "ChatPalette-$version.validation.json"
+        $stagesBefore=@(Get-ChildItem -LiteralPath (Join-Path $release 'tests\.tmp') -Directory -Filter 'v-*' | Select-Object -ExpandProperty FullName)
         $replacement=$reportWrites[0]
         if ($scenario -eq 'concurrent') {
             $replacement='    [IO.File]::WriteAllText($report,"competing validation record")'+"`r`n"+$replacement
@@ -232,7 +235,7 @@ try {
         }
         [IO.File]::WriteAllText($verifierPath,$verifierSource.Replace($reportWrites[0],$replacement),[Text.UTF8Encoding]::new($true))
         $failure=$null
-        try { & $verifierPath -OutputDirectory $publicationOutput | Out-Null }
+        try { & $verifierPath -OutputDirectory $publicationOutput -Sandbox:$useSandbox | Out-Null }
         catch { $failure=$_ }
         if ($scenario -eq 'concurrent') {
             if (!$failure) { throw 'Concurrent report did not reject publication' }
@@ -245,8 +248,12 @@ try {
             if ($failure) { throw $failure }
             $record=[IO.File]::ReadAllText($publicationReport) | ConvertFrom-Json
             $built=Join-Path $publicationOutput $record.Archive
-            if ($record.Version -cne $version -or $record.Tests -ne 'All' -or $record.ArchiveSHA256 -cne (Get-FileHash -LiteralPath $built).Hash.ToLowerInvariant()) {
+            if ($record.Version -cne $version -or $record.Tests -ne 'All' -or $record.TestEnvironment -ne 'WindowsSandbox' -or $record.ArchiveSHA256 -cne (Get-FileHash -LiteralPath $built).Hash.ToLowerInvariant()) {
                 throw 'Completed report does not describe its archive'
+            }
+            $retained=@(Get-ChildItem -LiteralPath (Join-Path $release 'tests\.tmp') -Directory -Filter 'v-*' | Where-Object FullName -NotIn $stagesBefore)
+            if ($retained.Count -ne 1 -or !(Test-Path -LiteralPath (Join-Path $retained[0].FullName 'tests\run.ps1'))) {
+                throw 'Sandbox validation removed its still-mounted inputs'
             }
         }
         $expectedFiles=if ($scenario -eq 'interrupted') { 1 } else { 2 }
@@ -256,9 +263,31 @@ try {
     [IO.File]::WriteAllBytes($verifierPath,$verifierBytes)
     [IO.File]::WriteAllBytes($runnerPath,$runnerSource)
 }
+# A failed Sandbox runner or changed validated source must produce no release output.
+try {
+    foreach ($scenario in @('failure','edit','add','remove')) {
+        $body='param([string]$AutoHotkeyPath, [switch]$Sandbox)' + "`r`n" +
+            'if (!$Sandbox) { throw ''Sandbox selection was lost'' }' + "`r`n"
+        $body += switch ($scenario) {
+            'failure' { 'throw ''fixture Sandbox failure''' }
+            'edit' { 'Add-Content -LiteralPath (Join-Path $PSScriptRoot ''..\README.md'') -Value ''changed''' }
+            'add' { 'Set-Content -LiteralPath (Join-Path $PSScriptRoot ''new-check.ps1'') -Value ''# added''' }
+            'remove' { 'Remove-Item -LiteralPath (Join-Path $PSScriptRoot ''test-input.ps1'')' }
+        }
+        [IO.File]::WriteAllText($runnerPath,$body,[Text.UTF8Encoding]::new($true))
+        $failedOutput=Join-Path $release ('fail-'+$scenario)
+        $failure=''
+        try { & $verifierPath -Sandbox -OutputDirectory $failedOutput | Out-Null }
+        catch { $failure=$_.Exception.Message }
+        $expected=if ($scenario -eq 'failure') { 'fixture Sandbox failure' } else { 'Validated source changed during tests' }
+        if ($failure -ne $expected -or @(Get-ChildItem -LiteralPath $failedOutput -Force).Count) {
+            throw "Invalid validation escaped the release gate: $scenario / $failure"
+        }
+    }
+} finally { [IO.File]::WriteAllBytes($runnerPath,$runnerSource) }
 # VERSION belongs to the captured inputs, including an edit just before copying.
 try {
-    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath)`r`n# Isolated snapshot fixture: no nested tests.`r`n",[Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllText($runnerPath,"param([string]`$AutoHotkeyPath, [switch]`$Sandbox)`r`n# Isolated snapshot fixture: no nested tests.`r`n",[Text.UTF8Encoding]::new($true))
     foreach ($script in @('build-release.ps1','verify-release.ps1')) {
         $entry=Join-Path $release ('scripts\'+$script)
         $entryBytes=[IO.File]::ReadAllBytes($entry)
@@ -284,6 +313,7 @@ try {
                 if ($record.Version -cne $capturedVersion -or $record.Archive -cne [IO.Path]::GetFileName($snapshotZip)) {
                     throw 'Validation report does not follow the captured VERSION'
                 }
+                if ($record.TestEnvironment -ne 'Host') { throw 'Host validation recorded the wrong environment' }
             }
         } finally {
             [IO.File]::WriteAllBytes($entry,$entryBytes)

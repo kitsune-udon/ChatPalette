@@ -19,11 +19,8 @@ try {
     $entries = @(Get-ChildItem -LiteralPath $payload -File -Recurse -Force | Sort-Object FullName | ForEach-Object {
         [pscustomobject]@{Path=$_.FullName; Name=$_.FullName.Substring($payload.Length + 1).Replace('\','/')}
     })
-    $hashes = @($entries | ForEach-Object {
-        (Get-FileHash -LiteralPath $_.Path -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name
-    })
     $manifest = Join-Path $payload 'SHA256SUMS'
-    [IO.File]::WriteAllLines($manifest, $hashes, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($manifest, (Get-ReleaseManifest $payload), [Text.UTF8Encoding]::new($false))
     $entries += [pscustomobject]@{Path=$manifest; Name='SHA256SUMS'}
     Add-Type -AssemblyName System.IO.Compression.FileSystem, System.IO.Compression
     $archive = [IO.Compression.ZipFile]::Open($temporaryZip, [IO.Compression.ZipArchiveMode]::Create)

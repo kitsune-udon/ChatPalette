@@ -78,8 +78,10 @@ git diff --cached --check
 2. 次のコマンドを一度実行します。全テストを別途繰り返してからZIPを作る必要はありません。
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release.ps1 -OutputDirectory .\dist\validated
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release.ps1 -Sandbox -OutputDirectory .\dist\validated
 ```
+
+`-Sandbox`は全テストをWindows Sandboxで実行します。[初回準備](testing.md#windows-sandboxで実行する)を済ませ、Sandbox内は操作しないでください。起動・検証に失敗してもホスト実行へ切り替えません。省略時は従来どおりホストで実行するため、画面操作を止める必要があります。
 
 3. 終了コード0、ZIP、同名の`.validation.json`を確認します。同名出力がある場合は、新しい出力先を指定します。
 4. ZIPを別フォルダーへ展開し、新規起動・弾幕の保存・再起動後の読み込みを確認します。保存・更新に変更がある場合は、[バックアップと復元](../user/maintenance.md#バックアップから復元する)も確認します。
@@ -95,9 +97,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release
 4. GitHubのReleaseで公開済みタグを選び、タイトルを`ChatPalette <版番号>`、本文をCHANGELOGの該当版の内容として正式公開します。同じ検証で作成した`ChatPalette-<版番号>.zip`と`.validation.json`を添付します。
 5. 公開されたタグのコミット、Releaseの版番号、添付ファイルの名前・サイズ・SHA-256を照合します。タグのpush後にRelease作成・添付が失敗した場合は、公開済み状態を確認して不足分を続行し、タグを削除・再作成しません。
 
-`verify-release.ps1`は配布対象を一時フォルダーへ固定し、`tests/run.ps1`によるソース検査・全テストとZIP生成を同じコピーに対して実行します。ソース検査の呼び出しは通常のテストと共有し、配布側で重ねて実行しません。ZIP・検証記録の版番号と名前も、このコピーの`VERSION`から決めます。テスト中に配布対象が変化した場合は失敗します。失敗時は作業フォルダーを残すため、表示されたパスで原因を調べます。ZIPの存在だけで検証完了と判断せず、終了コードと同名の検証記録も確認してください。
+`verify-release.ps1`は配布対象を一時フォルダーへ固定し、`tests/run.ps1`によるソース検査・全テストとZIP生成を同じ内容のコピーに対して実行します。ソース検査の呼び出しは通常のテストと共有し、配布側で重ねて実行しません。ZIP・検証記録の版番号と名前も、このコピーの`VERSION`から決めます。配布ファイル一覧から生成する共通のマニフェストで、テスト中に配布対象が変化していないことを照合します。Sandbox実行ではゲストへのコピー直後と検証後も照合し、検証対象と梱包対象のずれを拒否します。失敗時は作業フォルダーを残すため、表示されたパスで原因を調べます。Sandbox実行では成功時もマッピング中の作業コピーとログを保持し、保存先を表示します。Sandboxを閉じ、必要な結果を保存してから不要なコピーを整理してください。ZIPの存在だけで検証完了と判断せず、終了コードと同名の検証記録も確認してください。
 
-`.validation.json`には版、検査日時、テスト群数、ZIPとソースマニフェストのSHA-256を記録します。実ブラウザーでの成功を示す記録ではありません。ブラウザー確認は別レポートとして保管します。
+`.validation.json`には版、検査日時、テスト群数、実行環境（`TestEnvironment`の`Host`または`WindowsSandbox`）、ZIPとソースマニフェストのSHA-256を記録します。実ブラウザーでの成功を示す記録ではありません。ブラウザー確認は別レポートとして保管します。
 
 `VERSION`の形式は[SemVer 2.0.0](https://semver.org/spec/v2.0.0.html)に従います。major・minor・patchとプレリリースの数値識別子の先頭ゼロ、空の識別子を拒否します。プレリリース名・ビルド情報（例：`0.5.1-rc.1+build.001`）も同じ共通チェックで検証し、ZIP名と検証記録には版番号全体を使います。
 

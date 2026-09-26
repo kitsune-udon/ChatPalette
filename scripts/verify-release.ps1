@@ -1,5 +1,5 @@
 ﻿[CmdletBinding()]
-param([string]$OutputDirectory, [string]$AutoHotkeyPath)
+param([string]$OutputDirectory, [string]$AutoHotkeyPath, [switch]$Sandbox)
 $ErrorActionPreference='Stop'
 $project=Split-Path $PSScriptRoot -Parent
 if (!$OutputDirectory) { $OutputDirectory=Join-Path $project 'dist' }
@@ -17,16 +17,11 @@ try {
     $zip=Join-Path $output "ChatPalette-$version.zip"
     $report=Join-Path $output "ChatPalette-$version.validation.json"
     if ((Test-Path -LiteralPath $zip) -or (Test-Path -LiteralPath $report)) { throw 'Release output exists; choose a new directory.' }
-    $inputHashes=@{}
-    foreach($file in @(Get-ReleaseFiles $stage)) { $inputHashes[$file.FullName]=(Get-FileHash -LiteralPath $file.FullName).Hash }
+    $inputManifest=Get-ReleaseManifest $stage
     $runner=Join-Path $stage 'tests\run.ps1'
-    & $runner -AutoHotkeyPath $AutoHotkeyPath
+    & $runner -AutoHotkeyPath $AutoHotkeyPath -Sandbox:$Sandbox
     # Tests may alter only their isolated runtimes. Compare staged inputs with initial manifest.
-    foreach($file in @(Get-ReleaseFiles $stage)) {
-        if (!$inputHashes.ContainsKey($file.FullName) -or $inputHashes[$file.FullName] -cne (Get-FileHash -LiteralPath $file.FullName).Hash) { throw 'Validated source changed during tests' }
-        $inputHashes.Remove($file.FullName)
-    }
-    if ($inputHashes.Count) { throw 'Validated source files were removed during tests' }
+    if ($inputManifest -cne (Get-ReleaseManifest $stage)) { throw 'Validated source changed during tests' }
     & (Join-Path $stage 'scripts\build-release.ps1') -OutputDirectory $output | Out-Null
     $archive=[IO.Compression.ZipFile]::OpenRead($zip)
     try {
@@ -36,6 +31,7 @@ try {
         finally { $sha.Dispose(); $stream.Dispose() }
     } finally { $archive.Dispose() }
     $result=[ordered]@{Version=$version;CheckedAt=[DateTime]::UtcNow.ToString('o');Tests='All';
+        TestEnvironment=$(if ($Sandbox) { 'WindowsSandbox' } else { 'Host' });
         TestGroups=@(Get-ChildItem -LiteralPath (Join-Path $stage 'tests') -Filter 'test-*.ps1' -File).Count;
         Archive=[IO.Path]::GetFileName($zip);ArchiveSHA256=(Get-FileHash -LiteralPath $zip).Hash.ToLowerInvariant();
         SourceManifestSHA256=$sourceHash;RealBrowser='Separate check-browser.ps1 reports required; not implied by automated tests'}
@@ -47,6 +43,11 @@ try {
     Write-Output $report
 } finally {
     if (Test-Path -LiteralPath $temporaryReport) { Remove-Item -LiteralPath $temporaryReport -Force }
-    if ($completed) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    # A running Sandbox owns the mapped inputs; retain its logs and snapshot together.
+    if ($completed -and !$Sandbox) {
+        $resolved=(Resolve-Path -LiteralPath $stage).Path
+        if ((Split-Path $resolved -Parent) -ne (Resolve-Path -LiteralPath (Join-Path $project 'tests\.tmp')).Path) { throw 'Unexpected validation cleanup path' }
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    } elseif ($completed) { Write-Output "Sandbox validation artifacts retained: $stage" }
     else { Write-Warning "Validation artifacts retained: $stage" }
 }

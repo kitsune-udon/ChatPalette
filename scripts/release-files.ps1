@@ -23,6 +23,17 @@ function Get-ReleaseFiles([string]$project) {
     return $files
 }
 
+# Stable relative paths let the host, guest and archive describe the same inputs.
+function Get-ReleaseManifest([string]$Project) {
+    $root = (Resolve-Path -LiteralPath $Project).Path
+    $paths = [string[]]@(Get-ReleaseFiles $root | ForEach-Object { $_.FullName })
+    [Array]::Sort($paths, [StringComparer]::Ordinal)
+    $lines = @(foreach ($path in $paths) {
+        (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $path.Substring($root.Length + 1).Replace('\','/')
+    })
+    return ($lines -join "`r`n") + "`r`n"
+}
+
 function Copy-ReleaseFiles([string]$Project, [string]$Destination) {
     $root = (Resolve-Path -LiteralPath $Project).Path
     foreach ($file in @(Get-ReleaseFiles $root)) {

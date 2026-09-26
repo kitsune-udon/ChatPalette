@@ -3,13 +3,16 @@ param([Parameter(Mandatory)][string]$InputRoot, [Parameter(Mandatory)][string]$O
     [Parameter(Mandatory)][string]$WorkRoot)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
+. (Join-Path $ProjectRoot 'scripts\release-files.ps1')
 $result = @{ ExitCode = 1; Error = ''; ComputerName = $env:COMPUTERNAME }
 $stdout = Join-Path $OutputRoot 'stdout.txt'
 $stderr = Join-Path $OutputRoot 'stderr.txt'
 try {
     # Run on the guest disk: SQLite and test processes must not depend on mapped-folder semantics.
     if (Test-Path -LiteralPath $WorkRoot) { throw "Work directory already exists: $WorkRoot" }
+    $inputManifest = Get-ReleaseManifest (Join-Path $InputRoot 'project')
     Copy-Item -LiteralPath (Join-Path $InputRoot 'project') -Destination $WorkRoot -Recurse
+    if ($inputManifest -cne (Get-ReleaseManifest $WorkRoot)) { throw 'Sandbox source differs from the supplied snapshot' }
     Copy-Item -LiteralPath (Join-Path $InputRoot 'AutoHotkey.exe') -Destination $WorkRoot
     $selection = Get-Content -LiteralPath (Join-Path $InputRoot 'selection.json') -Raw | ConvertFrom-Json
     # Keep invocation out of command-line interpolation; selected names are JSON data.
@@ -23,6 +26,7 @@ $selection = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'sandbox-selectio
     $process = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + (Join-Path $WorkRoot 'tests\execute-check.ps1') + '"'),'-Path',('"' + $entry + '"') -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
     $exitCode = Wait-TestProcess -Process $process -TimeoutMs (120000 * (@($selection.Name).Count + 1) + 30000)
     if ($exitCode -ne 0 -or (Get-Item -LiteralPath $stderr).Length -gt 0) { throw "Test runner failed (exit $exitCode)." }
+    if ($inputManifest -cne (Get-ReleaseManifest $WorkRoot)) { throw 'Validated source changed during Sandbox tests' }
     $result.ExitCode = 0
 } catch { $result.Error = $_.Exception.Message }
 finally {
