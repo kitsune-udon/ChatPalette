@@ -40,7 +40,7 @@ $relative='reports [new]\report.json'
 $reportPath=Join-Path $runtime $relative
 if ((Invoke-ReportProbe $relative) -ne 1 -or !(Test-Path -LiteralPath $reportPath -PathType Leaf)) { throw "Missing output directory or PowerShell-relative path was not handled; artifacts: $runtime" }
 $report=[IO.File]::ReadAllText($reportPath) | ConvertFrom-Json
-if ($report.AddressDetected -isnot [bool] -or $report.AddressDetected -or !$report.Error -or $report.VideoDetected -or $report.ChatDetected -or $report.Focus -ne 'not-run' -or $report.Hover -ne 'not-run') { throw 'Failed inspection was not recorded accurately' }
+if ($report.AddressDetected -isnot [bool] -or $report.AddressDetected -or !$report.Error -or $report.VideoDetected -or $report.ChatDetected -or $report.ChatState -ne 'not-run' -or $report.Focus -ne 'not-run' -or $report.Hover -ne 'not-run') { throw 'Failed inspection was not recorded accurately' }
 [IO.File]::WriteAllText($reportPath,'existing report')
 if ((Invoke-ReportProbe $relative) -eq 0 -or [IO.File]::ReadAllText($reportPath) -cne 'existing report') { throw 'Existing report was overwritten' }
 # Simulate another writer publishing after the initial existence check.
@@ -67,7 +67,7 @@ function Find-ReactionLauncher { return $null }
     $path=Join-Path $runtime ("chat-$state.json")
     if ((Invoke-ReportProbe $path) -ne 1) { throw "Other missing detections must still fail the $state report" }
     $report=[IO.File]::ReadAllText($path) | ConvertFrom-Json
-    if ($report.Error -or $report.ChatDetected -isnot [bool] -or $report.ChatDetected -ne ($state -eq 'ok')) { throw "Chat detection state $state was misreported" }
+    if ($report.Error -or $report.ChatState -ne $state -or $report.ChatDetected -isnot [bool] -or $report.ChatDetected -ne ($state -eq 'ok')) { throw "Chat detection state $state was misreported" }
 }
 $pageFixture=@'
 function Get-Process { return [pscustomobject]@{ProcessName='brave';MainModule=[pscustomobject]@{FileVersionInfo=[pscustomobject]@{FileVersion='test'}}} }
@@ -87,7 +87,7 @@ foreach ($page in @('Watch','Popout')) {
     if ((Invoke-ReportProbe $path) -ne 0) { throw "Cached address could not identify page kind: $page" }
     $json=[IO.File]::ReadAllText($path)
     $report=$json | ConvertFrom-Json
-    if ($report.Error -or !$report.AddressDetected -or !$report.VideoDetected -or $report.PageKind -ne $page -or
+    if ($report.Error -or !$report.AddressDetected -or !$report.VideoDetected -or $report.ChatState -ne 'ok' -or !$report.ChatDetected -or $report.PageKind -ne $page -or
         $report.Focus -ne 'not-run' -or $report.Hover -ne 'not-run' -or $json -match 'abcdefghijk|youtube\.com') {
         throw "Cached address inspection changed privacy or read-only reporting: $page"
     }
@@ -114,7 +114,9 @@ function Invoke-PageAction($Request) {
     if ($report.Error -notlike "Inspection failed at ${fault}.*") { throw "Missing failure stage ${fault}: $($report.Error)" }
     $expectedFocus=if ($fault -eq 'hover') { 'focused' } elseif ($fault -eq 'focus') { 'unknown' } else { 'not-run' }
     $expectedHover=if ($fault -eq 'hover') { 'unknown' } else { 'not-run' }
-    if ($report.Focus -ne $expectedFocus -or $report.Hover -ne $expectedHover -or !$report.VideoDetected -or
+    $expectedChat=if ($fault -eq 'chat') { 'unknown' } else { 'ok' }
+    if ($report.ChatState -ne $expectedChat -or $report.ChatDetected -ne ($fault -ne 'chat') -or
+        $report.Focus -ne $expectedFocus -or $report.Hover -ne $expectedHover -or !$report.VideoDetected -or
         $report.Display -ne 'not-verified' -or $json -match 'fixture-private|abcdefghijk|youtube\.com') {
         throw "$fault inspection lost partial results or included private data"
     }

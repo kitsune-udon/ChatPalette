@@ -28,7 +28,7 @@ if ($List) {
     return
 }
 $report=[ordered]@{Time=[DateTime]::UtcNow.ToString('o'); Browser=''; BrowserVersion=''; PageKind='unknown';
-    Foreground=$false; AddressDetected=$false; VideoDetected=$false; ChatDetected=$false; LauncherDetected=$false;
+    Foreground=$false; AddressDetected=$false; VideoDetected=$false; ChatState='not-run'; LauncherDetected=$false;
     Focus='not-run'; Hover='not-run'; Display='not-verified'; Error=''}
 $stage='window'
 try {
@@ -50,7 +50,8 @@ try {
         if ($PageKind -ne 'Auto' -and $PageKind -ne $report.PageKind) { throw 'Unexpected page kind' }
     }
     $stage='chat'
-    $report.ChatDetected=(Find-ChatInput $WindowHandle).State -eq 'ok'
+    $report.ChatState='unknown'
+    $report.ChatState=(Find-ChatInput $WindowHandle).State
     $stage='launcher'
     $report.LauncherDetected=$null -ne (Find-ReactionLauncher $WindowHandle)
     if ($Exercise) {
@@ -64,6 +65,8 @@ try {
         $report.Hover=(Invoke-PageAction @{Seq=2;Window=$WindowHandle;Mode='reactions_show';Video=''}).State
     }
 } catch { $report.Error="Inspection failed at $stage. Verify the target window and this inspection step." }
+# Preserve the published boolean as a projection of the detailed outcome.
+$report.ChatDetected=$report.ChatState -eq 'ok'
 # Never include titles, URLs, field values or exception text in a shareable report.
 $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($report | ConvertTo-Json))
 $stream=[IO.File]::Open($OutputPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
