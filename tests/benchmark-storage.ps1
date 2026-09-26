@@ -40,6 +40,17 @@ for count in [1000,10000,100000] {
             if A_Index > 1
                 samples .= (finished-started)*1000/frequency "`n"
         }
+        ; Verify the measured result outside the timer before reporting its speed.
+        measuredRows := plan.Scopes["@shared"].Rows, priorRank := 0
+        Assert(measuredRows.Count=count,"measured plan preserves every item: " operation)
+        for measuredItem in draft.SharedDanmakuItems {
+            measuredRow := measuredRows[measuredItem.Id]
+            if !(measuredRow.Id == measuredItem.Id) || !(measuredRow.Name == measuredItem.Name) || !(measuredRow.Text == measuredItem.Text)
+                || measuredRow.Slot != measuredItem.Slot || !IsInteger(measuredRow.Position) || measuredRow.Position <= priorRank
+                throw Error("Measured plan changed item content or order: " operation "/" measuredItem.Id)
+            priorRank := measuredRow.Position
+        }
+        measuredRows := 0, measuredRow := 0, measuredItem := 0
         benchmarkSorted := StrSplit(RTrim(Sort(samples,"N"),"`n"),"`n")
         median := (benchmarkSorted[(Repeats+1)//2]+benchmarkSorted[(Repeats+2)//2])/2
         FileAppend(count "," operation "," Round(median,3) "," Round(benchmarkSorted[-1],3) "`n","*")
