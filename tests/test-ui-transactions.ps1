@@ -8,7 +8,7 @@ Edit-TestSource $release 'src/ui/palette/palette_view.ahk' '                Pale
 Edit-TestSource $release 'src/ui/panel_viewport.ahk' '    ApplyOffset(x, y) {' ("    ApplyOffset(x, y) {`r`n        ProbeViewport(this)")
 Edit-TestSource $release 'src/input/input_controller.ahk' 'RequestDanmakuInput(request) {' 'OriginalRequestDanmakuInput(request) {'
 Edit-TestSource $release 'src/ui/management/management_view.ahk' '        for row in model.Rows' '        for row in model.Rows {'
-Edit-TestSource $release 'src/ui/management/management_view.ahk' '        ManagedList.ModifyCol(1,160)' ("            ProbeManagementUpdate()`r`n        }`r`n        ManagedList.ModifyCol(1,160)")
+Edit-TestSource $release 'src/ui/management/management_view.ahk' '            ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)' ('            ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)' + "`r`n            ProbeManagementUpdate()`r`n        }")
 Edit-TestSource $release 'src/ui/panel_viewport.ahk' '            OnMessage(0x115,this.ScrollHandler)' ('            OnMessage(0x115,this.ScrollHandler)' + "`r`n            ProbeViewportRegistration(this)")
 Edit-TestSource $release 'src/ui/help_view.ahk' '        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' ('        topics.Choose(ManagementTabs.Value = 1 ? 2 : 3)' + "`r`n    ProbeInfoDialogBuild(view)")
 Edit-TestSource $release 'src/ui/reaction_feedback.ahk' '    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' ('    details.AddButton("x12 y324 w180","結果と詳細をコピー").OnEvent("Click", (*) => A_Clipboard := content)' + "`r`n    ProbeInfoDialogBuild(details)")

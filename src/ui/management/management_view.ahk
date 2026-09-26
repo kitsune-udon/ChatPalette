@@ -28,7 +28,7 @@ BuildManagement() {
     ManagementTarget.OnEvent("Change", ChangeManagementTarget)
     ManagementAddProfileButton := ManagementWindow.AddButton("x364 y52 w160 h30", "配信者を追加")
     ManagementAddProfileButton.OnEvent("Click", (*) => ManageProfile("add"))
-    ManagementTitle := ManagementWindow.AddText("x28 y96 w680 h24", "")
+    ManagementTitle := ManagementWindow.AddText("x28 y96 w680 h24", "編集する弾幕")
     ManagementChannel := ManagementWindow.AddText("x28 y126 w680 h38", "")
     ManagementProfileMenu := ManagementWindow.AddButton("x28 y112 w280 h32","配信者の設定…")
     ManagementProfileMenu.OnEvent("Click",OpenManagedProfileMenu)
@@ -112,14 +112,12 @@ RenderManagement() {
     EditingProfileId := model.ProfileId
     SyncProfileChoices(ManagementTarget,model.Choices)
     ManagementTarget.Choose(model.Choice)
-    ManagementTitle.Text := "編集する弾幕"
     ManagementChannel.Text := model.Channel
     position := BeginListRefresh(ManagedList,4)
     try {
         ManagedList.Delete()
         for row in model.Rows
             ManagedList.Add("",row.Name,row.Text,row.Key,row.ItemId)
-        ManagedList.ModifyCol(1,160), ManagedList.ModifyCol(2,380), ManagedList.ModifyCol(3,110)
     } finally {
         EndListRefresh(ManagedList,position,4)
     }
