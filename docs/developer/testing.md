@@ -62,7 +62,7 @@ Desktop区分は通常の操作用デスクトップで実行します。`Requir
 | ワーカー単体の寿命 | [test-worker-lifetime.ps1](../../tests/test-worker-lifetime.ps1) | パイプ切断・通知イベント欠落・接続先不在での終了とハンドル解放。実ワーカーを使い、画面・キー・ブラウザー操作を要しないHeadless検査 |
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
 | SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、バックアップと復旧 |
-| 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 登録の検証・保存・同期を区別し、中止時と同期失敗時のデータ・失敗理由を保全。再同期まで操作を拒否 |
+| 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 実DBとパイプ通信を使い、登録の検証・保存・同期を画面操作不要で確認。中止・同期失敗時のデータと理由を保全し、再同期まで操作を拒否 |
 | 登録状態の表示 | [test-registration-display.ps1](../../tests/test-registration-display.ps1) | DBを直接読み、通信・操作制限・診断更新を行わないこと。読み取り失敗と回復も非表示コントロールで確認するHeadless検査 |
 | 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面・キー解放は代替処理を使うHeadless検査 |
 | 設定整合性・復旧 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・不正な設定や上限超過の拒否、DB原本の保持、初期化前の退避・付随ファイルの保全・途中失敗の復元を画面不要で検査 |
