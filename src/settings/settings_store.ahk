@@ -88,17 +88,3 @@ VerifyStoredItems(expected,actual) {
             throw Error("弾幕の保存結果が一致しません。")
     }
 }
-BackupSettingsDatabase(destination) {
-    if FileExist(destination)
-        throw Error("バックアップ先は既に存在します。新しいファイル名を指定してください。")
-    temporary := destination ".creating-" NewRecordId()
-    try {
-        OpenSettingsRepository(SettingsDatabasePath).Db.Backup(temporary)
-        FileMove(temporary,destination,false)
-    } finally {
-        if FileExist(temporary)
-            FileDelete(temporary)
-        if FileExist(temporary "-journal")
-            FileDelete(temporary "-journal")
-    }
-}

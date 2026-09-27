@@ -4,6 +4,8 @@ class SettingsLimits {
     static Profiles => 10000
     static Items => 100000
     static DatabaseBytes => 128*1024*1024
+    static RegistrationBytes => 8192
+    static RegistrationsBytes => 24000
 }
 global ReactionCounts := [1, 10, 100, 1000, 10000]
 global ReactionIntervals := [0, 25, 50, 100, 150, 200, 250, 500, 1000]

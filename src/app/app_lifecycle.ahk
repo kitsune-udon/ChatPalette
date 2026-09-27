@@ -67,13 +67,76 @@ BackupSettingsForReset(path) {
 }
 
 ExportSettingsBackup(*) {
-    destination := FileSelect("S2",,"弾幕・設定・ボタン登録のバックアップ先（新しいファイル名）","SQLite database (*.db)")
-    if destination = ""
+    if !BeginSettingsTransfer()
         return
     try {
-        BackupSettingsDatabase(destination)
-        MsgBox("弾幕・配信者・共通設定・リアクションボタンの登録情報を保存しました。","バックアップ完了")
+        destination := FileSelect("S2", "ChatPalette-" FormatTime(,"yyyyMMdd-HHmmss") ".json","ユーザーデータのエクスポート先（新しいファイル名）","JSON (*.json)")
+        if destination = ""
+            return
+        SplitPath(destination,,,&extension)
+        if extension = ""
+            destination .= ".json"
+        ExportUserData(destination)
+        MsgBox("弾幕・配信者・共通設定・ショートカット・リアクションボタンの登録情報を保存しました。`n`n" destination,"エクスポート完了")
     } catch as failure {
-        MsgBox("バックアップできませんでした。`n" failure.Message,"バックアップ失敗","Icon!")
-    }
+        MsgBox("エクスポートできませんでした。`n" failure.Message,"エクスポート失敗","Icon!")
+    } finally EndSettingsTransfer()
+}
+
+ImportSettingsBackup(*) {
+    if !BeginSettingsTransfer()
+        return
+    try {
+        source := FileSelect(1,,"インポートするChatPaletteのユーザーデータ","JSON (*.json)")
+        if source = ""
+            return
+        data := ReadUserData(source), count := data.State.SharedDanmakuItems.Length
+        for profile in data.State.Profiles
+            count += profile.Items.Length
+        if MsgBox("次のファイルで現在のユーザーデータをすべて置き換えます。追加・統合はしません。`n`n" source
+            . "`n`n配信者：" data.State.Profiles.Length "件 ／ 弾幕：" count "件"
+            . "`nショートカット・標準設定・リアクションボタン登録も置き換わります。"
+            . "`n現在のデータは自動バックアップします。取り消し履歴は消去されます。`n`nインポートしますか？",
+            "ユーザーデータのインポート","YesNo Default2 Icon!") != "Yes"
+            return
+        backup := SettingsDatabasePath ".before-import-" FormatTime(,"yyyyMMdd-HHmmss") "-" NewRecordId() ".json"
+        ImportUserData(data,backup)
+        ; A display failure cannot turn a committed import into a reported save failure.
+        message := "インポートしました。`n以前のデータのバックアップ：`n" backup
+        try RefreshImportedUserData()
+        catch as failure
+            message .= "`n`nデータは保存済みですが画面を更新できませんでした。再起動してください。`n" failure.Message
+        MsgBox(message,"インポート完了")
+    } catch as failure {
+        MsgBox("インポートできませんでした。`n" failure.Message,"インポート失敗","Icon!")
+    } finally EndSettingsTransfer()
+}
+
+BeginSettingsTransfer() {
+    global SettingsTransferActive
+    previousCritical := A_IsCritical
+    Critical("On")
+    try {
+        policy := OperationPolicy("edit")
+        if !policy.Allowed {
+            ShowStatusTip(policy.Message,3000)
+            return false
+        }
+        SettingsTransferActive := true
+        return true
+    } finally Critical(previousCritical)
+}
+EndSettingsTransfer() {
+    global SettingsTransferActive := false
+    RefreshOperationControls()
+}
+RefreshImportedUserData() {
+    global EditingProfileId := "", DetectedChannel := {State:"unavailable",Channel:"",Author:"",Video:""}
+    CancelScheduledPaletteSearch()
+    PaletteSearch.Value := ""
+    SetDetectionStatus("ユーザーデータを読み込みました。YouTubeから開くとチャンネルを確認します。")
+    ResetPaletteSession()
+    RefreshReactionDefaultControls()
+    RefreshLibraryViews()
+    RefreshReactionRegistration()
 }

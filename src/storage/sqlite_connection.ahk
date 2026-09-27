@@ -2,7 +2,7 @@
 class SqliteConnection {
     static Library := A_WinDir "\System32\winsqlite3.dll"
     static Module := 0
-    __New(path, create := false) {
+    __New(path, create := false, readOnly := false) {
         this.Handle := 0, this.Statements := Map()
         if !SqliteConnection.Module {
             SqliteConnection.Module := DllCall("LoadLibraryExW", "Str", SqliteConnection.Library, "Ptr", 0, "UInt", 0x800, "Ptr")
@@ -10,7 +10,7 @@ class SqliteConnection {
                 throw Error("Windows標準SQLiteを読み込めません。対応するWindows環境を確認してください。")
         }
         utf8 := Buffer(StrPut(path,"UTF-8")), StrPut(path,utf8,"UTF-8")
-        rc := DllCall(SqliteConnection.Library "\sqlite3_open_v2", "Ptr", utf8, "Ptr*", &handle:=0, "Int", create ? 6 : 2, "Ptr", 0, "CDecl Int")
+        rc := DllCall(SqliteConnection.Library "\sqlite3_open_v2", "Ptr", utf8, "Ptr*", &handle:=0, "Int", readOnly ? 1 : (create ? 6 : 2), "Ptr", 0, "CDecl Int")
         this.Handle := handle
         try {
             this.Check(rc)
@@ -136,27 +136,6 @@ class SqliteConnection {
     CheckIntegrity() {
         if this.Scalar("PRAGMA integrity_check") != "ok" || this.Rows("PRAGMA foreign_key_check").Length
             throw Error("設定データベースの整合性を確認できません。")
-    }
-    Backup(path) {
-        if FileExist(path)
-            throw Error("バックアップ先は既に存在します。")
-        target := SqliteConnection(path,true), backup := 0
-        try {
-            target.ConfigureStorage()
-            backup := DllCall(SqliteConnection.Library "\sqlite3_backup_init", "Ptr", target.Handle, "AStr", "main", "Ptr", this.Handle, "AStr", "main", "CDecl Ptr")
-            if !backup
-                throw Error("バックアップを開始できません。")
-            rc := DllCall(SqliteConnection.Library "\sqlite3_backup_step", "Ptr", backup, "Int", -1, "CDecl Int")
-            finish := DllCall(SqliteConnection.Library "\sqlite3_backup_finish", "Ptr", backup, "CDecl Int"), backup := 0
-            if rc != 101
-                target.Check(rc)
-            target.Check(finish)
-            target.CheckIntegrity()
-        } finally {
-            if backup
-                DllCall(SqliteConnection.Library "\sqlite3_backup_finish", "Ptr", backup, "CDecl Int")
-            target.Close()
-        }
     }
     Close() {
         if !this.Handle

@@ -152,25 +152,22 @@ source.Run("INSERT INTO items VALUES(?,?,?,?,?,NULL)","orphan","missing-scope",1
 source.Exec("PRAGMA foreign_keys=ON")
 Assert(source.Scalar("PRAGMA integrity_check")="ok" && source.Rows("PRAGMA foreign_key_check").Length=1,"backup fixture has a broken reference in a structurally valid database")
 original := FileRead(SettingsDatabasePath,"RAW"), rejected := false
-backup := A_ScriptDir "\reference-backup.db"
-try BackupSettingsDatabase(backup)
+backup := A_ScriptDir "\reference-backup.json"
+try ExportUserData(backup)
 catch
     rejected := true
 Assert(rejected && !FileExist(backup),"backup rejects broken references before publishing the destination")
 leftovers := 0
 Loop Files backup ".creating-*"
     leftovers++
-Assert(leftovers=0,"rejected backup removes its temporary database and journal")
+Assert(leftovers=0,"rejected JSON backup leaves no temporary export")
 actual := FileRead(SettingsDatabasePath,"RAW")
 Assert(actual.Size=original.Size && DllCall("msvcrt\memcmp","Ptr",actual,"Ptr",original,"UPtr",actual.Size,"CDecl Int")=0,"rejected backup preserves the original database bytes")
 source.Run("UPDATE items SET scope_id='@shared' WHERE id=?","orphan")
-BackupSettingsDatabase(backup)
-restored := SettingsRepository(backup)
-try {
-    loaded := restored.Load()
-    Assert(loaded.SharedDanmakuItems.Length=1 && loaded.SharedDanmakuItems[1].Id="orphan"
-        && loaded.SharedDanmakuItems[1].Text="important","backup retries after explicit repair and preserves the item")
-} finally restored.Close()
+ExportUserData(backup)
+loaded := ReadUserData(backup).State
+Assert(loaded.SharedDanmakuItems.Length=1 && loaded.SharedDanmakuItems[1].Id="orphan"
+    && loaded.SharedDanmakuItems[1].Text="important","JSON backup retries after explicit repair and preserves the item")
 ; Reset preserves the corrupt source and every sidecar without opening recovery dialogs.
 CloseSettingsStore()
 SettingsDatabasePath := A_ScriptDir "\reset-control.db"

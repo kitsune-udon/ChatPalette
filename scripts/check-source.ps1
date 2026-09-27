@@ -43,7 +43,7 @@ foreach($file in @(Get-ReleaseFiles $ProjectRoot)) {
         }
     }
 }
-foreach ($module in @('src\shortcuts\shortcut_policy.ahk','src\settings\settings_schema.ahk','src\settings\settings_store.ahk','src\settings\settings_repository.ahk','src\settings\reaction_registration_repository.ahk','src\settings\library_storage_plan.ahk','src\storage\sqlite_connection.ahk','src\browser\worker_client.ahk','src\library\danmaku_library.ahk','src\library\library_service.ahk','src\library\profile_service.ahk','src\settings\settings_service.ahk')) {
+foreach ($module in @('src\shortcuts\shortcut_policy.ahk','src\settings\settings_schema.ahk','src\settings\settings_store.ahk','src\settings\user_data_transfer.ahk','src\settings\user_data_json.ahk','src\settings\settings_repository.ahk','src\settings\reaction_registration_repository.ahk','src\settings\library_storage_plan.ahk','src\storage\sqlite_connection.ahk','src\browser\worker_client.ahk','src\library\danmaku_library.ahk','src\library\library_service.ahk','src\library\profile_service.ahk','src\settings\settings_service.ahk')) {
     $moduleText = [IO.File]::ReadAllText((Join-Path $ProjectRoot $module))
     $moduleText = [regex]::Replace($moduleText, '(?m)^\s*;.*$', '')
     if ($moduleText -match '\b(PaletteWindow|ManagementWindow|ManagementStatus|ManagedList|EditingProfileId|ActiveEditorDialog|RefreshLibraryViews|RefreshManagement|RefreshPalette|ToolTip|MsgBox|InputBox|Gui)\b') {

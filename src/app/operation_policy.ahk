@@ -15,7 +15,7 @@ EvaluateOperation(action, state) {
     return {Allowed:true, Reason:"", Message:""}
 }
 CurrentOperationState() {
-    return {Refreshing:PaletteRefresh.Active || ManagementRefresh.Active, BrowserBusy:IsBrowserOperationBusy || !!ActivePageAction,
+    return {Refreshing:PaletteRefresh.Active || ManagementRefresh.Active, BrowserBusy:IsBrowserOperationBusy || !!ActivePageAction || SettingsTransferActive,
         ReactionActive:!!ActiveReactionJob, EditorLabel:ActiveEditorDialog ? ActiveEditorDialog.Label : ""}
 }
 OperationPolicy(action) {

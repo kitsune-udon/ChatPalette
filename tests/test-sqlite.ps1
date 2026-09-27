@@ -2,7 +2,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 $release = New-TestRuntime
-$repositoryAnchor = 'this.Db := SqliteConnection(path,create)'
+$repositoryAnchor = 'this.Db := SqliteConnection(path,create,readOnly)'
 Edit-TestSource $release 'src/settings/settings_repository.ahk' $repositoryAnchor ($repositoryAnchor + "`r`n        global ProbeRepositoryConnection := this.Db")
 $tests = @'
 #Requires AutoHotkey v2.0
@@ -348,33 +348,27 @@ Loop 20
 VerifySettingsRoundTrip(beforeRanks,LoadSettings(SettingsDatabasePath))
 Assert(true,"rank exhaustion and repeated undo preserve logical order and IDs")
 store.Db.CheckIntegrity()
-backup := A_ScriptDir "\backup.db"
-BackupSettingsDatabase(backup)
-copy := SettingsRepository(backup)
-VerifySettingsRoundTrip(CreateTestSettingsSnapshot(),copy.Load())
-copy.Db.CheckIntegrity(), copy.Close()
-Assert(true,"backup restores full logical state")
-lockedBackup := A_ScriptDir "\locked-backup.db"
+backup := A_ScriptDir "\backup.json"
+ExportUserData(backup)
+VerifySettingsRoundTrip(CreateTestSettingsSnapshot(),ReadUserData(backup).State)
+Assert(true,"JSON backup restores full logical state")
+lockedBackup := A_ScriptDir "\locked-backup.json"
 locker := SqliteConnection(SettingsDatabasePath)
 try {
     locker.Exec("BEGIN EXCLUSIVE")
     failed := false
-    try BackupSettingsDatabase(lockedBackup)
+    try ExportUserData(lockedBackup)
     catch
         failed := true
     Assert(failed && !FileExist(lockedBackup),"locked source cannot publish an incomplete backup")
     leftovers := 0
     Loop Files lockedBackup ".creating-*"
         leftovers++
-    Assert(leftovers=0,"failed backup removes temporary database and journal")
+    Assert(leftovers=0,"failed JSON backup leaves no temporary export")
 } finally locker.Close()
-BackupSettingsDatabase(lockedBackup)
-copy := SettingsRepository(lockedBackup)
-try {
-    VerifySettingsRoundTrip(CreateTestSettingsSnapshot(),copy.Load())
-    copy.Db.CheckIntegrity()
-    Assert(true,"backup retries after source lock is released")
-} finally copy.Close()
+ExportUserData(lockedBackup)
+VerifySettingsRoundTrip(CreateTestSettingsSnapshot(),ReadUserData(lockedBackup).State)
+Assert(true,"JSON backup retries after source lock is released")
 other := SqliteConnection(SettingsDatabasePath)
 other.Exec("UPDATE preferences SET reaction_interval=250 WHERE id=1")
 failed := false
@@ -384,15 +378,17 @@ catch
 Assert(failed,"external committed changes cannot be silently overwritten")
 other.Close(), ReloadAppSettings()
 Assert(DefaultReactionIntervalMs=250,"reload reads external committed state")
-upgraded := SqliteConnection(backup)
-upgraded.Exec("PRAGMA user_version=999"), upgraded.Close()
+futurePath := A_ScriptDir "\future-schema.db"
+upgraded := SettingsRepository(futurePath,true)
+upgraded.SaveAll(CreateTestSettingsSnapshot())
+upgraded.Db.Exec("PRAGMA user_version=999"), upgraded.Close()
 closeMethod := SqliteConnection.Prototype.GetOwnPropDesc("Close")
 for closeFails in [false,true] {
     caught := 0
     if closeFails
         SqliteConnection.Prototype.DefineProp("Close",{Call:RejectSettingsClose})
     try {
-        try SettingsRepository(backup)
+        try SettingsRepository(futurePath)
         catch as failure
             caught := failure
     } finally SqliteConnection.Prototype.DefineProp("Close",closeMethod)
@@ -424,7 +420,10 @@ recoveryPath := A_ScriptDir "\load-recovery.db"
 recoveryState := CreateTestSettingsSnapshot()
 recovery := SettingsRepository(recoveryPath,true)
 recovery.SaveAll(recoveryState)
-recovery.Db.Backup(recoveryPath ".good")
+; Offline recovery copies only a closed database, matching the manual restore procedure.
+recovery.Close()
+FileCopy(recoveryPath,recoveryPath ".good",false)
+recovery := SettingsRepository(recoveryPath)
 recovery.Db.Run("DELETE FROM preferences")
 recovery.Close()
 ; The public load boundary must preserve the read error even if cleanup also fails.

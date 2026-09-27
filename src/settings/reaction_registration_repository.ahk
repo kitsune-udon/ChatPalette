@@ -3,7 +3,7 @@ CreateReactionRegistrationSchema(db) {
     db.Exec("CREATE TABLE reaction_registrations(browser TEXT PRIMARY KEY NOT NULL CHECK(browser!=''), payload TEXT NOT NULL CHECK(json_valid(payload) AND json_type(payload)='object' AND json_type(payload,'$.browser') IS NULL))")
 }
 ValidateReactionRegistration(db,payload) {
-    if StrPut(payload,"UTF-8")>8192 || db.Scalar("SELECT json_valid(?)",payload) != "1"
+    if StrPut(payload,"UTF-8")>SettingsLimits.RegistrationBytes || db.Scalar("SELECT json_valid(?)",payload) != "1"
         throw Error("リアクション登録情報の形式が不正です。")
     ; SQLite and PowerShell can resolve duplicate members differently. Reject ambiguity before saving.
     if db.Scalar("SELECT EXISTS(SELECT 1 FROM json_tree(?) WHERE typeof(key)='text' GROUP BY parent,key COLLATE NOCASE HAVING COUNT(*)>1)",payload) = "1"
@@ -32,8 +32,11 @@ ApplyReactionRegistration(repository,payload) {
     db := repository.Db
     browser := ValidateReactionRegistration(db,payload)
     db.Run("INSERT INTO reaction_registrations VALUES(?,json_remove(?,'$.browser')) ON CONFLICT(browser) DO UPDATE SET payload=excluded.payload",browser,payload)
+    CheckReactionRegistrationSize(db)
+}
+CheckReactionRegistrationSize(db) {
     ; Keep the complete startup snapshot within the existing pipe frame limit.
-    if Integer(db.Scalar("SELECT COALESCE(SUM(length(CAST(json_set(payload,'$.browser',browser) AS BLOB))),0) FROM reaction_registrations"))>24000
+    if Integer(db.Scalar("SELECT COALESCE(SUM(length(CAST(json_set(payload,'$.browser',browser) AS BLOB))),0) FROM reaction_registrations"))>SettingsLimits.RegistrationsBytes
         throw Error("リアクション登録情報の合計サイズが上限を超えています。")
 }
 LoadReactionRegistrationSnapshot() {

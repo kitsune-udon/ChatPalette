@@ -26,6 +26,8 @@
 #Include %A_ScriptDir%\src\settings\shortcut_repository.ahk
 #Include %A_ScriptDir%\src\settings\settings_repository.ahk
 #Include %A_ScriptDir%\src\settings\settings_store.ahk
+#Include %A_ScriptDir%\src\settings\user_data_transfer.ahk
+#Include %A_ScriptDir%\src\settings\user_data_json.ahk
 #Include %A_ScriptDir%\src\browser\worker_client.ahk
 #Include %A_ScriptDir%\src\input\text_input.ahk
 #Include %A_ScriptDir%\src\input\input_controller.ahk

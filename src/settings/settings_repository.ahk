@@ -2,14 +2,17 @@
 class SettingsRepository {
     static ApplicationId := 1129335892
     static SchemaVersion := 4
-    __New(path, create := false) {
+    __New(path, create := false, readOnly := false) {
         if FileExist(path) && FileGetSize(path)>SettingsLimits.DatabaseBytes
             throw Error("設定データベースが上限" (SettingsLimits.DatabaseBytes//1024//1024) "MiBを超えています。")
         this.Path := path, this.Saved := 0
-        this.Db := SqliteConnection(path,create)
+        this.Db := SqliteConnection(path,create,readOnly)
         try {
             if create {
-                this.Db.ConfigureStorage()
+                if path == ":memory:"
+                    this.Db.Exec("PRAGMA foreign_keys=ON")
+                else
+                    this.Db.ConfigureStorage()
                 this.Db.Transaction(ObjBindMethod(this,"CreateSchema"))
             } else {
                 if this.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
@@ -17,9 +20,11 @@ class SettingsRepository {
                 version := this.Db.Scalar("PRAGMA user_version")
                 if version != SettingsRepository.SchemaVersion
                     throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
-                this.Db.ConfigureStorage()
+                if !readOnly
+                    this.Db.ConfigureStorage()
             }
-            this.Db.Exec("PRAGMA max_page_count=" (SettingsLimits.DatabaseBytes//Integer(this.Db.Scalar("PRAGMA page_size"))))
+            if !readOnly
+                this.Db.Exec("PRAGMA max_page_count=" (SettingsLimits.DatabaseBytes//Integer(this.Db.Scalar("PRAGMA page_size"))))
             if create {
                 scopes := Map(), scopes.CaseSense := "On"
                 this.Saved := {Scopes:scopes,Preferences:0,DataVersion:this.Db.Scalar("PRAGMA data_version")}
@@ -139,7 +144,11 @@ class SettingsRepository {
         version := this.VerifyDataVersion()
         if plan
             this.ApplyLibrary(plan)
-        previous := this.Saved.Preferences
+        this.ApplyPreferences(preferences,this.Saved.Preferences)
+        return version
+    }
+    ; Called inside the owning transaction. No baseline means a complete replacement.
+    ApplyPreferences(preferences,previous := 0) {
         baseChanged := !previous || !(preferences.InputProfileId == previous.InputProfileId)
             || preferences.AutoMode != previous.AutoMode || preferences.DefaultReactionKind != previous.DefaultReactionKind
             || preferences.DefaultReactionCount != previous.DefaultReactionCount
@@ -152,21 +161,22 @@ class SettingsRepository {
             if !previous || !(key == previous.ShortcutKeys[action])
                 this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=?",key,action)
         }
-        return version
     }
-    ApplyLibrary(plan) {
+    ApplyLibrary(plan, previous := unset) {
+        if !IsSet(previous)
+            previous := this.Saved.Scopes
         ; Remove changed ownership first, then insert/update. A failed step rolls it all back.
-        for id, old in this.Saved.Scopes {
+        for id, old in previous {
             if !plan.Scopes.Has(id)
                 this.Db.Run("DELETE FROM scopes WHERE id=?",id)
         }
         for id, scope in plan.Scopes {
-            old := this.Saved.Scopes.Get(id,0)
+            old := previous.Get(id,0)
             if old && !(old.Channel == scope.Channel)
                 this.Db.Run("UPDATE scopes SET channel=NULL WHERE id=?",id)
         }
         for id, scope in plan.Scopes {
-            old := this.Saved.Scopes.Get(id,0)
+            old := previous.Get(id,0)
             if !old
                 this.Db.Run("INSERT INTO scopes VALUES(?,?,NULLIF(?,''),?)",id,scope.Name,scope.Channel,scope.Position)
             else if !(old.Name == scope.Name) || !(old.Channel == scope.Channel) || old.Position != scope.Position
@@ -174,7 +184,7 @@ class SettingsRepository {
         }
         changed := []
         for delta in plan.Changes {
-            id := delta.Scope, scope := plan.Scopes[id], old := this.Saved.Scopes.Get(id,0)
+            id := delta.Scope, scope := plan.Scopes[id], old := previous.Get(id,0)
             for itemId in delta.Deleted
                 this.Db.Run("DELETE FROM items WHERE id=?",itemId)
             for itemId in delta.Changed {

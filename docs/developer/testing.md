@@ -94,6 +94,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | 配置・表示 | [test-app-layout.ps1](../../tests/test-app-layout.ps1) | 画面配置・通知、待機中の連携対象と移動先IDの保持、連携開始時の取得失敗・操作交代後の通知抑止、連携確認中のキャンセル・画面交代後の保存抑止、前面確認の失敗診断 |
 | 編集ダイアログ | [test-app-editors.ps1](../../tests/test-app-editors.ps1) | 保存と破棄確認、長い名前・本文の編集／保存／Undoと移動画面の表示、下書き・選択IDの保持、削除済みの所属を共通弾幕へ読み替えないこと、ダイアログの所有とフォーカス復元 |
 | ライブラリ操作 | [test-library-service.ps1](../../tests/test-library-service.ps1) | 編集・移動・割当・Undoの確定、変更なしの履歴保持、入力対象・共通設定・失敗時データの保全。実SQLiteを使い、画面・キー登録・ワーカーを起動しない |
+| ユーザーデータの移行 | [test-user-data-transfer.ps1](../../tests/test-user-data-transfer.ps1) | 全データの往復、全件置換と自動退避、不正入力・保存失敗の保全、キャンセル・操作排他・実GUI部品の更新。ファイル選択・確認ダイアログは代替応答。[設計と検証記録](user-data-transfer.md) |
 | ライブラリの画面連携 | [test-app-library.ps1](../../tests/test-app-library.ps1) | 編集対象と入力対象の分離、画面からのUndo・検索・今回設定、保存失敗時の保全、チャンネル連携 |
 | 入力対象の確定 | [test-input-context.ps1](../../tests/test-input-context.ps1) | 自動判別の結果を画面更新と独立して保持。判別・保存の失敗時は入力計画を作らず、手動・共通入力も検証。画面・ブラウザー操作なし |
 | 入力計画 | [test-app-input-plan.ps1](../../tests/test-app-input-plan.ps1) | IDと本文の固定、並べ替え・管理画面からの復帰後の選択保持、入力前のパレット表示・前面確認、送信直前の再検証、対象変更時の中止、部分入力を再送しないこと |
@@ -102,7 +103,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | ワーカーの終了失敗 | [test-worker-cleanup.ps1](../../tests/test-worker-cleanup.ps1) | 終了を確認できない場合のハンドル所有・再入拒否・明示的な復旧。11の故障ケースをそれぞれ新しいプロセスで実行し、ケース名を記録する |
 | ワーカー単体の寿命 | [test-worker-lifetime.ps1](../../tests/test-worker-lifetime.ps1) | 実プロセスの起動失敗・理由の保持・ハンドル解放・再試行、パイプ切断・通知イベント欠落・接続先不在での終了。実ワーカーを使い、アプリ初期化・DB・画面・キー・ブラウザー操作を要しないHeadless検査 |
 | 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
-| SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、バックアップと復旧。Unicode・長文・複数配信者の保存往復は独立した合成データで確認し、アプリ初期化を要しない |
+| SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、JSONバックアップのロック拒否と再試行、終了後のDBコピーからの復旧。Unicode・長文・複数配信者の保存往復は独立した合成データで確認し、アプリ初期化を要しない |
 | 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 実DBとパイプ通信を使い、登録の検証・保存・同期を画面操作不要で確認。中止・同期失敗時のデータと理由を保全し、再同期まで操作を拒否 |
 | 登録状態の表示 | [test-registration-display.ps1](../../tests/test-registration-display.ps1) | DBを直接読み、通信・操作制限・診断更新を行わないこと。読み取り失敗と回復も非表示コントロールで確認するHeadless検査 |
 | 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面・キー解放は代替処理を使うHeadless検査 |
