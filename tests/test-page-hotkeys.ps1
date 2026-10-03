@@ -7,7 +7,7 @@ global HotkeyCalls := [], QueueKeys := false, QueuedBeforeResponse := false
 global FixtureBrowser := Gui(,"ChatPalette isolated page shortcut test")
 global FixtureChat := FixtureBrowser.AddEdit("w320","unsent fixture text")
 other := FixtureBrowser.AddButton("w160","Another control")
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=FixtureBrowser.Hwnd
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=FixtureBrowser.Hwnd) ? "chrome.exe" : ""
 RuntimePorts.BrowserRequest := ShortcutFixtureRequest
 InstallApplicationShortcuts()
 PresentWindow(FixtureBrowser)
@@ -151,7 +151,7 @@ Assert(HotkeyCalls.Length=9 && HotkeyCalls[9].Mode="chat_focus","remapped key di
 SendTestKeys("{Control DownR}{Alt DownR}f{Alt up}{Control up}")
 Sleep(150)
 Assert(HotkeyCalls.Length=9,"old key is removed after remapping")
-RuntimePorts.BrowserIdentity := (hwnd) => false
+RuntimePorts.BrowserProcessName := (hwnd) => ""
 SendTestKeys("{Control DownR}{Shift DownR}j{Shift up}{Control up}")
 Sleep(150)
 Assert(HotkeyCalls.Length=9,"remapped page key remains browser-only")

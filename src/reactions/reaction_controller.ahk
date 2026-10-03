@@ -36,7 +36,6 @@ ArmReactionTimer(job, callback, period) {
 
 StopReactionTimers() {
     SetTimer(ReactionCountdown, 0)
-    SetTimer(QuickReaction, 0)
 }
 FinishReactionJob(job) {
     global ActiveReactionJob
@@ -55,14 +54,12 @@ FinishReactionJob(job) {
     return true
 }
 
-QueueQuickReaction(shortcut := 0,*) {
+QueueQuickReaction(shortcut) {
     if ShortcutBlocked("reaction")
         return false
-    job := CreateReactionJob({Mode:"queued",Window:shortcut ? shortcut.Window : WinExist("A"),
-        Video:shortcut ? shortcut.Session.Video : "",Shortcut:shortcut})
-    if !StartReactionJob(job,!shortcut)
-        return false
-    return shortcut ? QuickReaction() : true
+    job := CreateReactionJob({Mode:"queued",Window:shortcut.Window,
+        Video:shortcut.Session.Video,Shortcut:shortcut})
+    return StartReactionJob(job) && QuickReaction(job)
 }
 
 ScheduleReaction(mode, delay, options := 0) {
@@ -93,7 +90,7 @@ ScheduleReaction(mode, delay, options := 0) {
 }
 
 ; Both entry paths publish, present and schedule through the same owner lifetime.
-StartReactionJob(job, deferQuick := true) {
+StartReactionJob(job) {
     global ActiveReactionJob
     ActiveReactionJob := job
     started := false, startFailure := 0
@@ -112,8 +109,9 @@ StartReactionJob(job, deferQuick := true) {
         if ActiveReactionJob != job || job.Cancelled
             return false
         ShowReactionProgress()
-        started := job.Mode = "queued" ? (!deferQuick || ArmReactionTimer(job,QuickReaction,-1))
-            : ArmReactionTimer(job,ReactionCountdown,1000)
+        if ActiveReactionJob != job || job.Cancelled || job.Phase = "finished"
+            return false
+        started := job.Mode = "queued" || ArmReactionTimer(job,ReactionCountdown,1000)
         return started
     } catch as failure {
         startFailure := failure
@@ -333,11 +331,11 @@ ReactionSendProgress(job) {
     return job.Applied "`n操作済み " job.Completed " / " job.Total " 回" measurement
 }
 
-QuickReaction(*) {
+QuickReaction(queuedJob) {
     global ActiveReactionJob
-    if !ActiveReactionJob || ActiveReactionJob.Mode != "queued"
-        return
-    queuedJob := ActiveReactionJob
+
+    if !queuedJob || ActiveReactionJob != queuedJob || queuedJob.Mode != "queued"
+        return false
     hwnd := queuedJob.Window, startFailure := 0
     try {
         if ActiveReactionJob != queuedJob || queuedJob.Cancelled

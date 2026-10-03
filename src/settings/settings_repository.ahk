@@ -5,7 +5,7 @@ class SettingsRepository {
     __New(path, create := false, readOnly := false) {
         if FileExist(path) && FileGetSize(path)>SettingsLimits.DatabaseBytes
             throw Error("設定データベースが上限" (SettingsLimits.DatabaseBytes//1024//1024) "MiBを超えています。")
-        this.Path := path, this.Saved := 0, this.Version := SettingsRepository.SchemaVersion, this.ReadOnly := readOnly
+        this.Path := path, this.Saved := 0
         this.Db := SqliteConnection(path,create,readOnly)
         try {
             if create {
@@ -18,13 +18,12 @@ class SettingsRepository {
                 if this.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
                     throw Error("ChatPaletteの設定データベースではありません。")
                 version := this.Db.Scalar("PRAGMA user_version")
-                if version != 4 && version != SettingsRepository.SchemaVersion
+                if version != SettingsRepository.SchemaVersion
                     throw Error("未対応の設定形式です。対応するChatPaletteで開いてください。")
-                this.Version := version
-                if !readOnly && version != 4
+                if !readOnly
                     this.Db.ConfigureStorage()
             }
-            if !readOnly && this.Version != 4
+            if !readOnly
                 this.Db.Exec("PRAGMA max_page_count=" (SettingsLimits.DatabaseBytes//Integer(this.Db.Scalar("PRAGMA page_size"))))
             if create {
                 scopes := Map(), scopes.CaseSense := "On"
@@ -47,30 +46,9 @@ class SettingsRepository {
         CreateShortcutSchema(this.Db)
     }
     Load() {
-        if this.Version = 4 && !this.ReadOnly {
-            ; Reject invalid legacy data before any persistent storage configuration.
-            this.Db.Transaction(() => ReadUserDataSnapshot(this),false)
-            this.Db.ConfigureStorage()
-            this.Db.Exec("PRAGMA max_page_count=" (SettingsLimits.DatabaseBytes//Integer(this.Db.Scalar("PRAGMA page_size"))))
-            loaded := this.Db.Transaction(ObjBindMethod(this,"UpgradeLegacyState"))
-            this.Version := SettingsRepository.SchemaVersion
-        } else
-            loaded := this.Db.Transaction(ObjBindMethod(this,"ReadState"),false)
+        loaded := this.Db.Transaction(ObjBindMethod(this,"ReadState"),false)
         this.Saved := loaded.Saved
         return loaded.State
-    }
-    UpgradeLegacyState() {
-        ; Revalidate under the write lock; rows and version commit or roll back together.
-        loaded := this.ReadState()
-        ReadUserDataSnapshot(this,loaded)
-        for action, key in loaded.State.ShortcutKeys {
-            if action = "chat_send"
-                this.Db.Run("INSERT INTO shortcut_bindings VALUES(?,?)",action,key)
-            else
-                this.Db.Run("UPDATE shortcut_bindings SET key=? WHERE action=?",key,action)
-        }
-        this.Db.Exec("PRAGMA user_version=" SettingsRepository.SchemaVersion)
-        return loaded
     }
     ReadState() {
         if Integer(this.Db.Scalar("SELECT COUNT(*) FROM scopes"))>SettingsLimits.Profiles+1 || Integer(this.Db.Scalar("SELECT COUNT(*) FROM items"))>SettingsLimits.Items
@@ -107,7 +85,7 @@ class SettingsRepository {
             throw Error("選択中の配信者がありません。")
         state.AutoMode := this.ReadInteger(row[2]), state.DefaultReactionKind := this.ReadInteger(row[3]), state.DefaultReactionCount := this.ReadInteger(row[4])
         state.DefaultReactionIntervalMs := this.ReadInteger(row[5])
-        state.ShortcutKeys := ReadShortcutKeys(this.Db,this.Version)
+        state.ShortcutKeys := ReadShortcutKeys(this.Db)
         ValidateSettingsPreferences(state)
         validated := BuildLibraryStoragePlan(state,scopes,true)
         for id, scope in scopes

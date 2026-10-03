@@ -98,6 +98,15 @@ RunDanmakuInput(resolve, origin, shortcut := 0) {
         ShowInputFailure(result.State)
     return result
 }
+; Both deliveries consume the exact chat proof once, including failed verification.
+VerifyShortcutInput(hwnd, expectedVideo, shortcut := 0) {
+    if shortcut && shortcut.Session.Focus {
+        focus := shortcut.Session.Focus
+        shortcut.Session.Focus := 0
+        return VerifyChatFocus(hwnd,focus)
+    }
+    return VerifyInputTarget(hwnd,expectedVideo)
+}
 DeliverDanmakuInput(plan, activate := false, shortcut := 0) {
     hwnd := plan.Window
     if activate {
@@ -111,12 +120,7 @@ DeliverDanmakuInput(plan, activate := false, shortcut := 0) {
     }
     if !IsTargetForeground(hwnd)
         return {State:"input_cancelled"}
-    if shortcut && shortcut.Session.Focus {
-        focus := shortcut.Session.Focus
-        shortcut.Session.Focus := 0
-        verified := VerifyChatFocus(hwnd,focus)
-    } else
-        verified := VerifyInputTarget(hwnd, plan.Video)
+    verified := VerifyShortcutInput(hwnd,plan.Video,shortcut)
     if verified.State != "ok"
         return verified
     return SendPlannedDanmaku(plan,shortcut)

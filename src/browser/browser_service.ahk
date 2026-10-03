@@ -1,6 +1,6 @@
 ﻿; Browser request orchestration, including UI wait lifetime. Transport stays in worker_client.
 IsBrowser(hwnd) {
-    return RuntimePorts.BrowserIdentity ? RuntimePorts.BrowserIdentity.Call(hwnd) : NativeIsBrowser(hwnd)
+    return BrowserNames().Has(ReadBrowserProcessName(hwnd))
 }
 
 BrowserNames() {
@@ -9,10 +9,19 @@ BrowserNames() {
     return names
 }
 
+; Native identity checks bypass the fixture even when its process-name port is set.
 NativeIsBrowser(hwnd) {
-    return BrowserNames().Has(ReadBrowserProcessName(hwnd))
+    return BrowserNames().Has(NativeReadBrowserProcessName(hwnd))
 }
 ReadBrowserProcessName(hwnd) {
+    if !RuntimePorts.BrowserProcessName
+        return NativeReadBrowserProcessName(hwnd)
+    ; Select the fixture before the native empty-handle guard; tests may own synthetic IDs.
+    try return StrLower(RuntimePorts.BrowserProcessName.Call(hwnd))
+    catch TargetError
+        return ""
+}
+NativeReadBrowserProcessName(hwnd) {
     if !hwnd
         return ""
     try return StrLower(WinGetProcessName("ahk_id " hwnd))

@@ -282,7 +282,7 @@ Invoke-AppFixture -Body @'
         {Id:"link-A",Name:"same",Channel:"",Items:[]}],
         SharedDanmakuItems:[{Id:"move-item",Name:"move",Text:"move text",Slot:1}]},"dialog identity fixture")
     global LinkWaitChange := "", LinkChoice := 0, LinkName := 0, LinkChannel := "/channel/first"
-    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+    RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
     RuntimePorts.ResolveChannel := ChangeSelectionDuringVerification
     TargetBrowserHwnd := 123
     OpenChannelLinkDialog("link-a")

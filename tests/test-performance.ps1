@@ -129,14 +129,14 @@ Fingerprint(library) {
         text .= item.Name "|" item.Text "|" item.Slot ";"
     return text
 }
-FixtureIsBrowser(hwnd) {
-    return hwnd=123
+FixtureBrowserProcessName(hwnd) {
+    return hwnd=123 ? "chrome.exe" : ""
 }
 FixtureResolveChannel(hwnd) {
     return {State:"ok",Channel:"/channel/a",Author:"A",Video:"fixture0000"}
 }
 '@
-Invoke-AppTest -Runtime $release -Body $tests -Setup 'RuntimePorts.BrowserIdentity := FixtureIsBrowser, RuntimePorts.ResolveChannel := FixtureResolveChannel'
+Invoke-AppTest -Runtime $release -Body $tests -Setup 'RuntimePorts.BrowserProcessName := FixtureBrowserProcessName, RuntimePorts.ResolveChannel := FixtureResolveChannel'
 
 # Each initial tab gets a fresh application; count complete management renders.
 foreach ($page in @(1,2,3)) {

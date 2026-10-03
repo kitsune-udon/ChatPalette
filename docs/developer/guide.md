@@ -4,126 +4,75 @@
 
 ## 作業を始める
 
-Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。ブラウザー調査にはWindows UI Automation、保存にはWindows標準の `winsqlite3.dll` を使います。追加のSQLiteサーバーやパッケージ管理による依存取得はありません。
+Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。追加のSQLiteやパッケージ取得は不要です。検証環境はWindows 11・64bit版AutoHotkey v2です。他環境の対応を主張するには、その環境で検証してください。
 
-実行確認はWindows 11・64bit版AutoHotkey v2で行っています。これ以外の環境を対応済みとする場合は、その環境で保存・ブラウザー検出・入力・配布の検証を追加してください。
+通常利用するアプリとは別フォルダーで開発します。通常起動・`--smoke`・`--quiet`は`#SingleInstance Force`により同じパスのアプリを置き換えます。構文確認には、実行も置き換えも行わないAutoHotkey標準の`/Validate`を使います。`--check`は廃止しました。
 
-リポジトリを取得したら、通常利用するアプリとは**別フォルダー**を開発用に使います。同じスクリプトの通常起動や`--smoke`・`--quiet`・`--check`は、`#SingleInstance Force`により既存インスタンスを置き換えます。
-
-構文確認にはAutoHotkey標準の[`/Validate`](https://github.com/AutoHotkey/AutoHotkeyDocs/blob/v2/docs/Scripts.htm#validate)を使います。スクリプトを実行せず、動作中のアプリを置き換えずに確認できます。既存の`--check`も受け付けますが、構文確認の手順では使用しません。
-
-`main.ahk`は引数なし、または`--check`・`--smoke`・`--quiet`のいずれか一つを指定して起動します。未知の引数や複数指定は、設定の読み込み・画面構築前に標準エラーへ理由を出して終了コード1で終了します。
-
-以下の例はリポジトリ直下で実行します。AutoHotkeyのインストール場所が違う場合は読み替えます。 配布・検査・テスト・計測コマンドは、未知の引数名を処理開始前に拒否します。引数名の誤記を既定値での実行として扱いません。
+リポジトリ直下で実行します。AutoHotkeyのパスは環境に合わせて変更してください。
 
 ```powershell
-# 実行せずに構文を確認。動作中のアプリとdata/は変更しない
 & 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' /ErrorStdOut /Validate .\main.ahk
-
-# 設定読み込みと画面構築を行って終了。data/を作る場合がある
 & 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' /ErrorStdOut .\main.ahk --smoke
-
-# 通常起動
 & 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' .\main.ahk
-
-# 起動時にパレットを表示しない
 & 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' .\main.ahk --quiet
 ```
 
+`--smoke`は設定と画面を初期化して終了します。`--quiet`はパレットを表示せず常駐します。未知・複数の引数はデータ初期化前に拒否します。検査・配布・計測コマンドも未知の引数名を拒否します。
+
 ## 変更箇所を選ぶ
 
-| 変更したいこと | 最初に読む場所 |
+| 対象 | 最初に読む場所 |
 |---|---|
-| 配置・ボタン・表示文言 | [src/ui/](../../src/ui)の該当画面 |
-| 弾幕・配信者の編集規則 | [src/library/library_service.ahk](../../src/library/library_service.ahk) |
-| 初期値・選択肢 | [src/settings/settings_schema.ahk](../../src/settings/settings_schema.ahk) |
-| 設定の保存 | [src/settings/](../../src/settings)、SQLite呼び出しは[src/storage/](../../src/storage) |
-| キーの許可・登録 | [src/shortcuts/](../../src/shortcuts) |
-| 文字入力の対象確認 | [src/input/](../../src/input)、[src/browser/input_target.ps1](../../src/browser/input_target.ps1) |
-| リアクションの実行・停止 | [src/reactions/reaction_controller.ahk](../../src/reactions/reaction_controller.ahk) |
-| UIAによるボタン検出 | [src/browser/reaction_automation.ps1](../../src/browser/reaction_automation.ps1) |
-| 常駐プロセスとの通信 | [src/browser/worker_client.ahk](../../src/browser/worker_client.ahk)、`browser_worker.ps1` |
+| 画面・文言 | [src/ui/](../../src/ui) |
+| 弾幕・配信者の編集 | [library_service.ahk](../../src/library/library_service.ahk) |
+| 初期値・選択肢 | [settings_schema.ahk](../../src/settings/settings_schema.ahk) |
+| 保存・入出力 | [src/settings/](../../src/settings)、[src/storage/](../../src/storage) |
+| キー | [src/shortcuts/](../../src/shortcuts) |
+| 入力対象の確認 | [src/input/](../../src/input)、[input_target.ps1](../../src/browser/input_target.ps1) |
+| リアクション | [reaction_controller.ahk](../../src/reactions/reaction_controller.ahk)、[reaction_automation.ps1](../../src/browser/reaction_automation.ps1) |
+| ワーカー通信 | [worker_client.ahk](../../src/browser/worker_client.ahk) |
 
-変更前に[状態の所有](architecture.md#状態を混ぜない)と、対象に応じた[保存の契約](architecture.md#永続化の契約)・[画面更新の契約](architecture.md#キャッシュと画面更新)を確認してください。画面の選択値をそのまま保存済み状態へ代入する変更や、結果不明の操作を自動再送する変更は、既存の保証を崩します。
+変更前に[状態の所有](architecture.md#状態を混ぜない)、[保存](architecture.md#永続化の契約)、[画面更新](architecture.md#キャッシュと画面更新)の契約を確認します。
 
 ## テストを実行する
 
-[検証ガイドの対応表](testing.md#変更とテストの対応)から影響するテストを選び、[共通の実行コマンド](testing.md#自動テストを実行する)を使います。単体・グループ・全体の指定、AutoHotkeyの場所、実行環境、一時ファイルの扱いは同ページにまとめています。
-
-画面やブラウザーの変更は、同ガイドの実画面・実ブラウザー確認も行います。配布時は下のリリース手順が全テストを含むため、その直前に全体を重ねて実行する必要はありません。
+[変更とテストの対応表](testing.md#変更とテストの対応)から対象を選び、[共通ランナー](testing.md#自動テストを実行する)を使います。画面・ブラウザーの変更は、実画面の確認も追加します。配布検証は全テストを含むため、直前に同じ全検査を重ねる必要はありません。
 
 ## 文字コードとGit
 
-| 対象 | 作業ツリーの形式 |
-|---|---|
-| `.ahk`・`.ps1` | UTF-8 BOM付き、CRLF |
-| Markdown・Git設定・LICENSE・VERSION | UTF-8 BOMなし、LF |
+`.ahk`・`.ps1`はUTF-8 BOM付き・CRLF、Markdown・Git設定・LICENSE・VERSIONはUTF-8 BOMなし・LFです。`.editorconfig`と`.gitattributes`を維持します。GitはBOMを付加しません。
 
-`.gitattributes`がGitの改行変換、`.editorconfig`が対応エディターの保存形式を定めます。GitはBOMを自動付加しません。特にWindows PowerShell 5.1で日本語を含むスクリプトを編集するときは、BOMを保持してください。
-
-個人の `data/`、配布出力 `dist/`、テストの一時ファイルはGit対象外です。画面テストの合成設定は`tests/app-fixture.ps1`で作り、利用者のDBは使用しません。
-
-```powershell
-git status --short
-git diff --check
-# ステージング後
-git diff --cached --check
-```
-
-文書では配布・リポジトリ内の相対パスを使用し、開発者個人の絶対パスや動画情報を含めないでください。
+`data/`、`dist/`、`tests/.tmp/`はGit対象外です。利用者のDBをテストへコピーしません。変更後に`git status --short`と`git diff --check`で差分を確認します。
 
 ## リリース手順
 
-1. 利用者に影響する変更をCHANGELOGへ記録し、公開する版を`VERSION`へ設定します。版番号の正本はこのファイルで、アプリ・配布処理・READMEから参照します。変更内容に応じた実ブラウザー確認は[検証ガイド](testing.md)に従います。
-2. 次のコマンドを一度実行します。全テストを別途繰り返してからZIPを作る必要はありません。
+1. `VERSION`と未公開の変更履歴を更新し、対象差分を確認します。版番号はSemVer 2.0.0を使います。
+2. Sandboxの準備後、次を実行します。
+3. 終了コード0、全テストの`PASS`、ZIPと同名の`.validation.json`を確認します。
+4. 実ブラウザーの確認を別レポートに残します。公開するZIPのハッシュを検証記録と照合します。
+5. 公開時はタグのコミット、Releaseの版・添付名・サイズ・SHA-256を照合します。タグpush後の添付失敗は不足分を続行し、公開タグを作り直しません。
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release.ps1 -Sandbox -OutputDirectory .\dist\validated
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release.ps1 -Sandbox -OutputDirectory .\dist
 ```
 
-`-Sandbox`は全テストをWindows Sandboxで実行します。[初回準備](testing.md#windows-sandboxで実行する)を済ませ、Sandbox内は操作しないでください。起動・検証に失敗してもホスト実行へ切り替えません。省略時は従来どおりホストで実行するため、画面操作を止める必要があります。
+検証入口は配布対象を固定し、同じコピーでソース検査・全テスト・ZIP生成を行います。ゲストへのコピー直後と検証後、梱包前にマニフェストを照合します。ZIPの全エントリーと`SHA256SUMS`自体も検証前のマニフェストに照合し、欠落・追加・内容変更・重複名・大小文字違いを拒否します。
 
-3. 終了コード0、ZIP、同名の`.validation.json`を確認します。同名出力がある場合は、新しい出力先を指定します。
-4. ZIPを別フォルダーへ展開し、新規起動・弾幕の保存・再起動後の読み込みを確認します。保存・更新に変更がある場合は、[バックアップと復元](../user/maintenance.md#バックアップから復元する)も確認します。
-5. 差分と検証結果を確認してコミットします。pushや公開は別の操作です。
-
-### GitHubへの正式公開
-
-このリポジトリにはCI/CDワークフローがありません。上記のローカル検証と配布物の確認を完了してから公開します。0.xの機能追加・互換性変更はminorを上げ、修正だけの場合はpatchを上げます。互換性の制約をCHANGELOGへ明記します。
-
-1. `VERSION`・CHANGELOG・配布対象が検証時と一致し、作業ツリーがクリーンであることを確認します。
-2. 公開するコミットに`v`と版番号を組み合わせた注釈付きタグ（例：`v0.5.0`）を作成します。既存タグは付け替えません。
-3. `main`とそのタグだけを`git push --atomic origin main <タグ>`で公開します。force pushや他のタグの一括公開は行いません。
-4. GitHubのReleaseで公開済みタグを選び、タイトルを`ChatPalette <版番号>`、本文をCHANGELOGの該当版の内容として正式公開します。同じ検証で作成した`ChatPalette-<版番号>.zip`と`.validation.json`を添付します。
-5. 公開されたタグのコミット、Releaseの版番号、添付ファイルの名前・サイズ・SHA-256を照合します。タグのpush後にRelease作成・添付が失敗した場合は、公開済み状態を確認して不足分を続行し、タグを削除・再作成しません。
-
-`verify-release.ps1`は配布対象を一時フォルダーへ固定し、`tests/run.ps1`によるソース検査・全テストとZIP生成を同じ内容のコピーに対して実行します。ソース検査の呼び出しは通常のテストと共有し、配布側で重ねて実行しません。ZIP・検証記録の版番号と名前も、このコピーの`VERSION`から決めます。配布ファイル一覧から生成する共通のマニフェストで、テスト中に配布対象が変化していないことを照合します。Sandbox実行ではゲストへのコピー直後と検証後も照合し、検証対象と梱包対象のずれを拒否します。失敗時は作業フォルダーを残すため、表示されたパスで原因を調べます。Sandbox実行では成功時もマッピング中の作業コピーとログを保持し、保存先を表示します。Sandboxを閉じ、必要な結果を保存してから不要なコピーを整理してください。ZIPの存在だけで検証完了と判断せず、終了コードと同名の検証記録も確認してください。
-
-梱包後は、検証前に固定したマニフェストを正本として、ZIPの全ファイル名・件数・SHA-256と`SHA256SUMS`自体を照合します。内容の変更、欠落、余分なファイル、重複名、大文字小文字の違いを拒否し、ZIP内だけでマニフェストを書き換えて一致させても成功にはなりません。照合に失敗した場合は検証記録を作成せず、ZIPと作業コピーを調査用に保持します。 内容照合からZIP全体のハッシュ計算までは、同じ[読み取り専用ストリーム](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.openread?view=netframework-4.8.1)を保持し、途中の書き込み・置換を拒否します。検証が終わってファイルを閉じた後の変更を防ぐ仕組みではないため、公開するZIPと検証記録のハッシュ照合は引き続き必要です。
-
-`.validation.json`には版、検査日時、テスト群数、実行環境（`TestEnvironment`の`Host`または`WindowsSandbox`）、ZIPとソースマニフェストのSHA-256を記録します。実ブラウザーでの成功を示す記録ではありません。ブラウザー確認は別レポートとして保管します。
-
-`VERSION`の形式は[SemVer 2.0.0](https://semver.org/spec/v2.0.0.html)に従います。major・minor・patchとプレリリースの数値識別子の先頭ゼロ、空の識別子を拒否します。プレリリース名・ビルド情報（例：`0.5.1-rc.1+build.001`）も同じ共通チェックで検証し、ZIP名と検証記録には版番号全体を使います。
+検証記録は版、UTC日時、テスト群数、`TestEnvironment`、ZIPとソースマニフェストのSHA-256を含みます。ZIPだけが存在しても成功ではありません。出力は一時ファイルから確定し、既存ZIP・レポートを上書きしません。失敗時の資料とSandboxの成功時資料は保持するため、Sandboxを終了してから整理します。
 
 ### 配布物の範囲
 
-収録対象は[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。直下に列挙したファイルはすべて必須です。欠落しているか、同名のフォルダーに置き換わっている場合は、対象名を示してコピー開始前に失敗します。バージョンの読み込みと形式判定も同ファイルの`Get-ReleaseVersion`に集約し、ソース検査・梱包・配布検証で共有します。同ファイルの`Copy-ReleaseFiles`を検証用コピー・ZIP梱包・配布テストの準備で共有します。ZIPの内容照合とハッシュ取得は`Get-ReleaseArchiveHashes`にまとめています。配布検査は完成済みZIPのコピーで各種不一致を検証し、配布入口が不一致を拒否して検証記録を作らないことも確認します。
+[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。コード・文書・ライセンス・開発設定・テスト・合成データを含み、`data/`・`.git/`・一時資料を含みません。必須ファイルの欠落はコピー前に拒否します。
 
-ソース、文書、ライセンス、開発設定、テストと合成データを含み、`data/`・`.git/`・一時ファイルは含みません。ZIP内のパスと`SHA256SUMS`のパスは、どちらも`/`区切りの同じ相対名です。読み取り側で区切りを変換せず照合できます。`SHA256SUMS`は内容照合用であり、発行者を証明する署名ではありません。
-
-[build-release.ps1](../../scripts/build-release.ps1)は検証コマンドから呼ぶ梱包処理です。単独実行では検証済み配布物にならないため、通常のリリース入口には使いません。
-
-ZIPと検証レポートは、それぞれ出力先と同じファイルシステム上の一時ファイルを完成させてから、既存ファイルを上書きしない移動で正式名へ確定します。検証中に作られた同名レポートも上書きしません。レポートの公開に失敗した場合は一時レポートを片付けますが、完成済みZIPは残るため、その実行を検証成功として扱わないでください。圧縮中の読み取り失敗では不完全なZIPを正式名へ残さず、一時出力を片付けるため、原因を解消後に同じ出力先で再実行できます。現在の配布はソース形式で、実行にはAutoHotkey v2とWindows PowerShell 5.1が必要です。
+[build-release.ps1](../../scripts/build-release.ps1)単独のZIPは検証済み配布物ではありません。`SHA256SUMS`は内容照合用で、発行者の署名ではありません。配布はソース形式で、AutoHotkey v2とWindows PowerShell 5.1が必要です。
 
 ## 文書を更新する規則
 
-実装・テストを一次情報とし、利用者向け手順は画面のラベルと照合します。仕様値は[リファレンス](../user/reference.md)、障害時の手順は[保守](../user/maintenance.md)、内部の理由・制約は[設計](architecture.md)を正本にします。
+[Plain Language Guidelines](https://digital.gov/guides/plain-language/principles)に従い、読者の目的を先に書きます。一文で一つの内容を伝え、操作する人と動詞を明示します。長い段落を手順・表へ分け、重複と不要な実装履歴を除きます。
 
-未リリースの変更履歴は、作業ごとの追記ではなく、最終的な変更結果ごとにまとめます。同じ機能の追加修正は既存の項目へ統合し、内部の契約や詳細な手順は正本へリンクします。公開済みバージョンの履歴は保持してください。
+利用手順は利用者ページ、値は[リファレンス](../user/reference.md)、復旧は[保守](../user/maintenance.md)、内部契約は[設計](architecture.md)へ集約します。実装・テストとUIラベルを照合し、公開済みの変更履歴は保持します。未公開の履歴は最終的な結果ごとにまとめます。
 
-変更時はリンク先の存在、見出しへのリンク、バージョン、初期値、保存範囲を確認してください。`docs/`内の新しい`.md`は配布対象になります。リポジトリ直下のファイルや画像など別形式の資料を追加する場合は、[配布対象の許可リスト](../../scripts/release-files.ps1)も更新してください。
-
-文書だけの変更では、実装との照合、相対リンクと見出し、配布対象への収録を確認します。手順の意味が変わった場合は、その操作も確認します。実施していない操作を検証済みと記載しないでください。形式とリンクの確認は次のコマンドを使い、アプリ全テストは文書変更だけを理由に繰り返しません。
+文書だけの変更は内容・相対リンク・見出し・配布対象を確認します。操作の意味が変わる場合は、その操作も検証します。未実施の検証を成功と書きません。`docs/`内の`.md`は配布対象です。別形式や直下の新規資料は許可リストを確認します。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-source.ps1

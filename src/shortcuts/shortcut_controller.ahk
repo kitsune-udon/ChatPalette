@@ -9,13 +9,7 @@ ShortcutBlocked(action := "input") {
     return true
 }
 
-HandleDanmakuShortcut(scope,slot) {
-    return EnqueueConfiguredShortcut(scope slot)
-}
 
-HandlePageShortcut(action) {
-    return EnqueueConfiguredShortcut(action)
-}
 CanContinuePageAction(operation) {
     if ActivePageAction != operation || !IsTargetForeground(operation.Window)
         return false
@@ -41,14 +35,9 @@ RunPageAction(action, hwnd, shortcut := 0) {
             result := {State:"cancelled"}
             return false
         }
-        if action = "chat_send" {
-            if shortcut && shortcut.Session.Focus {
-                focus := shortcut.Session.Focus
-                shortcut.Session.Focus := 0
-                result := VerifyChatFocus(hwnd,focus)
-            } else
-                result := VerifyInputTarget(hwnd,shortcut ? shortcut.Session.Video : "")
-        } else
+        if action = "chat_send"
+            result := VerifyShortcutInput(hwnd,shortcut ? shortcut.Session.Video : "",shortcut)
+        else
             result := RequestBrowserOperation(hwnd,action = "chat_clear" ? "chat_focus" : action,shortcut ? shortcut.Session.Video : "")
         if !CanContinuePageAction(operation) {
             result := {State:"cancelled"}

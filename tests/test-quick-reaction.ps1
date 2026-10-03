@@ -14,7 +14,7 @@ for entry in [["changed","changed","lookup detail"], ["unavailable","unavailable
     queued := CreateReactionJob({Mode:"queued",Window:123})
     ActiveReactionJob := queued
     SetReactionStatus("waiting for quick fixture")
-    QuickReaction()
+    QuickReaction(ActiveReactionJob)
     Assert(!ActiveReactionJob && queued.Phase="finished" && OperationAllowed("reaction"),"ownership released: " QuickScenario)
     Assert(LastReactionResult.Reason==entry[2] && LastReactionResult.Detail==entry[3],"final cause retained: " QuickScenario)
     Assert(LastReactionResult.Mode="queued" && LastReactionResult.Completed=0 && ReactionExecutionStatus.Phase="finished"
@@ -26,28 +26,36 @@ for replacementState in ["ok", "unavailable"] {
     previousResult := LastReactionResult
     queued := CreateReactionJob({Mode:"queued",Window:123})
     ActiveReactionJob := queued
-    QuickReaction()
+    QuickReaction(ActiveReactionJob)
     Assert(ActiveReactionJob=QuickReplacement && QuickReplacement.Phase="queued" && LastReactionResult=previousResult
         && ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message="replacement pending","old start cannot finalize or overwrite replacement")
     CancelReaction()
 }
+QuickRequests := 0
+stale := CreateReactionJob({Mode:"queued",Window:123})
+successor := CreateReactionJob({Mode:"queued",Window:123})
+ActiveReactionJob := successor
+previousResult := LastReactionResult
+Assert(!QuickReaction(stale) && ActiveReactionJob=successor && !QuickRequests && LastReactionResult=previousResult,
+    "explicit stale quick owner never starts or finalizes a successor")
+FinishReactionJob(successor)
 QuickScenario := "success", QuickRequests := 0
 ActiveReactionJob := CreateReactionJob({Mode:"queued",Window:123})
-QuickReaction()
+QuickReaction(ActiveReactionJob)
 Assert(!ActiveReactionJob && QuickRequests=2 && LastReactionResult.Reason="completed"
     && LastReactionResult.Mode="reaction_send" && LastReactionResult.Completed=1,"successful handoff keeps the send result")
 QuickScenario := "before_switch"
 ActiveReactionJob := CreateReactionJob({Mode: "queued", Cancelled: false, Window: 0})
 SetReactionStatus("文言を変更した開始待ち", false)
 PaletteStatusControl.Text := "表示だけを書き換えた文言"
-QuickReaction()
+QuickReaction(ActiveReactionJob)
 Assert(!ActiveReactionJob && ReactionExecutionStatus.Phase = "finished", "early exit finalizes regardless of displayed wording")
 Assert(LastReactionResult.Reason="wrong_window" && InStr(ReactionExecutionStatus.Message, "操作先が変わった"), "early exit preserves the specific target failure")
 ActiveReactionJob := CreateReactionJob({Mode: "queued", Cancelled: false, Window: 0})
 SetReactionStatus("開始待ち", false)
 CancelReaction()
 cancelledMessage := ReactionExecutionStatus.Message
-QuickReaction()
+QuickReaction(ActiveReactionJob)
 Assert(ReactionExecutionStatus.Message = cancelledMessage, "queued cancellation result is retained")
 Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd) && !ManagementWindow && !ReactionOverlay && !ActiveEditorDialog,
     "quick reaction checks keep all application views hidden")

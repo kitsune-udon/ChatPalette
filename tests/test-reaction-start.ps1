@@ -64,7 +64,7 @@ try {
                 Critical("On")
                 try {
                     if mode="queued"
-                        QueueQuickReaction()
+                        Assert(!RunStartShortcut(),"interrupted synchronous start reports failure")
                     else
                         Assert(!ScheduleReaction(mode,3),"interrupted scheduled start reports failure: " mode "/" point "/" scenario)
                     StartProbeArmed := false
@@ -87,7 +87,7 @@ try {
                         Assert(!PaletteStart.Enabled && !ManagementItemButtons[1].Enabled,"successor retains operation controls: " label)
                     }
                 } finally Critical("Off")
-                ; Both the immediate shortcut and the one-second countdown must stay disarmed.
+                ; Synchronous shortcuts cannot start successors; countdown timers must stay disarmed.
                 Sleep(1150)
                 Assert(StartRequests=0,"old start leaves no timer that can operate on a new job: " label)
                 if StartReplacement
@@ -106,6 +106,17 @@ try {
 }
 FileAppend("PASS: " Checks " reaction start ownership checks; no real browser operations`n","*")
 ExitApp()
+RunStartShortcut() {
+    global ShortcutSession, ActiveShortcutCommand
+    ShortcutSession := {Window:TargetBrowserHwnd,Video:"abcdefghijk",Focus:0,Cancelled:false}
+    command := {Action:"reaction",Window:TargetBrowserHwnd,Session:ShortcutSession}
+    ActiveShortcutCommand := command
+    try return QueueQuickReaction(command)
+    finally {
+        ActiveShortcutCommand := 0
+        CancelShortcutQueue(command.Session)
+    }
+}
 ReplaceStartingJob() {
     global ActiveReactionJob, StartReplacement
     StartReplacement := CreateReactionJob({Mode:"queued",Window:TargetBrowserHwnd,Remaining:7})
@@ -144,7 +155,7 @@ StartRequest(hwnd,mode,video,extra) {
 '@
 # Each of the 24 scenarios observes the real one-second timer deadline.
 Invoke-AppTest -Runtime $startRuntime -Body $startTests -TimeoutMs 60000 -Setup @'
-RuntimePorts.BrowserIdentity := (hwnd) => !!hwnd
+RuntimePorts.BrowserProcessName := (hwnd) => (!!hwnd) ? "chrome.exe" : ""
 RuntimePorts.Foreground := (hwnd) => true
 RuntimePorts.BrowserRequest := StartRequest
 RuntimePorts.TimingPrecision := (enabled) => false

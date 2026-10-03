@@ -3,9 +3,9 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 # Display reads durable registration without starting or synchronizing a worker.
 $displayRuntime=New-TestRuntime
-Edit-TestSource $displayRuntime 'src/browser/browser_service.ahk' 'WinGetProcessName("ahk_id " hwnd)' 'RegistrationDisplayProcess(hwnd)'
 Invoke-AppTest -Runtime $displayRuntime -Body @'
 global DisplayProcess := "brave.exe", DisplayRequests := 0
+RuntimePorts.BrowserProcessName := RegistrationDisplayProcess
 RuntimePorts.BrowserRequest := RejectDisplayRequest
 RuntimePorts.WorkerRequest := RejectDisplayRequest
 BuildManagement()
@@ -13,13 +13,15 @@ RecordBrowserOperation({Mode:"reaction_send",State:"menu_closed",Duration:17})
 previousOperation := LastBrowserOperation, previousResult := LastReactionResult
 for target in [0,123] {
     TargetBrowserHwnd := target
-    for process in ["closed","autohotkey64.exe"] {
+    for process in ["","closed","autohotkey64.exe"] {
         DisplayProcess := process
+        Assert(!IsBrowser(target),"identity rejects the same missing, closed and unsupported targets as display")
         RefreshReactionRegistration()
         Assert(InStr(ReactionRegistrationLabel.Text,"未選択"),"missing, closed and non-browser targets are not registered browsers")
     }
 }
 TargetBrowserHwnd := 123, DisplayProcess := "BRAVE.EXE"
+Assert(IsBrowser(123) && ReadBrowserProcessName(123)=="brave.exe","identity and display share normalized process-name evidence")
 RefreshReactionRegistration()
 Assert(InStr(ReactionRegistrationLabel.Text,"未設定"),"known browser with no saved registration is unconfigured")
 tokens := "["
@@ -59,6 +61,8 @@ Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd)
 FileAppend("PASS: " Checks " local registration display checks; no browser or worker operations`n","*")
 ExitApp()
 RegistrationDisplayProcess(hwnd) {
+    if !hwnd
+        return ""
     if DisplayProcess="closed"
         throw TargetError("Fixture browser is closed")
     return DisplayProcess

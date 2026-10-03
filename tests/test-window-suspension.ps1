@@ -7,7 +7,7 @@ $tests=@'
 BuildManagement()
 global WindowFaults := Map(), WindowReplacement := 0
 global WindowInterleaveArmed := false, WindowInterleaveRuns := 0, WindowInterleaveEditor := 0
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 global ProbeWaitFailure := false
 for managerEnabled in [true,false] {
     ManagementWindow.Opt(managerEnabled ? "-Disabled" : "+Disabled")
@@ -170,6 +170,6 @@ WindowRequest(hwnd,mode,video,extra) {
 }
 '@
 Invoke-AppTest -Runtime $release -Body $tests -Setup @'
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 RuntimePorts.WorkerRequest := WindowRequest
 '@

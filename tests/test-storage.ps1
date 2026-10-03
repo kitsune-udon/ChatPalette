@@ -98,7 +98,7 @@ function Fetch-Metadata($Video) {
 '@
 Invoke-AppTest -Runtime $pipeRuntime -Setup @'
 RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 '@ -Body @'
 try {
     Loop 2 {

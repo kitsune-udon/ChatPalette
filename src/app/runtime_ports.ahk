@@ -6,7 +6,7 @@ class RuntimePorts {
     static BrowserRequest := 0
     static WorkerRequest := 0
     static WorkerScript := ""
-    static BrowserIdentity := 0
+    static BrowserProcessName := 0
     static ResolveChannel := 0
     static Foreground := 0
     static Text := 0

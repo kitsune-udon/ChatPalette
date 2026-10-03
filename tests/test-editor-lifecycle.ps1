@@ -83,7 +83,7 @@ Assert(!ActiveEditorDialog && DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd
 Assert(A_IsCritical=beforeCritical,"failed editor construction restores interrupt policy")
 ProbeEditorConstructionFailure := false
 global ProbeEditorFailure := true
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=ManagementWindow.Hwnd
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=ManagementWindow.Hwnd) ? "chrome.exe" : ""
 RuntimePorts.ResolveChannel := (hwnd) => {State:"ok",Author:"fixture",Channel:"/channel/fixture",Video:"abcdefghijk"}
 RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"not_registered"}
 TargetBrowserHwnd := ManagementWindow.Hwnd
@@ -137,7 +137,7 @@ for openEditor in [() => OpenDanmakuEditor(true),TransferItem,OpenChannelLinkDia
     Assert(failed && !ActiveEditorDialog,"editor begin failure releases ownership and draft window")
     Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd) && DllCall("IsWindowEnabled","Ptr",ManagementWindow.Hwnd),"editor begin failure restores parent windows")
 }
-RuntimePorts.BrowserIdentity := 0, RuntimePorts.ResolveChannel := 0, RuntimePorts.BrowserRequest := 0
+RuntimePorts.BrowserProcessName := 0, RuntimePorts.ResolveChannel := 0, RuntimePorts.BrowserRequest := 0
 TargetBrowserHwnd := 0
 priorEditor := Gui(), currentEditor := Gui()
 BeginEditorDialog(priorEditor,"prior fixture")

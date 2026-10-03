@@ -190,7 +190,7 @@ RuntimePorts.BrowserRequest := CancelQueuedContext
 queued := CreateReactionJob({Mode:"queued",Window:123})
 ActiveReactionJob := queued
 SetReactionStatus("queued",false)
-QuickReaction()
+QuickReaction(ActiveReactionJob)
 Assert(!ActiveReactionJob && queued.Phase="finished" && LastReactionResult.Reason="cancelled" && ReactionExecutionStatus.Phase="finished","cancel during queued context request publishes terminal cancellation")
 ; A queued selection change must run wholly before or after a preference edit.
 global ProbePreferenceArmed := false, ProbePreferenceRuns := 0, ProbePreferenceTarget := b

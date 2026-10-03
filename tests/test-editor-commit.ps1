@@ -50,7 +50,7 @@ for action in ["duplicate","up","down","edit","transfer","delete"] {
         UndoLibraryCommand()
     RefreshManagement()
 }
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=ManagementWindow.Hwnd
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=ManagementWindow.Hwnd) ? "chrome.exe" : ""
 RuntimePorts.ResolveChannel := (hwnd) => {State:"ok",Author:"new channel",Channel:"/channel/new",Video:"abcdefghijk"}
 RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"not_registered"}
 TargetBrowserHwnd := ManagementWindow.Hwnd

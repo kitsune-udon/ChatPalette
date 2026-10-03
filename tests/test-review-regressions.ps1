@@ -5,10 +5,10 @@ $release = New-TestRuntime
 # Inject only into the isolated runtime: simulate failure just before scheduling a retry.
 $retry='            waiting := ArmReactionTimer(job,ReactionCountdown,-1000)'
 Edit-TestSource $release 'src/reactions/reaction_controller.ahk' $retry ("            ReviewBeforeCaptureRetry()`r`n"+$retry)
-$queue='        SetTimer(callback, period)'
-Edit-TestSource $release 'src/reactions/reaction_controller.ahk' $queue ("        if callback = QuickReaction`r`n            ReviewBeforeQuickStart()`r`n"+$queue)
+$queue='        ShowReactionProgress()'
+Edit-TestSource $release 'src/reactions/reaction_controller.ahk' $queue ("        if job.Mode = ""queued""`r`n            ReviewBeforeQuickStart()`r`n"+$queue)
 $tests = @'
-global ReviewFocusCalls := 0, ReviewUnexpectedRequests := 0, ReviewContextCalls := 0, ReviewCaptureRetryFailure := false, ReviewQuickStartFailure := false, ReviewTargetChange := false, ReviewReplacementJob := 0
+global ReviewFocusCalls := 0, ReviewUnexpectedRequests := 0, ReviewContextCalls := 0, ReviewCaptureRetryFailure := false, ReviewQuickStartFailure := false, ReviewQuickCancel := false, ReviewTargetChange := false, ReviewReplacementJob := 0
 BuildManagement()
 initialReactionStatus := ReactionExecutionStatus, initialReactionResult := LastReactionResult
 info := ReadDiagnosticSnapshot()
@@ -57,15 +57,12 @@ for topic in [{Show:Help,Title:"使い方"},{Show:ShowReactionDetails,Title:"リ
     Sleep(30)
 }
 ReviewQuickStartFailure := true
-QueueQuickReaction()
+Assert(!RunReviewShortcut(),"failed synchronous shortcut reports failure")
 Assert(!ActiveReactionJob && LastReactionResult.Reason="unavailable" && LastReactionResult.Detail="quick start failure","quick start failure releases job and preserves error")
-Critical("On")
-try {
-    QueueQuickReaction()
-    Assert(ActiveReactionJob && ActiveReactionJob.Phase="queued","quick shortcut can be queued again after failure")
-    CancelReaction()
-    Assert(!ActiveReactionJob && LastReactionResult.Reason="cancelled","queued shortcut remains cancellable")
-} finally Critical("Off")
+ReviewQuickCancel := true
+Assert(!RunReviewShortcut(),"cancelled synchronous shortcut reports failure")
+Assert(!ActiveReactionJob && LastReactionResult.Reason="cancelled" && ReviewContextCalls=0,
+    "shortcut retry remains cancellable before lookup and never starts a send")
 Assert(!ScheduleReaction("reaction_send",3),"closed browser rejects scheduled start")
 Assert(!ActiveReactionJob && LastReactionResult.Reason="unavailable","failed activation releases reaction ownership")
 Assert(!ScheduleReaction("reaction_send",3) && !ActiveReactionJob && ReviewContextCalls=2,"another scheduled attempt reaches browser lookup after failed start")
@@ -75,7 +72,7 @@ Assert(!ScheduleReaction("reaction_send",3) && ActiveReactionJob=replacement,"co
 FinishReactionJob(replacement)
 browser := Gui()
 browser.Show("w200 h100")
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=browser.Hwnd
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=browser.Hwnd) ? "chrome.exe" : ""
 TargetBrowserHwnd := browser.Hwnd
 try {
     ReviewTargetChange := true
@@ -87,7 +84,7 @@ try {
 } finally {
     CancelReaction()
     browser.Destroy()
-    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+    RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
     TargetBrowserHwnd := 123
 }
 RuntimePorts.Foreground := (hwnd) => hwnd=123
@@ -157,8 +154,24 @@ for size in [[360,520],[760,660]] {
 }
 FileAppend("PASS: " Checks " review regression checks; no real browser operations`n","*")
 ExitApp(0)
+RunReviewShortcut() {
+    global ShortcutSession, ActiveShortcutCommand
+    ShortcutSession := {Window:123,Video:"abcdefghijk",Focus:0,Cancelled:false}
+    command := {Action:"reaction",Window:123,Session:ShortcutSession}
+    ActiveShortcutCommand := command
+    try return QueueQuickReaction(command)
+    finally {
+        ActiveShortcutCommand := 0
+        CancelShortcutQueue(command.Session)
+    }
+}
 ReviewBeforeQuickStart() {
-    global ReviewQuickStartFailure
+    global ReviewQuickStartFailure, ReviewQuickCancel
+    if ReviewQuickCancel {
+        ReviewQuickCancel := false
+        Assert(ActiveReactionJob && ActiveReactionJob.Phase="queued","synchronous retry publishes cancellable owner after failure")
+        CancelReaction()
+    }
     if ReviewQuickStartFailure {
         ReviewQuickStartFailure := false
         throw Error("quick start failure")
@@ -199,7 +212,7 @@ FixtureWorkerRequest(hwnd,mode:="resolve",expectedVideo:="",extra:="") {
 }
 '@
 Invoke-AppTest -Runtime $release -Body $tests -Setup @'
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 RuntimePorts.Foreground := ReviewWindowActive
 RuntimePorts.WorkerRequest := FixtureWorkerRequest
 '@

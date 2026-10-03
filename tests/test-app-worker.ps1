@@ -12,9 +12,12 @@ Invoke-AppFixture -Runtime $release -Body @'
     Assert(DllCall("IsWindowEnabled","Ptr",PaletteWindow.Hwnd),"startup failure restores the application window")
     WorkerLaunchFailure := false
     identityWindow := Gui(), identityHwnd := identityWindow.Hwnd
-    Assert(!NativeIsBrowser(identityHwnd),"native identity rejects an existing non-browser window")
+    RuntimePorts.BrowserProcessName := (hwnd) => "CHROME.EXE"
+    Assert(IsBrowser(identityHwnd),"fixture identifies its synthetic browser through the supported map")
+    Assert(!NativeIsBrowser(identityHwnd),"native identity rejects an existing non-browser window while a fixture is set")
     identityWindow.Destroy()
     Assert(!NativeIsBrowser(identityHwnd) && !NativeIsBrowser(0),"native identity rejects closed and absent windows without throwing")
+    RuntimePorts.BrowserProcessName := (hwnd) => hwnd=123 ? "chrome.exe" : ""
     registrationTokens := "["
     Loop 5
         registrationTokens .= (A_Index>1 ? "," : "") '{"name":"reaction' A_Index '","id":"id' A_Index '","class":"button","type":50000}'

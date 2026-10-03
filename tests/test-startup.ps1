@@ -11,8 +11,7 @@ function Run-Startup([string[]]$Options=@('--smoke'), [switch]$Validate) {
     return Wait-TestProcess -Process $run -TimeoutMs 10000
 }
 if ((Run-Startup -Validate) -ne 0 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Native validation initialized application data' }
-if ((Run-Startup -Options '--check') -ne 0 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Syntax check initialized application data' }
-foreach ($options in @(@('--smkoe'),@('--check','unexpected'),@('--smoke','unexpected'),@('--quiet','unexpected'))) {
+foreach ($options in @(@('--check'),@('--smkoe'),@('--check','unexpected'),@('--smoke','unexpected'),@('--quiet','unexpected'))) {
     if ((Run-Startup -Options $options) -ne 1 -or (Test-Path -LiteralPath (Join-Path $release 'data'))) { throw 'Invalid startup arguments initialized the application' }
     if ([IO.File]::ReadAllText((Join-Path $release 'error.txt'),[Text.Encoding]::UTF8) -notmatch '起動引数が不正') { throw 'Missing startup argument error' }
 }

@@ -124,7 +124,7 @@ Invoke-AppFixture -Body @'
     PresentWindow(browser,"",0,false)
     TargetBrowserHwnd := browser.Hwnd
     sent := [], foregroundChecks := []
-    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=browser.Hwnd
+    RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=browser.Hwnd) ? "chrome.exe" : ""
     RuntimePorts.BrowserRequest := (hwnd,mode,video,extra) => {State:"ok",Video:"abcdefghijk"}
     ; Retain the exact observation used by delivery; a later foreground read can differ.
     RuntimePorts.Foreground := (hwnd) => (foregroundChecks.Push(!!WinActive("ahk_id " hwnd)), foregroundChecks[-1])
@@ -174,7 +174,7 @@ Invoke-AppFixture -Body @'
     InsertPaletteItem()
     Assert(sent.Length=before,"unknown displayed identity never inputs a neighbouring item")
     Assert(GetPaletteLibraryTarget().Index=0,"unknown displayed identity does not open a neighbouring editor item")
-    RuntimePorts.BrowserIdentity := 0, RuntimePorts.BrowserRequest := 0
+    RuntimePorts.BrowserProcessName := 0, RuntimePorts.BrowserRequest := 0
     RuntimePorts.Foreground := 0, RuntimePorts.Text := 0
     browser.Destroy()
 '@

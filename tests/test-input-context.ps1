@@ -16,7 +16,7 @@ state.SharedDanmakuItems := [{Id:"item-shared",Name:"Shared",Text:"shared",Slot:
 state.InputProfileId := "context-a"
 OpenSettingsRepository(SettingsDatabasePath).SaveAll(state)
 ReloadAppSettings()
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 RuntimePorts.ResolveChannel := ResolveContextFixture
 RuntimePorts.BrowserRequest := ReadContextFixture
 global ContextReply := {State:"ok",Channel:"/channel/a",Author:"A",Video:"aaaaaaaaaaa"}

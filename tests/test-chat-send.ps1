@@ -91,7 +91,7 @@ Invoke-AppFixture -Body @'
 global MessageWindow := Gui(,"ChatPalette isolated Enter target")
 global MessageEdit := MessageWindow.AddEdit("w320 r3","unsent fixture text")
 global NativeEnters := 0, ModifiedEnters := 0, NativeKind := "chat"
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=MessageWindow.Hwnd
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=MessageWindow.Hwnd) ? "chrome.exe" : ""
 RuntimePorts.Foreground := 0
 RuntimePorts.BrowserRequest := NativeMessageRequest
 RuntimePorts.ShortcutKey := 0

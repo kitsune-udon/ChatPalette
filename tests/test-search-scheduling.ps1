@@ -87,7 +87,7 @@ Profiles := [{Id:"search-profile",Name:"search profile",Channel:"/channel/search
 Loop 201
     Profiles[1].Items.Push({Id:"profile-" A_Index,Name:"profile item",Text:"profile body " A_Index,Slot:0})
 InputProfileId := "search-profile"
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 PaletteSearch.Value := "profile body"
 for mode in ["matched","unmatched","manual"] {
     AutoMode := mode!="manual", TargetBrowserHwnd := mode="manual" ? 0 : 123

@@ -54,7 +54,7 @@ fixtureSettings.SharedDanmakuItems := [{Id:"fixture-shared",Name:"拍手",Text:"
 OpenSettingsRepository(A_ScriptDir "\data\settings.db").SaveAll(fixtureSettings)
 CloseSettingsStore()
 RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 RuntimePorts.Foreground := (hwnd) => hwnd=123
 RuntimePorts.Text := RejectFixtureInput
 RuntimePorts.ShortcutKey := (*) => 0

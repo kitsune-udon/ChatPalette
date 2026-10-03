@@ -1,325 +1,126 @@
 # 検証ガイド
 
-[文書一覧](../index.md) · [開発環境・配布手順](guide.md)
+[文書一覧](../index.md) · [開発・配布](guide.md)
 
-変更した内容に応じて検証を選びます。アプリ・SQLite・GUIの一部は実際に動かしますが、自動テストのブラウザー入力・リアクション送信・ネットワーク取得は代替処理です。実ブラウザーの動作やYouTube側の受理は別途確認します。
-
-| 変更・目的 | 確認すること |
-|---|---|
-| コードの変更 | [対応表](#変更とテストの対応)から関係するテストを選び、[共通コマンド](#自動テストを実行する)で実行する |
-| ブラウザーの検出・操作 | 関連テストに加え、[実ブラウザー](#実ブラウザーを確認する)で対象の組み合わせを確認する |
-| 画面・利用手順 | 関連テストに加え、[実画面](#実画面で補う確認)で操作結果を確認する |
-| 性能の変更 | 機能回帰と[変更前後の実測](#性能を計測する)を確認する |
-| 文書だけの変更 | [文書の確認手順](guide.md#文書を更新する規則)に従う |
-| 配布物の作成 | [リリース手順](guide.md#リリース手順)で同じソースから全テストとZIP生成を行う |
+変更範囲に合わせて検査を選びます。自動テストは実際のSQLite・アプリ・GUI部品を使いますが、ブラウザー操作・送信・ネットワーク取得は代替処理です。実ブラウザーとYouTube側の受理を確認した結果ではありません。
 
 ## 自動テストを実行する
 
-リポジトリ直下で実行します。入口は[tests/run.ps1](../../tests/run.ps1)です。単体・グループ・全体のいずれも、選択したテストの前にソース形式・PowerShell構文・モジュール境界・文書リンクを検査します。ソース検査が失敗した場合はテストを開始せず、出力を保持します。`-List`ではソース検査も実行しません。
+リポジトリ直下から[共通ランナー](../../tests/run.ps1)を使います。選択したテストの前に、ソース形式・PowerShell構文・モジュール境界・文書リンクを一度検査します。
 
 ```powershell
-# 実行対象の一覧だけを表示
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -List
-# 関係するテストを一つ実行
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Name test-sqlite.ps1
-# 関連する複数のテストをまとめて実行（配列はPowerShell式として渡す）
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/run.ps1' -Name test-input.ps1,test-page-actions.ps1"
-# Windows Sandboxで全テストを実行（初回準備は下記参照）
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox -Name test-sqlite.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/run.ps1' -Sandbox -Name test-input.ps1,test-page-actions.ps1"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 ```
 
-| 引数 | 動作 |
+| 引数 | 選択・動作 |
 |---|---|
-| `-Group Headless` | 画面操作不要のテストを選ぶ。Windows版AutoHotkey v2・SQLite・.NET/UIAを使うため、Linux向けではない |
-| `-Group Desktop` | 操作可能なWindowsセッションが必要なテストを選ぶ。`-Sandbox`を併用し、普段の操作環境と分離する |
-| `-Group All`（省略時） | 全テストを選ぶ |
-| `-Name test-sqlite.ps1` | ファイル名の完全一致で選ぶ。複数名は配列で指定でき、名前順に各群を一度だけ実行。`-Group`との組み合わせも可能 |
-| `-List` | 選択したテスト名だけを表示。一時フォルダーや実行用環境変数を変更しない |
-| `-AutoHotkeyPath '実行ファイルの絶対パス'` | AutoHotkeyの場所を指定。未指定なら環境変数`AHK_EXE`、それもなければ標準インストール先を使用 |
-| `-Sandbox` | 選択したテストをWindows Sandbox内で実行し、結果をホストへ回収する。起動できなくてもホスト実行へ切り替えない |
-| `-Sandbox -PrepareOnly` | 起動用コピーと`.wsb`を生成する。Sandbox起動・テスト実行は行わない |
+| `-Group Headless`／`Desktop`／`All` | 各ファイル先頭の`Test-Session`で選ぶ。省略は全群 |
+| `-Name` | 完全なファイル名を一つ以上指定。名前順に各群を一度実行 |
+| `-List` | 選択名だけを表示。検査・一時コピー作成はしない |
+| `-AutoHotkeyPath` | 実行ファイルを指定。省略時は`AHK_EXE`、次に標準インストール先 |
+| `-Sandbox` | Sandboxへ隔離して結果を回収。起動失敗時にホストへ切り替えない |
+| `-Sandbox -PrepareOnly` | 起動コピーと`.wsb`だけを作る |
 
-明示したAutoHotkeyが存在しない場合、引数が不正な場合、対象テストがない場合はエラーになります。別のインストール先や全テストへ切り替えません。
+未知引数・存在しないテスト・グループ外の名前・無効な実行ファイルを拒否します。別の対象へ切り替えません。HeadlessもWindows版AHK・SQLite・.NET/UIAを使い、一部は非表示のGUI部品を作ります。Desktopは入力可能なWindowsデスクトップが必要です。
 
-複数名の一つでも存在しないか指定グループ外なら、ソース検査やテストを始めずにエラーにします。ソース検査は選択全体の前に一度だけ実行します。既にPowerShell内にいる場合は、`& .\tests\run.ps1 -Name test-input.ps1,test-page-actions.ps1`と直接呼び出せます。
+各群はWindows PowerShell 5.1の別プロセスで実行します。`PSModulePath`は5.1の標準検索先を使い、呼出元の設定を復元します。成功条件は終了コード0、標準エラーなし、最後の`PASS`です。群は120秒でタイムアウトし、AHK側にも各検査の期限があります。
 
-Headlessには非表示のGUI部品や短時間のツールチップを使う検査も含みますが、利用者の前面ウィンドウ・キー操作には依存しません。起動検査は実際のグローバルキーを登録するためDesktopに分類します。
+隔離コピーは`tests/.tmp/run-*`へ作り、利用者の`data/`を読み書きしません。成功群は次の群の前にコピーを削除し、失敗群は出力とコピーを保持します。直接実行せず、単体でもランナーの`-Name`を使ってください。
 
-Desktop区分には、実行先Windowsの入力可能なデスクトップが必要です。`RequireTestWindowActive`の失敗ログには、実行先の`desktop`と、そこが入力を受け取るデスクトップかを示す`receives_input`が含まれます。判定にはWindowsの[GetUserObjectInformationW（UOI_IO）](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getuserobjectinformationw)を使います。`receives_input=0`なら、`CodexSandboxDesktop`など非入力デスクトップで実行していないか確認します。Codexのコマンド隔離と、独立したWindowsを起動するWindows Sandboxは別の仕組みです。`unavailable(番号)`は情報取得失敗のWin32エラーです。これらは失敗後の観測であり、`receives_input=1`や`foreground_owned=0`だけで手操作の介入や失敗原因を断定しません。ホストで直接Desktopを実行する場合は、他の画面操作と並行して実行しないでください。
+待機失敗時は、その検査のPIDと子孫を`taskkill /T /F`で終了します。終了確認とハンドル解放を行い、終了にも失敗した場合は両方のエラーを保持します。既に親から分離したプロセスや権限外のプロセスまで終了できる保証はありません。実行ファイル名で一括終了しません。
 
 ### Windows Sandboxで実行する
 
-Windows Sandboxの対応エディションと仮想化が必要です。初回は管理者PowerShellで次を実行し、再起動が必要と表示された場合は作業を保存して再起動します。詳細は[Microsoftの導入手順](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-install)を参照してください。
+対応エディションと仮想化が必要です。[Microsoftの導入手順](https://learn.microsoft.com/en-us/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-install)を確認し、初回は管理者PowerShellで有効化します。必要なら作業を保存して再起動します。
 
 ```powershell
 Enable-WindowsOptionalFeature -Online -FeatureName Containers-DisposableClientVM -All -NoRestart
 ```
 
-ホストにAutoHotkey v2を用意し、再起動後にリポジトリ直下で実行します。Windows Sandboxは同時に複数起動できないため、既に開いているSandboxがある場合は必要な内容を保存して閉じてください。
+ホストにAHK v2を用意し、既存のSandboxを閉じてから実行します。Sandbox内の画面は操作しません。Codexのコマンド隔離とWindows Sandboxは別の仕組みです。
 
-```powershell
-# まず少数の画面テストを実行
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/run.ps1' -Sandbox -Name test-app-library.ps1,test-empty-settings.ps1"
-# Desktop全体
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox -Group Desktop
-```
+ゲストへ渡すソースは読取専用、結果フォルダーは書込可能です。ネットワーク、クリップボード、音声・映像入力、プリンターを無効化します。ゲストの作業コピーは受渡直後と検査後にマニフェストで照合します。
 
-[sandbox.ps1](../../tests/sandbox.ps1)は既存の配布ファイル一覧を使って現在のソースを固定し、指定したAutoHotkey実行ファイルと選択名を`tests/.tmp/sandbox-*/input`へ保存します。利用者の`data/`、`.git/`、`dist/`、既存のテスト記録はコピーしません。Sandboxにはこの入力フォルダーを読み取り専用、実行ごとの`results/`だけを書き込み可能として渡します。ネットワーク、ホストとのクリップボード共有、音声・映像入力、プリンター共有は無効です。実ブラウザー検証には使いません。
+表示された結果フォルダーの`result.json`、`stdout.txt`、`stderr.txt`、`artifacts/`を確認します。成功は`ExitCode=0`で、準備・実行・回収例外は`Error`に残ります。ホスト待機のタイムアウトはゲスト終了を意味しません。設定とログを保持し、別のSandboxを強制終了・自動再実行しません。再現にはランナーで新しいコピーを作ります。
 
-[sandbox-guest.ps1](../../tests/sandbox-guest.ps1)はゲストのローカルディスクへコピーし、既存の`run.ps1`をWindows PowerShell 5.1で実行します。配布ファイルの共通マニフェストで、コピー直後と検証後のソースが入力スナップショットと一致することも確認します。ホストでは別ウィンドウの操作を続けられます。Sandboxウィンドウは開いたままにし、テストが動くSandbox内では手操作をしないでください。待機中も標準出力・標準エラーの追記分を表示するため、実行中のテスト名と完了した群を同じコマンドで確認できます。書き込み途中の行は改行まで待ち、終了通知後に最後の未表示分を回収します。各群の詳細出力は、その群の終了時に表示されます。終了後の`results/stdout.txt`、`stderr.txt`と、失敗コピーを回収した`artifacts/`で調査できます。`result.json`はログの終了・回収後に作成され、`ExitCode=0`だけが成功です。ホスト側も失敗をエラーとして返します。Sandboxは調査のため自動では閉じません。結果確認後に閉じてください。ゲスト側で捕捉した準備・実行・失敗資料の回収の例外は、`result.json`の`Error`に理由とPowerShellの呼び出し履歴を残します。回収も失敗した場合は、先の失敗を保持して回収失敗の理由・位置を追加します。ホスト側の失敗通知にも同じ情報が表示されるため、テスト開始前や終了後の失敗箇所を追えます。
-
-起動や終了通知の待機がタイムアウトした場合は成功とせず、設定・入力・ログを残します。待機期限はPCの日時ではなく経過時間で判定し、時刻補正に左右されないようにします。タイムアウトはゲストの終了を意味しません。Sandboxを途中で閉じたりゲストが異常終了した場合、ゲスト内だけに残る失敗コピーは回収できません。別のSandboxを強制終了したり自動再実行したりはしません。保持した`tests.wsb`を再実行すると結果が混ざるため、再現時もランナーから新しい実行を作成します。
-
-2026-09-27にWindows Sandbox実機でDesktop全24群の成功を確認しました。途中で見つかったテスト側の時間制限・反映待ちを修正し、変更のない成功済み群を再実行せず、5群・7群・12群の成功を合わせた結果です。実キー配送24項目、ワーカー終了失敗11ケース・104項目を含み、実行中にホスト側で別ウィンドウを操作しているとの利用者の確認があります。結果回収も成功しました。詳細は[検証結果](complexity-results.md#windows-sandboxでの画面検証)を参照してください。最小化・切断・ロック時の動作と実ブラウザーは未検証です。過去の原因未特定の失敗まで解消したとは扱いません。
-
-ランナーは直下の`test-*.ps1`を名前順に検出し、各テストをWindows標準のPowerShell 5.1の別プロセスで実行します。ソース検査とテストの起動時には親の`PSModulePath`を継承せず、Windows PowerShellに標準の検索先を構築させます。これにより、PowerShell 7側のモジュールを誤って選ぶ起動経路の差をなくします。呼び出し元のプロセスの値は起動直後に復元し、利用者・システムの永続設定は変更しません。検索先の構築規則は[Microsoftの説明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath#starting-windows-powershell-from-powershell-7)を参照してください。
-
-区分の正本は各ファイル先頭の`Test-Session`で、未分類はエラーです。支援・計測スクリプトには`test-`を付けません。各テストの終了コードが0でも、標準エラーへの出力があれば失敗とします。失敗通知にはテスト名と子プロセスの終了コードを表示するため、ログを出さずに異常終了した場合も番号を確認できます。テスト群・AutoHotkeyの待機がタイムアウトした場合も、終了までに記録された標準出力と標準エラーを表示します。実行中のファイル名と成功したテスト群数を表示し、ランナーの終了コード0と最後の`PASS`で全選択テストの成功を確認します。
-
-自動検査の標準出力・標準エラーとアプリが出す起動エラーはUTF-8です。PowerShell検査は[execute-check.ps1](../../tests/execute-check.ps1)が子プロセス内で文字コードを設定し、AHK検査は共通の起動処理で指定します。ランナーとSandboxの結果回収もUTF-8として読み取ります。日本語や絵文字を含む失敗・タイムアウト出力を既存の検査で確認し、呼び出し元のコンソール設定は変更しません。変更前の保存ログは従来の文字コードのままで、自動変換はしません。 PowerShell検査の未処理例外では、標準のエラー表示に加えて`ScriptStackTrace`を同じ標準エラーログへ記録します。共通起動スクリプトの名前だけが表示される実行時エラーでも、原因の関数・ファイル・行番号と呼び出し元を追えます。例外はそのまま再送出し、テスト内の`finally`や失敗判定は維持します。
-
-各テスト群は専用の`tests/.tmp/run-*`内の隔離コピーで実行し、利用者の`data/`は読み書きしません。成功した群は次の群を始める前に一時フォルダーを削除し、失敗した群のコピーと出力は調査用に残します。成功した群の出力はコンソールで確認でき、後続群の失敗によってそのコピーを保持し続けることはありません。テストファイルを直接実行すると自動削除されないため、単体検証にもランナーの`-Name`を使ってください。
-
-共通の`Wait-TestProcess`は、タイムアウトなどで対象がまだ動いている場合、Windows標準の[`taskkill /PID … /T /F`](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/taskkill)でそのテストのプロセスツリーを終了します。実行ファイル名では終了対象を選びません。終了処理が権限制限で拒否された場合も検査失敗です。待機と終了処理の両方が失敗した場合は、元のタイムアウトなどの理由と終了処理のエラーを一緒に保持します。Codexのコマンド隔離環境ではアクセス拒否を観測しています。これはWindows Sandboxとは別の制約です。プロセス終了の検査はWindows Sandbox内、または通常のユーザー環境で行い、アクセス拒否が出た場合は実行環境の権限を確認します。既に親が終了した後の孤立プロセスや、ランナー自体を強制終了した場合の回収を保証する仕組みではありません。
-
-失敗を再現して修正し、回帰テストが成功した後は、その調査用コピーも整理します。出力された失敗内容と実行パスで対象を特定し、使用中のプロセスがないことを確認して削除します。原因未特定の失敗記録と、公開済みの配布物・検証記録は保持してください。
+Sandboxは成功時も自動で閉じません。終了を確認し、必要な証拠を保存してから自分の一時資料を削除してください。最小化・切断・ロック時の動作は個別に検証します。
 
 ## 変更とテストの対応
 
-変更箇所から検証先を選ぶための一覧です。個々の入力値・故障点・期待結果はリンク先のテストを正本とし、ここには主要な契約を記載します。
+| 変更 | 主なテスト |
+|---|---|
+| DB・保存形式 | [sqlite](../../tests/test-sqlite.ps1)、[storage](../../tests/test-storage.ps1)、[integrity](../../tests/test-settings-integrity.ps1)、[supported-formats](../../tests/test-supported-formats.ps1) |
+| JSON入出力・全件置換 | [user-data-transfer](../../tests/test-user-data-transfer.ps1)、[app-settings](../../tests/test-app-settings.ps1) |
+| ライブラリ・履歴・公開 | [library-service](../../tests/test-library-service.ps1)、[state-contracts](../../tests/test-state-contracts.ps1)、[editor-commit](../../tests/test-editor-commit.ps1) |
+| キー・連続操作 | [shortcut-bindings](../../tests/test-shortcut-bindings.ps1)、[shortcut-queue](../../tests/test-shortcut-queue.ps1)、[page-hotkeys](../../tests/test-page-hotkeys.ps1)、[chat-send](../../tests/test-chat-send.ps1) |
+| 入力対象・ページ操作 | [input](../../tests/test-input.ps1)、[input-context](../../tests/test-input-context.ps1)、[page-actions](../../tests/test-page-actions.ps1)、[app-input-plan](../../tests/test-app-input-plan.ps1) |
+| リアクション・登録 | [quick-reaction](../../tests/test-quick-reaction.ps1)、[reaction-start](../../tests/test-reaction-start.ps1)、[reaction-results](../../tests/test-reaction-results.ps1)、[registration-storage](../../tests/test-registration-storage.ps1) |
+| ワーカー・終了 | [worker-lifetime](../../tests/test-worker-lifetime.ps1)、[app-worker](../../tests/test-app-worker.ps1)、[worker-cleanup](../../tests/test-worker-cleanup.ps1) |
+| 画面・排他・編集 | [app-layout](../../tests/test-app-layout.ps1)、[ui-transactions](../../tests/test-ui-transactions.ps1)、[editor-lifecycle](../../tests/test-editor-lifecycle.ps1)、[viewports](../../tests/test-viewports.ps1)、[window-suspension](../../tests/test-window-suspension.ps1) |
+| 起動・配布・ランナー | [startup](../../tests/test-startup.ps1)、[release](../../tests/test-release.ps1)、[runner](../../tests/test-runner.ps1) |
 
-| 対象 | 主なテスト | 検証する契約 |
-|---|---|---|
-| 代表的な画面連携 | [test-app.ps1](../../tests/test-app.ps1) | 画面間の遷移、操作可否、編集内の設定保存 |
-| 配置・表示 | [test-app-layout.ps1](../../tests/test-app-layout.ps1) | 画面配置・通知、待機中の連携対象と移動先IDの保持、連携開始時の取得失敗・操作交代後の通知抑止、連携確認中のキャンセル・画面交代後の保存抑止、前面確認の失敗診断 |
-| 編集ダイアログ | [test-app-editors.ps1](../../tests/test-app-editors.ps1) | 保存と破棄確認、長い名前・本文の編集／保存／Undoと移動画面の表示、下書き・選択IDの保持、削除済みの所属を共通弾幕へ読み替えないこと、ダイアログの所有とフォーカス復元 |
-| ライブラリ操作 | [test-library-service.ps1](../../tests/test-library-service.ps1) | 編集・移動・割当・Undoの確定、変更なしの履歴保持、入力対象・共通設定・失敗時データの保全。実SQLiteを使い、画面・キー登録・ワーカーを起動しない |
-| ユーザーデータの移行 | [test-user-data-transfer.ps1](../../tests/test-user-data-transfer.ps1) | 全データの往復、全件置換と自動退避、不正入力・保存失敗の保全、キャンセル・操作排他・実GUI部品の更新。ファイル選択・確認ダイアログは代替応答。[設計と検証記録](user-data-transfer.md) |
-| ライブラリの画面連携 | [test-app-library.ps1](../../tests/test-app-library.ps1) | 編集対象と入力対象の分離、画面からのUndo・検索・今回設定、保存失敗時の保全、チャンネル連携 |
-| 入力対象の確定 | [test-input-context.ps1](../../tests/test-input-context.ps1) | 自動判別の結果を画面更新と独立して保持。判別・保存の失敗時は入力計画を作らず、手動・共通入力も検証。画面・ブラウザー操作なし |
-| 入力計画 | [test-app-input-plan.ps1](../../tests/test-app-input-plan.ps1) | IDと本文の固定、並べ替え・管理画面からの復帰後の選択保持、入力前のパレット表示・前面確認、送信直前の再検証、対象変更時の中止、部分入力を再送しないこと |
-| 設定のアプリ連携（画面操作不要） | [test-app-settings.ps1](../../tests/test-app-settings.ps1) | 共通設定の独立保存と公開、キーの巻き戻し、リアクション設定と実行結果の反映 |
-| 通信・実行 | [test-app-worker.ps1](../../tests/test-app-worker.ps1) | 実パイプ通信、起動・終了・再起動の資源所有、失敗時の復旧、登録同期と操作制限の解除 |
-| ワーカーの終了失敗 | [test-worker-cleanup.ps1](../../tests/test-worker-cleanup.ps1) | 終了を確認できない場合のハンドル所有・再入拒否・明示的な復旧。11の故障ケースをそれぞれ新しいプロセスで実行し、ケース名を記録する |
-| ワーカー単体の寿命 | [test-worker-lifetime.ps1](../../tests/test-worker-lifetime.ps1) | 実プロセスの起動失敗・理由の保持・ハンドル解放・再試行、パイプ切断・通知イベント欠落・接続先不在での終了。実ワーカーを使い、アプリ初期化・DB・画面・キー・ブラウザー操作を要しないHeadless検査 |
-| 操作ルール・表示モデル | [test-operation-models.ps1](../../tests/test-operation-models.ps1) | 状態に応じた操作可否、表示モデル、更新保留。アプリ起動なし |
-| SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、JSONバックアップのロック拒否と再試行、終了後のDBコピーからの復旧。Unicode・長文・複数配信者の保存往復は独立した合成データで確認し、アプリ初期化を要しない |
-| 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 実DBとパイプ通信を使い、登録の検証・保存・同期を画面操作不要で確認。中止・同期失敗時のデータと理由を保全し、再同期まで操作を拒否 |
-| 登録状態の表示 | [test-registration-display.ps1](../../tests/test-registration-display.ps1) | DBを直接読み、通信・操作制限・診断更新を行わないこと。読み取り失敗と回復も非表示コントロールで確認するHeadless検査 |
-| 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面は代替処理を使うHeadless検査 |
-| 設定整合性・復旧 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・不正な設定や上限超過の拒否、DB原本の保持、初期化前の退避・付随ファイルの保全・途中失敗の復元を画面不要で検査 |
-| 起動・復旧 | [test-startup.ps1](../../tests/test-startup.ps1) | 標準の`/Validate`による構文検査・起動中プロセスとDBの保持、空・破損DBの原本保持、初期作成中断後の再試行 |
-| 空のライブラリ | [test-empty-settings.ps1](../../tests/test-empty-settings.ps1) | 新規状態・最後の削除・配信者なしの共通弾幕・再読み込み |
-| 画面復帰 | [test-palette-return.ps1](../../tests/test-palette-return.ps1) | 画面復帰時の編集反映、入力対象の独立、処理中の表示・復帰の拒否 |
-| 順序操作 | [test-management-order.ps1](../../tests/test-management-order.ps1) | 上下移動後の保存順・選択・スクロールの保持 |
-| 一覧表示 | [test-list-visibility.ps1](../../tests/test-list-visibility.ps1) | タブ切替・再表示と一覧の表示状態 |
-| 小さい画面 | [test-viewports.ps1](../../tests/test-viewports.ps1) | 狭い画面での配置・スクロール・フォーカス追従、監視とオブジェクトの解放 |
-| UI更新の割り込み | [test-ui-transactions.ps1](../../tests/test-ui-transactions.ps1) | 完成後の画面・一覧公開、再入防止、管理行の更新失敗からの復旧、最新のスクロール要求の保持、情報画面とviewportの構築失敗からの復旧 |
-| 編集画面の生成・終了 | [test-editor-lifecycle.ps1](../../tests/test-editor-lifecycle.ps1) | 構築・表示・終了の失敗時の資源解放、親画面の保全、不完全な弾幕候補の保存抑止、古い編集画面からの解除拒否 |
-| 編集保存と画面更新 | [test-editor-commit.ps1](../../tests/test-editor-commit.ps1) | 保存後の描画失敗と未保存変更の区別、古い選択による別項目の操作抑止、保存中に届いた次の編集の保持 |
-| 親画面の操作制限 | [test-window-suspension.ps1](../../tests/test-window-suspension.ps1) | 通信待ち・編集の準備と復旧、元の有効状態と対象画面の保持、部分的な復旧失敗・入れ子・割り込み時の所有 |
-| 診断画面の生成・更新 | [test-diagnostics.ps1](../../tests/test-diagnostics.ps1) | 構築失敗時の資源解放、表示とコピーの一致、更新失敗からの復旧。他の画面の故障注入とは独立した環境で検証 |
-| 通知の寿命 | [test-status-tip.ps1](../../tests/test-status-tip.ps1) | 実ツールチップの期限・置換・継続表示・消去 |
-| 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 診断・補助画面・開始失敗・中止・小画面配置の連携 |
-| 即時リアクション | [test-quick-reaction.ps1](../../tests/test-quick-reaction.ps1) | 動画確認・開始前の中止と交代、実行への引き継ぎ。非表示画面と代替処理を使い、実キー・ワーカー・前面操作は不要 |
-| 送信中の所有 | [test-reaction-send-ownership.ps1](../../tests/test-reaction-send-ownership.ps1) | 前面確認・応答中に交代したジョブの資源解放と後続処理の保護。前面・通信・タイマー精度を代替処理にし、非表示コントロールを扱うHeadless検査 |
-| カウントダウン | [test-reaction-countdown.ps1](../../tests/test-reaction-countdown.ps1) | 待機・登録再試行・通知中の交代と中止、古いタイマーの抑止。前面・通信を代替処理にし、利用者の入力やフォーカスを要しないHeadless検査 |
-| リアクション開始 | [test-reaction-start.ps1](../../tests/test-reaction-start.ps1) | 開始途中の交代と中止、後続ジョブへのタイマー・結果の誤反映防止 |
-| 結果の公開 | [test-reaction-results.ps1](../../tests/test-reaction-results.ps1) | 操作制限の解除・結果描画中に交代しても、実行中または終了済みの後続ジョブの状態・結果・通知を維持 |
-| 不要処理の抑制 | [test-performance.ps1](../../tests/test-performance.ps1) | 未変更データの共有、差分編集、同値保存・非表示更新・同値描画の抑制、管理行の置換・増減と選択・スクロールの保持 |
-| 管理一覧の表示通知 | [test-management-virtual.ps1](../../tests/test-management-virtual.ps1) | 名前の完全一致・前方一致・折り返し検索、文字入力によるID選択、Unicode表示バッファの境界と終端、空一覧 |
-| 検索・選択肢 | [test-search-scheduling.ps1](../../tests/test-search-scheduling.ps1) | 検索の集約、古い結果による操作の拒否、選択肢の再利用とIDの追従 |
-| 時間制御 | [test-timing.ps1](../../tests/test-timing.ps1) | 送信間隔・中止・単調増加時計、終了時を含むタイマー精度と実行ジョブの解放。前面・通信・タイマー精度を代替処理にし、実タイマーと非表示コントロールを使うHeadless検査 |
-| リアクション検出 | [test-reactions.ps1](../../tests/test-reactions.ps1) | 5種類の識別、登録情報の妥当性、一括取得の整合性、操作直前の対象確認 |
-| UIA参照 | [test-cache.ps1](../../tests/test-cache.ps1) | UIA参照の再検証・失効・登録置換、不正な検索計画の拒否 |
-| ページ操作 | [test-page-actions.ps1](../../tests/test-page-actions.ps1) | チャット・表示用UIの識別と対象確認。クリックや送信をしないこと。比較用の別UIA要素はテスト所有の非表示ウィンドウから取得し、他アプリを必要としないHeadless検査 |
-| ショートカットキュー | [test-shortcut-queue.ps1](../../tests/test-shortcut-queue.ps1) | 同一キー・混在操作のFIFO、停止と新セッションの分離、待機、対象・本文・配信者変更、フォーカストークンの消費、失敗時の後続破棄 |
-| チャット送信キー | [test-chat-send.ps1](../../tests/test-chat-send.ps1) | FIFOの本文→Enter、チャット限定、対象変更・停止・不明結果、Ctrl＋Alt／Ctrl＋Shift保持中の通常Enterを隔離欄で確認 |
-| 旧キー設定の移行 | [test-shortcut-upgrade.ps1](../../tests/test-shortcut-upgrade.ps1) | DB4／JSON1の同一変換、独自割当・衝突の維持、原本不変、不正データ拒否、キー行と形式番号のロールバック |
-| ページ操作キー | [test-page-shortcuts.ps1](../../tests/test-page-shortcuts.ps1) | クリア前の再検証、操作競合と編集画面からの操作の拒否 |
-| ページ操作の所有 | [test-page-action-ownership.ps1](../../tests/test-page-action-ownership.ps1) | 受付から結果通知までの所有、交代後の結果保護、クリア直前のタイマー割り込みと例外時の復帰。前面・通信・入力を代替処理にするHeadless検査 |
-| キー登録と保存 | [test-shortcut-bindings.ps1](../../tests/test-shortcut-bindings.ps1) | 起動時の登録、キー交換、保存失敗・登録失敗からの復元。キー登録を代替処理にし、実DBを使うHeadless検査。画面・ワーカー・アプリ初期化は不要 |
-| キー管理画面 | [test-shortcut-manager.ps1](../../tests/test-shortcut-manager.ps1) | 画面からのキー変更・競合・保存と失敗時の下書き保持、対象別の弾幕割当、未保存変更の破棄確認 |
-| 実キーの経路 | [test-page-hotkeys.ps1](../../tests/test-page-hotkeys.ps1) | 登録した実キーのKeyUp、修飾キー保持中の入力・クリア、遅い操作中の複数キーと同一キーのFIFO |
-| 文字入力 | [test-input.ps1](../../tests/test-input.ps1) | チャット・コメントの分類、フォーカスと入力欄の同一性、対象外の拒否 |
-| メモリキャッシュ | [test-storage.ps1](../../tests/test-storage.ps1) | メモリキャッシュの再利用・期限・件数・失敗後の再取得と登録更新 |
-| ブラウザー診断の出力 | [test-browser-report.ps1](../../tests/test-browser-report.ps1) | 不正な引数の拒否、診断出力先の解決・作成、失敗記録、既存レポートの保護。実ブラウザー操作なし |
-| テスト実行 | [test-runner.ps1](../../tests/test-runner.ps1) | テスト選択と隔離、子プロセス・環境の後始末、PowerShell・AHKの判定失敗と呼び出し位置、例外が捕捉された場合の失敗記録 |
-| Windows Sandbox実行 | [test-sandbox.ps1](../../tests/test-sandbox.ps1) | 利用者データを含まない起動用コピー、共有範囲、テスト選択の維持、成功・異常終了と出力・失敗記録の回収。仮想化・最前面の実機検証は含まない |
-| ソース・配布 | [test-release.ps1](../../tests/test-release.ps1) | ソース検査による形式・参照・モジュール境界違反の拒否、SemVer形式、必須ファイルの欠落・同名フォルダーの拒否、収録範囲・個人データ除外・ハッシュ、コピーした版番号とZIP・検証記録の一致、圧縮と公開の失敗時処理、上書き防止 |
+この表は入口です。`-List`と近隣テストで追加の影響範囲を確認します。保存契約・共通基盤・複数の境界を変える場合は範囲を広げます。
 
 ## 失敗したとき
 
-1. 最初のFAILと、出力された一時フォルダーの場所を確認します。
-2. そのフォルダーのソース・標準出力・標準エラーを確認します。正式版へ失敗時のデータをコピーしないでください。
-3. 構文エラー、実装の不具合、テストの前提、フォーカス競合など環境要因を区別します。
-4. 原因を説明できてから修正・再実行します。再実行で通っただけで環境要因と断定しません。
-5. 調査後、該当する一時フォルダーだけを削除します。
+最初のエラー、終了コード、スタック、保持したコピーを確認します。UTF-8の出力にはタイムアウト前のログも含まれます。前面失敗の`desktop`・`receives_input`・`foreground_owned`は観測値で、単独では原因を確定できません。同じデスクトップへの手操作と、ホストだけの操作を区別します。
 
-再現範囲を絞るときは、上の共通コマンドに`-Name`を指定します。画面フォーカスを扱う試験には`-Sandbox`を併用します。非対話セッションや、テストと同じデスクトップでの手操作は前面確認に影響します。Windows Sandboxを使った場合、ホストでの別ウィンドウの操作とSandbox内の操作を区別して記録してください。ホストでの操作だけを理由に、Sandbox内の前面確認の失敗を手操作の介入と断定しません。同じデスクトップで介入した操作と時点が分かる場合は記録し、その操作と重ならない条件で該当テストを再実行してください。再実行の成功だけで、介入の記録がない過去の失敗まで解消済みとは扱いません。[原因未特定の失敗記録](complexity-results.md#原因未特定の失敗と追加した観測)も参照してください。
+原因を絞ってから必要な群を再実行します。成功した再実行だけで、以前の未特定失敗を解消済みにしません。[未特定の観測](complexity-results.md#原因未特定の失敗と追加した観測)を残してください。
 
 ## 回帰テストを追加する
 
-期待する利用者の結果と不変条件を先に決め、関数の内部をそのまま写した検査にしないでください。
-
-GUI操作では、前提と結果を別々に確認します。最前面であることが必要なら、共通の`RequireTestWindowActive(hwnd)`で確認してから操作します。最大2秒で前面にならない場合は失敗し、画面の存在・表示・有効状態、所有ウィンドウの有効状態、前面プロセスがテスト自身かを記録します。この補助は画面をアクティブにせず、再試行もしません。製品による画面復帰を検査するときも同じ確認を使います。ボタンの処理を検証する場合は、対象画面をアクティブにして`BM_CLICK`を送り、処理への到達と保存結果を確認します。実際のキー配送やマウス操作そのものを検証する試験は置き換えません。固定の`Sleep`を延ばしたり、通るまで再実行したりして失敗を隠さないでください。
-
-保存失敗では、エラーだけでなく呼び出し元のデータ・公開済み状態・DB原本が保全されていることを確認します。再試行で同じ操作を安全に完了できるかも、変更した境界に応じて検査します。
-
-登録中止なら、通知文言だけでなくDB・ワーカーの以前の登録が変わらないことを確認します。保存後の中止は別ケースにし、保存済み結果と同期が維持されることを確認します。対象変更なら、操作前から条件を不正にするだけでなく、検出途中に状態を切り替えて操作回数0を確認します。
-
-成功時・境界値・保存失敗・通信失敗・ジョブ中止・ジョブ置換を、変更の影響に応じて選びます。既存の契約を検証するケースは、対応するテストへ追加します。新しいテスト入口が必要な場合は`test-*.ps1`として追加すると一括実行の対象になります。担当する契約や入口が変わったときに対応表を更新し、個別ケースの追加だけでは表を増やしません。
+ファイル先頭に`# Test-Session: Headless`または`Desktop`を付けます。支援・計測スクリプトに`test-`を付けません。故障の注入には通常の例外、期待結果には共有の`Assert`を使います。テストの`finally`と製品の終了処理を通し、失敗を捕捉して成功へ変えません。
 
 ### テストの準備と観測
 
-共通処理は[support.ps1](../../tests/support.ps1)と[app-fixture.ps1](../../tests/app-fixture.ps1)を使います。シナリオごとに新しい隔離フォルダー・合成データ・プロセスを作り、前のテストの結果に依存させません。特定シナリオの応答・カウンター・入力記録はそのシナリオで設定し、共通準備をモードで切り替えません。入力を検査するシナリオは記録用の`RuntimePorts.Text`を明示し、共通準備は予期しない文字入力を拒否します。
+[support.ps1](../../tests/support.ps1)の`New-TestRuntime`、`Invoke-AhkTest`、`Invoke-AppTest`、`Wait-TestProcess`を使います。[app-fixture.ps1](../../tests/app-fixture.ps1)は合成設定とワーカーを用意します。[library-model.ahk](../../tests/fixtures/library-model.ahk)は下書きと設定のコピーを用意し、確定は製品の処理を使います。
 
-アプリの検査には`New-TestRuntime`でソースとフィクスチャを用意します。配布・Sandboxの検査には`New-TestDirectory`で空の作業先を作り、既存の`Copy-ReleaseFiles`で配布対象だけを一度コピーします。どちらもランナーが指定した隔離先を使い、成功・失敗時の保存期間は共通です。
-
-共通のテスト用ワーカーは、動画IDと配信者情報を合成データから返します。配信者情報の取得だけを代替し、`Resolve-Video`のキャッシュ・応答生成・パイプ通信・自動選択は製品の処理を通します。`test-storage.ps1`は隔離コピーのHTTP取得箇所を例外へ置き換えた上で、この経路が成功することを検証します。
-
-| 検証する境界 | 使う仕組み |
-|---|---|
-| アプリ初期化を含む画面連携 | `Invoke-AppTest`がモジュール読み込み、外部アダプター設定、`InitializeApplication`、検査本体を持つ入口を生成。共通フィクスチャが現行設定モデル・偽ワーカー・開始状態を用意する |
-| 初期化不要のモデル・SQLite・設定整合性 | `app_modules.ahk`と`Invoke-AhkTest`を使い、GUI・ホットキー・ワーカーを起動しない。保存先・キー未登録状態・空の履歴を明示し、保存状態の適用は本番と同じ`ReloadAppSettings`を使う |
-| ブラウザー要求・入力・前面確認・時刻・タイマー精度・キー | `RuntimePorts`のコールバックを差し替える。既定処理の観測には対応する`Native…`アダプターを使う |
-| プロセス間通信 | `Write-TestWorker`と`Start-BrowserWorker`へ渡す合成応答を使う。`RuntimePorts.WorkerScript`で入口だけを差し替え、通信と資源解放は本番と共有する |
-| 描画・コントロール更新 | `fixtures/ui-message-probe.ahk`で実際の一覧再構築・有効状態・文言更新のWindowsメッセージを観測し、終了時に解除する |
-
-`Wait-TestProcess`が起動済みの子プロセスを受け取り、待機・終了確認・ハンドル解放を担当します。テスト実行・AHK検査・製品起動確認・診断テストは同じ処理を使い、終了コードと標準出力・標準エラーの意味は各呼び出し元が検査します。異常終了時の終了範囲と制約は[自動テストの実行手順](#自動テストを実行する)にまとめています。
-
-`Invoke-AhkTest`はAHKの入口作成と出力・終了コードの検査を担当します。PowerShellのランナーと同じく、終了コード0かつ標準エラー出力なしの場合だけ成功とします。この判定は同じ補助を使う性能計測にも適用されます。生成した入口は未定義変数の警告を標準出力へ送り、共通の`OnError`が未処理エラーを標準エラーへ記録して終了コード1で停止します。Errorオブジェクトのメッセージ・ファイル・行・スタックを記録し、タイマーの例外でも`OnExit`の後始末を通します。シナリオで捕捉した例外はそのまま検証できるため、表示と失敗終了だけの最外周の`try/catch`は不要です。
-
-生成した入口は`Assert(条件, 説明)`と、プロセスごとに0から始まる成功件数`Checks`も提供します。成功時だけ件数を増やし、失敗時は呼び出し元の位置を記録して終了コード1で終了します。製品側の`catch`が判定失敗を捕捉して成功終了に変えることはできません。故障の注入には通常の`Error`を使い、期待結果の判定には`Assert`を使います。個別テストで同じ判定関数やカウンターを再定義する必要はありません。操作回数などシナリオ固有の観測値は、そのテスト内で管理します。
-
-このエラーハンドラーはテスト入口だけに追加します。`InitializeApplication`を使う試験は、設定DB・ワーカーの終了コールバックも製品の初期化に任せ、個別シナリオから再登録しません。画面テストと計測は`InitializeApplication(false)`で起動失敗時の復旧ダイアログ待ちを避けます。テスト入口へ製品用のコマンド引数は渡しません。製品の`main.ahk`、AutoHotkeyの`/Validate`、既存の`--check`・`--smoke`・不正引数の拒否は起動テストで別途確認します。通知表示や処理中のボタン状態は、初期化不要の試験に持ち込まず、対応する画面テストで確認します。
-
-PowerShell側も`support.ps1`の`Assert 条件 説明`と`$script:checks`を共有します。判定失敗は呼び出し元のファイル・行を標準エラーへ記録してから例外を出します。製品の`catch`や疑似UI要素の`ScriptProperty`・`ScriptMethod`が例外を吸収しても、ランナーがこの記録を検出して失敗とし、調査用コピーを残します。故障注入には通常の`throw`、呼ばれてはいけない処理には`Assert $false`を使います。プロセスを強制終了せず、シナリオの`finally`による後始末を維持します。
-
-`fixtures/library-model.ahk`はテストデータのコピーと確定を担当します。ライブラリ編集には`CreateTestLibrarySnapshot`を使い、共通設定やキーを含む保存・照合には`CreateTestSettingsSnapshot`を使います。`New-TestRuntime`が隔離先へコピーし、`Invoke-AppTest`が読み込みます。初期化を行わないSQLiteテストでは入口から明示的に読み込みます。補助名は`Test`を含め、確定時は製品の`CommitLibraryDraft`を使うため、保存・公開・履歴の処理をテスト側に複製しません。
+通常の依存は`RuntimePorts`で差し替えます。描画は実際のコントロールとWindowsメッセージを観測します。共有Assertは失敗位置を記録し、製品のcatchで吸収されても成功にしません。テスト入口は未処理例外を記録して終了します。
 
 ### 失敗・割り込み・資源解放の検証
 
-通常の依存差し替えは`RuntimePorts`を使います。通常操作では起こせない瞬間の故障や割り込みに限り、`Edit-TestSource`へ隔離先・相対パス・置換前後の文字列を渡して注入します。文字列の完全一致で全該当箇所を置換し、一致しない場合はファイルを変更せず、対象ファイルと探した文字列を報告して停止します。注入内容はシナリオ側に置き、製品の原本や本番用のフックを変更しません。
-
-| 条件 | 結果として確認すること |
-|---|---|
-| 起動時の退避・巻き戻し失敗 | 実ファイルのロックを使い、別フォルダーのDBを変更しないこと、元の内容の復元と再試行を確認。復元の一部にも故障を注入した場合は残りを復元し、戻せない内容と場所を保全・通知する |
-| 共通設定保存と配信者選択の競合 | 設定確定入口で実AHKタイマーを予約。自動判別・リアクション設定・キー設定について、選択が一度だけ実行され、メモリとDBが一致することを確認する |
-| 編集部品の構築・表示失敗 | 弾幕編集・移動・チャンネル連携・キー管理で故障点への到達、未公開ウィンドウの破棄、編集所有権と親画面・割り込み設定の復旧、再作成と通常終了を確認する |
-| 描画中の再入・保存後の更新失敗 | 未完成状態を操作できず、保存済みデータを再保存せずに画面を復旧できることを確認する |
-| ブラウザー待機・タイマー設定の失敗 | ショートカット受付・登録再待機などの失敗後、ジョブが解放され操作ボタンが復帰することを確認する |
-| スクロール監視の終了・部分登録失敗 | 削除通知で実際のオブジェクト解放を確認。配置コールバックの有無、座標取得前と監視登録途中の失敗、同じ画面での再作成を扱い、呼び出し元の画面は保持する |
-| DB初期作成途中のプロセス停止 | 不完全なDBを正式名へ公開せず、再試行できることを確認する |
-
-具体的なシナリオは上の[対応表](#変更とテストの対応)から辿れます。
+通常操作で到達できない故障点だけ、`Edit-TestSource`で隔離コピーへ注入します。置換前の完全一致がなければ停止し、原本と製品用フックを変更しません。ロック・タイマー・表示失敗を使い、保存前の保全、保存後の公開、所有権復旧、再試行、実資源の解放を確認します。割り込みを禁止した実装に合わせて、テストから必要な割り込みまで消しません。
 
 ## 実画面で補う確認
 
-| 確認 | 成功の判断 |
-|---|---|
-| 空の新規状態から共通弾幕を追加 | パレットへ戻ると表示され、再起動後も残る |
-| チャンネル連携→配信者別弾幕追加→戻る | 入力対象と表示内容が一致する |
-| タブ往復・初回表示・再表示 | 一覧が消えず、選択行と上下ボタンが一致する |
-| 小さい画面・拡大表示・モニター間移動 | 操作部へ到達でき、文言が重ならない。編集・ヘルプも確認 |
-| チャット・コメント・返信欄 | 意図した欄だけに入力する。検索・アドレス欄は拒否 |
-| ボタン登録→送らずに確認 | 5種類を識別し、送信操作を起こさない |
-| バックアップ→別フォルダーで復元 | 弾幕・連携・標準設定・登録を読み直せる |
-
-実送信を伴う試験は、対象動画・種類・最大回数を事前に決めて実施します。自動テストが送信しないことを理由に、手動試験も送信しないと考えないでください。
+新規弾幕の追加と再起動、チャンネル連携、タブ往復、選択復元、狭い画面・拡大表示、チャット・コメント・返信、登録と非送信確認、別フォルダーへの復元を確認します。実送信の検査では対象動画・種類・最大回数を事前に決めます。
 
 ## 実ブラウザーを確認する
 
-まず読み取り専用の検出確認を行い、必要な場合だけフォーカス移動・ホバーを試します。どちらも文字入力・クリア・クリック・リアクション送信は行いません。
-
-1. 対象ブラウザーでYouTube動画を開き、**入力可能なライブチャット**を表示します。ログイン状態や配信の条件により入力できない欄は検出対象になりません。アドレス欄の編集中は動画を判定しないため、編集を終えてページへ戻ります。
-2. 次の一覧から対象の `WindowHandle` を選びます。通常ページは `Watch`、ポップアウトしたチャットは `Popout` を指定します。
-3. まだ存在しないレポート名で検査を実行し、終了コードとJSONの結果を確認します。
+対象の動画と入力可能なチャットを表示し、アドレス欄の編集を終えます。まず一覧からハンドルを選び、未使用の出力名で読み取り検査を実行します。
 
 ```powershell
-# タイトル・URLを出さず、ブラウザー名と対象ハンドルを一覧表示
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.ps1 -List
-# 読み取り専用の検出確認。123456を一覧のWindowHandleへ置き換える
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.ps1 -WindowHandle 123456 -PageKind Watch -OutputPath .\tests\.tmp\browser-watch.json
+# 操作も確認する場合は、対象を最前面にして別の出力名を使う
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.ps1 -WindowHandle 123456 -PageKind Watch -Exercise -OutputPath .\tests\.tmp\browser-actions.json
 ```
 
-`-PageKind`を省略するとページ種類を自動判定し、指定すると期待する種類との一致も検査します。出力先の親フォルダーは自動作成し、相対パスはPowerShellの現在位置から解決します。既存レポートは上書きしません。再確認には別のファイル名を指定してください。
+通常ページは`Watch`、別窓チャットは`Popout`です。省略時は自動判定します。`-List`は対象・出力・`-Exercise`と併用できません。親フォルダーを作成し、既存レポートを上書きしません。
 
-`-List`は候補の一覧表示専用です。`-Exercise`・対象ハンドル・出力先との併用は、画面へのアクセス前にエラーになります。
+終了コード0は動画・入力可能なチャット・表示起点の検出成功です。`-Exercise`ではフォーカスとホバーも含みます。文字入力・クリア・クリック・送信は行いません。レポートはタイトル・URL・入力値・例外本文を収録しません。
 
-| 結果 | 意味・次の確認 |
-|---|---|
-| 終了コード0 | 動画・入力可能なチャット・表示用UIを検出できた。`-Exercise`付きなら指定した操作の成功も含む |
-| `AddressDetected=true`、`VideoDetected=false` | アドレス欄は特定できたが、動画は判定できない。URL編集中や対象外のページでないか確認する |
-| `ChatState=ok` | 入力可能なチャット欄を一意に検出できた |
-| `ChatState=chat_missing` | 入力可能なチャット欄が見つからない。表示・ログイン・入力可能な状態を確認する |
-| `ChatState=chat_ambiguous` | 入力可能なチャット欄の候補が複数ある。ページ内のチャット表示の構成を確認する。操作時は目的の欄を手動で選ぶ |
-| `ChatState=not-run`／`unknown` | チャット検査を開始していない／開始後に結果を得られなかった。`Error`の段階を確認する |
-| `LauncherDetected=false` | リアクション表示用UIを一意に検出できない。対象のライブ配信とページ表示を確認する |
-| `Focus`・`Hover`が`not-run` | 操作は未実施。読み取り専用の検出確認では通常の結果 |
-| `Focus`・`Hover`が`unknown` | 呼び出した操作の結果を確認できない。未実施とは判断せず、実画面を確認する |
-| `Error`が空でない | 検査自体が失敗。文中の段階を確認し、その箇所の対象・表示状態を調べる。例外の本文や個人情報は収録しない |
-
-既存の`ChatDetected`も保持し、`ChatState=ok`の場合だけ`true`にします。新しいレポートでは、検出できなかった理由を`ChatState`で確認できます。
-
-例外時の段階は`window`（ウィンドウ・ブラウザー情報）、`foreground`（最前面）、`address`（動画判定）、`page-kind`（ページ種類）、`chat`（入力欄）、`launcher`（表示用UI）、`exercise-precondition`（操作開始条件）、`focus`（フォーカス操作）、`hover`（ホバー操作）です。完了済みの検出・操作結果は保持し、例外後の操作は実行しません。
-
-フォーカス移動とホバーも確認する場合は、対象動画を最前面にし、別のレポート名で `-Exercise` を付けます。
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-browser.ps1 -WindowHandle 123456 -PageKind Watch -Exercise -OutputPath .\tests\.tmp\browser-watch-actions.json
-```
-
-`Focus=focused`は同じチャット欄へのフォーカス反映、`Hover=hovered`は表示用UIへのマウス移動を表します。メニューの見た目は自動判定せず、`Display`は`not-verified`のままです。YouTube側の送信受理は、この検査の対象外です。
+`ChatState`の`chat_missing`は入力可能な欄なし、`chat_ambiguous`は候補複数、`not-run`は未開始、`unknown`は開始後の結果不明です。`ChatDetected`は`ok`だけでtrueになります。`Error`の段階を確認し、`Focus`・`Hover`がunknownなら未実施とは判断しません。
 
 ### 人間がリアクションUIの表示を確認する
 
-表示の確認は人間が担当します。画面取得ツールを使えない場合も、この手順で確認できます。
-
-1. 確認する版のChatPaletteを起動し、キー管理画面で「リアクションUI表示」の現在の割当を確認します。
-2. 入力可能なライブチャットのある動画ページを最前面にし、リアクションの選択UIが閉じた状態から、そのキーを押します。
-3. 選択UIが開いたかを目視で確認します。リアクションボタンは押さず、文字入力・クリア・送信も行いません。
-
-結果は同じ作業の検証記録へ、確認日時、ChatPaletteの版または検証対象、ブラウザー名・版、通常ページ／ポップアウト、使用キー、「表示された／表示されなかった／未確認」を記載します。自動検査のJSONは書き換えず、人間の報告と区別して保持します。未回答や単なる作業再開の指示を、表示成功として扱いません。
-
-表示されなかった場合は、キー管理画面の割当とアプリの通知を確認して原因を調べます。表示確認待ちの間も、独立したコード・文書・自動検査の作業は進めます。
-
-レポートには日時、ブラウザー名・版、ページ種類、前面状態、各検出・操作の結果を記録します。URL・タイトル・チャット内容・例外本文は記録しません。ブラウザーと通常ページ・ポップアウトの組み合わせごとに結果を残し、検出確認だけの結果を操作確認済みと扱わないでください。未実施や対象なしも成功には含めません。
+`Hover=hovered`はマウス移動の成功です。`Display=not-verified`は自動では変更しません。人間が5種類のメニューを確認し、起動版・日時・ブラウザー・ページ種類・使用キー・見えた結果を別に記録します。送信の受理はこの検査の対象外です。
 
 ## 性能を計測する
 
-機能回帰と実測を分けます。性能回帰テストは不要な更新・複製・再探索の抑制を確認しますが、毎回同じ実時間を要求する試験ではありません。
+| スクリプト | 計測範囲・既定値 |
+|---|---|
+| `tests/benchmark-storage.ps1` | 保存計画。1千・1万・10万件、反復7回。`-SourceRoot`で比較元を指定 |
+| `tests/benchmark-load.ps1` | 画面・キー・ワーカーなしの読込と状態反映。1千・1万件、反復3回。`-SourceRoot`も指定可能 |
+| `tests/benchmark-ui.ps1` | パレット・検索・管理一覧の更新。1千・1万件、反復3回 |
 
-実測では版、OS、ブラウザー、件数、検索語、キャッシュの有無、実行回数を記録し、変更前後を同じ条件で比較します。初回起動・初回探索と再利用時を分け、平均だけでなく遅い試行も記録してください。リアクションは指定間隔・処理時間・平均開始間隔・YouTube側の受理を区別します。
+各スクリプトはウォームアップ後に中央値・最大値を出し、計測外で結果を照合します。読込とUIは`-Counts`（1〜100000）と`-Repeats`（1〜9）、保存計画は反復1回以上を指定できます。複数件数はPowerShell内で`& ./tests/benchmark-load.ps1 -Counts 1000,10000,100000`のように渡します。
 
-大量データのテストは合成データと隔離DBを使います。保存上限の試験を、快適性や長時間稼働の検証結果として扱わないでください。実停電、OS全体のディスク枯渇、全ブラウザーの互換性は既存テストで検証していません。
-
-計測結果はCSVで標準出力へ出します。中央値は反復回数が奇数なら中央の値、偶数なら中央2値の平均です。保管する場合は実行時にファイルへ出力してください。各計測は成功時に一時環境を削除し、失敗時はソース・標準出力・標準エラーを残します。通常の回帰テストには実時間の合否基準を加えません。
-
-保存計画の計測では、各条件の最終結果について、件数・IDごとの名前と本文・キー割当・要求された順序を計測区間外で照合します。不一致なら、その条件のCSVを出力せず失敗します。検査で取得した参照は次の条件へ持ち越しません。
-
-| 計測 | 範囲と既定条件 | 引数 |
-|---|---|---|
-| `benchmark-storage.ps1` | 合成データ1千・1万・10万件の編集・隣接交換・Undo・全件逆順・全件検証で、保存計画の計算時間を測る。ウォームアップ1回後の7回の中央値と最大値。SQL取得・DB書き込み・描画・ブラウザー操作は含まない | `-Repeats`は1以上。`-SourceRoot`で同じモジュール構成の比較対象を指定可能 |
-| `benchmark-load.ps1` | 隔離DBの合成データ1千・1万件で、設定読込からアプリ状態の反映までを画面・キー登録・ワーカーなしで測る。ウォームアップ1回後の3回の中央値と最大値。DB準備と結果照合は計測外 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9。`-SourceRoot`で比較対象を指定可能 |
-| `benchmark-ui.ps1` | 隔離DBの合成データ1千・1万件で実際のパレット描画・検索・管理一覧の全件更新を測る。ウォームアップ1回後の3回の中央値と最大値 | `-Counts`は1〜100000の件数を一つ以上、`-Repeats`は1〜9 |
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-storage.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-load.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-ui.ps1
-# 別フォルダーに用意した同じモジュール構成のソースと比較
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\benchmark-storage.ps1 -SourceRoot '比較対象の場所'
-# 複数の件数を指定するときは、PowerShell式として配列を渡す
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& './tests/benchmark-load.ps1' -Counts 1000,10000,100000"
-```
-
-読込計測は本番の`ReloadAppSettings`を使い、毎回、読み込んだ弾幕・配信者・共通設定・キーを元の合成データと照合します。不一致なら、その件数のCSVを出力せず失敗します。接続・ステートメントとOSのファイルキャッシュを再利用する計測で、初回起動の時間ではありません。以前の画面計測に含まれていた`load`を移したものですが、GUI・キー登録の有無と結果照合による計測外の処理が異なるため、過去の数値と同条件とは扱いません。
-
-画面計測の`cold_initialize`は、空DBの初期化と画面構築を1回測った値で、プロセス起動時間を含みません。パレットの描画は先頭500件、検索は全データが対象です。`management`は管理画面を表示した状態で一覧の全件更新を測り、行数も確認します。管理画面の初回構築とDB保存は含みません。[改善時の計測記録](complexity-results.md)には、比較条件・結果・判断を残しています。
-
-保存計画の`validate`は、既存のID・順序を持つ全弾幕の値を再検証します。DB読込時にも使う計画処理が対象で、SQL取得・読込モデルの作成・共通設定の反映を含む読み込み全体の時間ではありません。
+保存計画にはSQL・DB書込・描画を含みません。読込は接続・ステートメント・OSキャッシュを再利用し、初回起動とは異なります。UIの`cold_initialize`は空DBと画面構築の1回の値で、プロセス起動を含みません。管理一覧更新は初回構築・DB保存を含まず、パレット描画は最大500件です。条件の異なる過去値を直接比較しません。
 
 ## 確認記録
 
-実ブラウザーの自動検査、人間による表示確認、計測結果、原因未特定の失敗は[検証・計測の記録](complexity-results.md)にまとめています。過去の成功を現在のソースの検証結果として扱わず、対象の版・日時・確認範囲を照合してください。
+版・日時・条件・結果・未検証範囲を[検証・計測の記録](complexity-results.md)へ残します。過去の成功を現在のソースや別ブラウザーへ適用しません。

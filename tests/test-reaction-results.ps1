@@ -22,7 +22,7 @@ for point in ["release","render","release-finished","render-finished"] {
         else if scenario="countdown"
             ReactionCountdown()
         else if scenario="quick"
-            QuickReaction()
+            QuickReaction(ActiveReactionJob)
         else
             RunReactionSendLoop(job)
         label := point "/" scenario, finished := !!InStr(point,"finished")

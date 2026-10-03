@@ -126,6 +126,46 @@ for gate in ["editor","refresh","transfer"] {
     ActiveEditorDialog := false, PaletteRefresh.Active := false, SettingsTransferActive := false
 }
 
+; Gate changes after admission are rejected at execution, before any browser effect.
+for gate in ["editor","refresh","transfer"] {
+    ResetQueue("")
+    Critical("On")
+    try {
+        Assert(EnqueueConfiguredShortcut("shared1",123) && EnqueueConfiguredShortcut("shared2",123),"commands admitted before gate: " gate)
+        if gate="editor"
+            ActiveEditorDialog := {Label:"fixture"}
+        if gate="refresh"
+            ManagementRefresh.Active := true
+        if gate="transfer"
+            SettingsTransferActive := true
+        DrainShortcutQueue()
+        Assert(!BrowserCalls.Length && !Sent.Length && !ShortcutCommands.Length && !ShortcutSession,
+            "new gate discards admitted queue before effects: " gate)
+    } finally {
+        ActiveEditorDialog := false, ManagementRefresh.Active := false, SettingsTransferActive := false
+        Critical("Off")
+    }
+}
+ResetQueue("")
+Critical("On")
+try {
+    ActiveEditorDialog := {Label:"fixture"}
+    Assert(EnqueueConfiguredShortcut("palette",123) && !EnqueueConfiguredShortcut("shared1",123),
+        "only palette is admitted while an editor owns the window")
+    CancelShortcutQueue()
+    ActiveEditorDialog := false
+    ActiveReactionJob := CreateReactionJob({Window:123,Video:"abcdefghijk"})
+    Assert(EnqueueConfiguredShortcut("palette",123) && EnqueueConfiguredShortcut("shared1",123),
+        "active reaction accepts palette and input in order")
+    DrainShortcutQueue()
+    Assert(ShortcutCommands.Length=2 && !BrowserCalls.Length && !Sent.Length,
+        "active reaction defers the entire queue without dropping admitted commands")
+    HandleConfiguredShortcut("stop")
+} finally {
+    ActiveEditorDialog := false
+    Critical("Off")
+}
+
 for selectionChange in ["profile","auto"] {
     ResetQueue("")
     Critical("On")

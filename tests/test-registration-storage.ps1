@@ -34,6 +34,7 @@ function Invoke-FixtureRequest($Request) {
 '@
 Write-TestWorker -Runtime $release -Definitions $mock
 $tests = @'
+Assert(IsBrowser(0) && ReadBrowserProcessName(0)=="chrome.exe" && !NativeIsBrowser(0),"synthetic zero identity precedes the native empty-window guard")
 global RegistrationSyncFault := "", CancelOnCapture := true
 db := OpenSettingsRepository(SettingsDatabasePath).Db
 tokens := "["
@@ -253,7 +254,7 @@ CommitCapturedReactionRegistration(hwnd,reply) {
 '@
 Invoke-AppTest -Runtime $release -Body $tests -Setup @'
 RuntimePorts.WorkerScript := A_ScriptDir "\src\browser\fixture_worker.ps1"
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=0
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=0) ? "chrome.exe" : ""
 RuntimePorts.Foreground := (hwnd) => hwnd=0
 RuntimePorts.WorkerRequest := FixtureWorkerRequest
 '@

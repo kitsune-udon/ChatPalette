@@ -187,7 +187,7 @@ FixtureResolveChannel(hwnd) {
 }
 '@
 Invoke-AppTest -Runtime $release -Body $tests -Setup @'
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
 RuntimePorts.ResolveChannel := FixtureResolveChannel
 '@
 
@@ -198,7 +198,7 @@ BuildManagement()
 global NavigationRequests := 0, NavigationRestarts := 0, NavigationFailure := false
 browser := Gui(,"isolated page operation target")
 browser.AddEdit("w240","page operation fixture")
-RuntimePorts.BrowserIdentity := (hwnd) => hwnd=browser.Hwnd
+RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=browser.Hwnd) ? "chrome.exe" : ""
 RuntimePorts.ResolveChannel := NavigationResolve
 RuntimePorts.Restart := NavigationRestart
 AutoMode := true

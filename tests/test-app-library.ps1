@@ -84,7 +84,7 @@ Invoke-AppFixture -Body @'
         {Id:"unlinked",Name:"same",Channel:"",Items:[]}],SharedDanmakuItems:[]},"channel ownership fixture")
     global CurrentChannel := "/channel/Case"
     RuntimePorts.ResolveChannel := (*) => {State:"ok",Channel:CurrentChannel,Author:"fixture",Video:"abcdefghijk"}
-    RuntimePorts.BrowserIdentity := (hwnd) => hwnd=123
+    RuntimePorts.BrowserProcessName := (hwnd) => (hwnd=123) ? "chrome.exe" : ""
     TargetBrowserHwnd := 123, AutoMode := true
     Assert(SelectProfileFromBrowser(123) && InputProfileId == "channel-a" && GetPaletteInputProfile()=FindProfileById(Profiles,"channel-a"),"automatic selection matches the exact channel")
     CurrentChannel := "/channel/case"

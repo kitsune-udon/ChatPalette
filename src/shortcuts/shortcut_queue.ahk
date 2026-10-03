@@ -3,13 +3,18 @@ InitShortcutQueue() {
     global ShortcutCommands := [], ShortcutSession := 0, ActiveShortcutCommand := 0, ShortcutDraining := false
 }
 
+; Rejection is shared; busy work is admitted now and deferred only by the drainer.
+ShortcutQueueRejected(action, state, transferActive) {
+    return transferActive || state.Refreshing || (action != "palette" && state.EditorLabel != "")
+}
+
 EnqueueConfiguredShortcut(action, hwnd := 0) {
     global ShortcutSession
     hwnd := hwnd ? hwnd : WinExist("A")
     if !IsTargetForeground(hwnd) || (action != "palette" && !IsBrowser(hwnd))
         return false
     state := CurrentOperationState()
-    if SettingsTransferActive || state.Refreshing || (action != "palette" && state.EditorLabel != "") {
+    if ShortcutQueueRejected(action,state,SettingsTransferActive) {
         ShortcutBlocked(action = "reaction" ? "reaction" : "input")
         return false
     }
@@ -80,7 +85,7 @@ DrainShortcutQueue() {
                 if !ShortcutCommands.Length
                     break
                 state := CurrentOperationState()
-                if SettingsTransferActive || state.Refreshing || (ShortcutCommands[1].Action != "palette" && state.EditorLabel != "") {
+                if ShortcutQueueRejected(ShortcutCommands[1].Action,state,SettingsTransferActive) {
                     CancelShortcutQueue(ShortcutCommands[1].Session)
                     return
                 }

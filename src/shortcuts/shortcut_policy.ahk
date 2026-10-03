@@ -33,44 +33,6 @@ DefaultShortcutKeys() {
         keys[definition.Id] := definition.Default
     return keys
 }
-; Only validated v4/v1 maps use this conversion. Custom assignments never change.
-UpgradeLegacyShortcutKeys(legacy) {
-    if legacy.Has("chat_send")
-        throw Error("旧形式のキー設定に不明な操作があります。")
-    keys := legacy.Clone(), keys["chat_send"] := ""
-    ValidateShortcutMap(keys)
-    oldDefaults := Map("chat_clear","^!c","reactions_show","^!e","reaction","^!r")
-    moved := Map(), defaults := DefaultShortcutKeys()
-    for action, key in oldDefaults {
-        if CanonicalShortcutKey(keys[action]) = key {
-            moved[action] := keys[action]
-            keys[action] := defaults[action]
-        }
-    }
-    ; Reverting one blocked move can block another; the valid old map bounds the loop.
-    loop {
-        reverted := false
-        for action, original in moved {
-            if CanonicalShortcutKey(keys[action]) = CanonicalShortcutKey(original)
-                continue
-            for other, key in keys {
-                if other != action && key != "" && CanonicalShortcutKey(key) = CanonicalShortcutKey(keys[action]) {
-                    keys[action] := original, reverted := true
-                    break
-                }
-            }
-        }
-        if !reverted
-            break
-    }
-    available := true
-    for action, key in keys
-        if CanonicalShortcutKey(key) = CanonicalShortcutKey(defaults["chat_send"])
-            available := false
-    keys["chat_send"] := available ? defaults["chat_send"] : ""
-    ValidateShortcutMap(keys)
-    return keys
-}
 ValidShortcutKey(key) {
     return RegExMatch(key,"^[!^+]*(?:[A-Za-z0-9]|[Ff](?:[1-9]|1[0-2]))$")
         && InStr(key,"^") && (InStr(key,"!") || InStr(key,"+"))
