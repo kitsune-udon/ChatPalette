@@ -42,7 +42,7 @@ Loop 5
 tokens .= "]"
 payload := '{"browser":"fixture","tokens":' tokens '}'
 SaveReactionRegistration(payload)
-Assert(db.Scalar("PRAGMA user_version")="4","schema version")
+Assert(db.Scalar("PRAGMA user_version")="5","schema version")
 snapshot := LoadReactionRegistrationSnapshot()
 Assert(db.Scalar("SELECT COUNT(*) FROM reaction_registrations")="1","saved registration")
 Assert(db.Scalar("SELECT COUNT(*) FROM reaction_registrations WHERE json_type(payload,'$.browser') IS NOT NULL")=0,"browser identity is stored only in its column")

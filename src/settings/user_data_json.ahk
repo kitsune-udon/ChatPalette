@@ -1,6 +1,6 @@
 ﻿; Versioned UTF-8 exchange documents, independent of the internal SQLite schema.
 class UserDataJson {
-    static Version := 1
+    static Version := 2
     static MaxBytes := 128*1024*1024
 }
 ReadUserData(path) {
@@ -30,16 +30,19 @@ ReadUserData(path) {
             throw Error("JSONに重複した項目があります。")
         root := ReadUserDataObject(db,json,Map("format","text","version","integer","profiles","array",
             "sharedItems","array","preferences","object","reactionRegistrations","array"))
-        if !(root["format"] == "ChatPalette") || root["version"] != UserDataJson.Version
+        if !(root["format"] == "ChatPalette") || (root["version"] != 1 && root["version"] != UserDataJson.Version)
             throw Error("未対応のJSON形式です。対応するChatPaletteで開いてください。")
         prefs := ReadUserDataObject(db,root["preferences"],Map("inputProfileId","text","autoMode","integer",
             "reactionKind","integer","reactionCount","integer","reactionIntervalMs","integer","shortcutKeys","object"))
         keyShape := Map()
         for action,key in DefaultShortcutKeys()
-            keyShape[action] := "text"
+            if root["version"] != 1 || action != "chat_send"
+                keyShape[action] := "text"
         state := {Profiles:[],InputProfileId:prefs["inputProfileId"],AutoMode:prefs["autoMode"],
             DefaultReactionKind:prefs["reactionKind"],DefaultReactionCount:prefs["reactionCount"],
             DefaultReactionIntervalMs:prefs["reactionIntervalMs"],ShortcutKeys:ReadUserDataObject(db,prefs["shortcutKeys"],keyShape)}
+        if root["version"] = 1
+            state.ShortcutKeys := UpgradeLegacyShortcutKeys(state.ShortcutKeys)
         total := 0
         state.SharedDanmakuItems := ReadUserDataItems(db,root["sharedItems"],&total)
         if db.Scalar("SELECT json_array_length(?)",root["profiles"])>SettingsLimits.Profiles

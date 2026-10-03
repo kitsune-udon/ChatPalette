@@ -5,12 +5,12 @@
         db.Run("INSERT INTO shortcut_bindings VALUES(?,?)",action,key)
 }
 ; Assemble the complete key map once; no storage source may shadow another.
-ReadShortcutKeys(db) {
+ReadShortcutKeys(db, version := 5) {
     keys := Map()
     for row in db.Rows("SELECT action,key FROM shortcut_bindings") {
         if keys.Has(row[1])
             throw Error("キー設定の操作が重複しています。")
         keys[row[1]] := row[2]
     }
-    return keys
+    return version = 4 ? UpgradeLegacyShortcutKeys(keys) : keys
 }

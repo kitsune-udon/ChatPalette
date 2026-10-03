@@ -97,6 +97,5 @@ ResultRequest(hwnd,mode,video,extra) {
 '@
 Invoke-AppTest -Runtime $resultRuntime -Body $resultTests -Setup @'
 RuntimePorts.Foreground := (hwnd) => ResultCase!="countdown" && ResultCase!="quick"
-RuntimePorts.ShortcutRelease := (key) => true
 RuntimePorts.BrowserRequest := ResultRequest
 '@

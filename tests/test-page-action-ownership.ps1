@@ -1,28 +1,25 @@
 ﻿# Test-Session: Headless
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
-# Page actions retain the same exclusion from key release through result publication.
+# Page actions retain the same exclusion from request through result publication.
 Invoke-AppTest -Runtime (New-TestRuntime) -Body @'
     global OwnerScenario := "", OwnerProbes := [], OwnerRequests := 0, OwnerClears := 0
     global OwnerThrowClock := false, OwnerProbePublication := false, OwnerReplacement := 0, OwnerReplacementResult := 0
     RuntimePorts.Foreground := (hwnd) => hwnd=123
-    RuntimePorts.ShortcutRelease := OwnerRelease
     RuntimePorts.BrowserRequest := OwnerRequest
     RuntimePorts.ClearChat := OwnerClear
     RuntimePorts.Clock := OwnerClock
     for action in ["chat_clear","chat_focus","reactions_show"] {
-        for scenario in ["success","release_failed","request_failed","notification_failed"] {
+        for scenario in ["success","request_failed","notification_failed"] {
             OwnerScenario := scenario, OwnerProbes := [], OwnerRequests := 0, OwnerClears := 0, OwnerThrowClock := false, OwnerProbePublication := false
             escaped := false, result := false
-            try result := RunPageAction(action,123,GetShortcutKey(action))
+            try result := RunPageAction(action,123)
             catch
                 escaped := true
-            Assert(OwnerProbes.Length>=1,"page lifecycle reaches the release boundary: " action "/" scenario)
+            Assert(OwnerProbes.Length>=1,"page lifecycle reaches the request boundary: " action "/" scenario)
             for probe in OwnerProbes {
                 Assert(!probe.Input && !probe.Edit && !probe.Reaction && !probe.Preferences,"all conflicting operations remain blocked at " probe.Boundary ": " action "/" scenario)
                 Assert(!probe.Nested && probe.RequestsBefore=probe.RequestsAfter,"another page action never reenters at " probe.Boundary ": " action "/" scenario)
-                if probe.Boundary="result publication"
-                    Assert(!probe.LateQueue,"result publication cannot accept an input that will never be drained: " action "/" scenario)
             }
             Assert(OperationAllowed("input") && OperationAllowed("edit") && OperationAllowed("reaction") && OperationAllowed("preferences"),"success or failure releases page ownership: " action "/" scenario)
             Assert(escaped=(scenario="notification_failed") && result=(scenario="success"),"page completion preserves success and failure meaning: " action "/" scenario)
@@ -32,7 +29,7 @@ Invoke-AppTest -Runtime (New-TestRuntime) -Body @'
     for action in ["chat_clear","chat_focus","reactions_show"] {
         for scenario in ["replacement","replacement_failed"] {
             OwnerScenario := scenario, OwnerProbes := [], OwnerRequests := 0, OwnerClears := 0, OwnerProbePublication := false
-            Assert(!RunPageAction(action,123,GetShortcutKey(action)),"superseded page action cannot report success: " action "/" scenario)
+            Assert(!RunPageAction(action,123),"superseded page action cannot report success: " action "/" scenario)
             Assert(ActivePageAction=OwnerReplacement && !OperationAllowed("input"),"old cleanup preserves replacement ownership: " action "/" scenario)
             Assert(LastBrowserOperation=OwnerReplacementResult && PaletteHint.Text=="replacement pending","old result cannot overwrite replacement diagnostics or hint: " action "/" scenario)
             Assert(OwnerRequests=1 && !OwnerClears,"superseded action cannot verify, clear or send again: " action "/" scenario)
@@ -50,22 +47,14 @@ OwnerProbe(boundary) {
     ; Avoid recursion while recording the pre-fix policy failure.
     probe.Nested := probe.Input ? true : RunPageAction("reactions_show",123)
     probe.RequestsAfter := OwnerRequests
-    if boundary="result publication"
-        probe.LateQueue := QueueFocusedDanmaku("shared",1,123)
     OwnerProbes.Push(probe)
-}
-OwnerRelease(keys) {
-    global OwnerProbePublication
-    OwnerProbe("key release")
-    OwnerProbePublication := OwnerScenario="release_failed"
-    return OwnerScenario!="release_failed"
 }
 OwnerRequest(hwnd,mode,video,extra) {
     global OwnerRequests, OwnerThrowClock, OwnerProbePublication, ActivePageAction, OwnerReplacement, OwnerReplacementResult
     OwnerRequests++
     OwnerProbe(mode)
     if OwnerScenario="replacement" || OwnerScenario="replacement_failed" {
-        OwnerReplacement := {Window:456,Pending:0,AcceptsPending:false}
+        OwnerReplacement := {Window:456}
         ActivePageAction := OwnerReplacement
         RecordBrowserOperation({Mode:"fixture",State:"pending",Duration:0})
         OwnerReplacementResult := LastBrowserOperation

@@ -146,7 +146,7 @@ RejectImportedKey(action,key,enabled) {
 }
 '@
 $externalJson = [IO.File]::ReadAllText((Join-Path $jsonRuntime '日本語 export.json')) | ConvertFrom-Json
-Assert ($externalJson.format -ceq 'ChatPalette' -and $externalJson.version -eq 1) 'External JSON parser recognizes format/version'
+Assert ($externalJson.format -ceq 'ChatPalette' -and $externalJson.version -eq 2) 'External JSON parser recognizes format/version'
 Assert ($externalJson.profiles[0].items.Count -eq 2 -and $externalJson.sharedItems[0].text -eq '👏👏👏👏👏👏') 'External JSON parser reads ordered items and Unicode'
 Write-Output 'PASS: 2 external JSON interoperability checks'
 
@@ -213,7 +213,7 @@ Invoke-AppFixture -TimeoutMs 60000 -Body @'
     json := FileRead(path,"UTF-8"), before := ReadStoredUserData(SettingsDatabasePath)
     invalids := ["{}", "[]", "null", json " extra",
         db.Scalar("SELECT json_set(?,'$.format','other')",json),
-        db.Scalar("SELECT json_set(?,'$.version',2)",json),
+        db.Scalar("SELECT json_set(?,'$.version',99)",json),
         db.Scalar("SELECT json_set(?,'$.version','1')",json),
         db.Scalar("SELECT json_set(?,'$.preferences.autoMode',1.0)",json),
         db.Scalar("SELECT json_set(?,'$.preferences.autoMode',json('true'))",json),

@@ -9,6 +9,7 @@ InitializeApplication(showRecoveryDialogs := true) {
     global SettingsDatabasePath := AppDataDirectory "\settings.db"
     global TargetBrowserHwnd := 0, PaletteWindow := 0
     global IsBrowserOperationBusy := false, ActivePageAction := 0, SettingsTransferActive := false
+    InitShortcutQueue()
     global PaletteRefresh := RefreshCycle(RunScheduledPaletteSearch), ManagementRefresh := RefreshCycle(RefreshManagement)
     global DetectedChannel := {State: "unavailable", Author: "", Channel: ""}
     global ActiveEditorDialog := false

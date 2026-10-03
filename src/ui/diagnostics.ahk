@@ -10,7 +10,7 @@
             browser := "対象のウィンドウは閉じられています"
         }
     }
-    static phases := Map("idle","待機中", "queued","キーを離すのを待っています", "waiting","開始・登録待ち",
+    static phases := Map("idle","待機中", "queued","ショートカット開始待ち", "waiting","開始・登録待ち",
         "running","実行中", "stopping","停止処理中", "finished","終了")
     mode := operation.Mode
     state := operation.State

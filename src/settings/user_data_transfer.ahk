@@ -4,12 +4,12 @@ ReadStoredUserData(path) {
     try return source.Db.Transaction(() => ReadUserDataSnapshot(source),false)
     finally source.Close()
 }
-ReadUserDataSnapshot(source) {
+ReadUserDataSnapshot(source, loaded := 0) {
     if source.Db.Scalar("PRAGMA application_id") != SettingsRepository.ApplicationId
-        || source.Db.Scalar("PRAGMA user_version") != SettingsRepository.SchemaVersion
+        || (source.Db.Scalar("PRAGMA user_version") != 4 && source.Db.Scalar("PRAGMA user_version") != SettingsRepository.SchemaVersion)
         throw Error("未対応のユーザーデータです。対応するChatPaletteで開いてください。")
     source.Db.CheckIntegrity()
-    state := source.ReadState().State, db := source.Db
+    state := loaded ? loaded.State : source.ReadState().State, db := source.Db
     CheckReactionRegistrationSize(db)
     registrations := [], browsers := Map()
     for row in db.Rows("SELECT browser,json_set(payload,'$.browser',browser),json_type(payload,'$.browser') FROM reaction_registrations ORDER BY browser") {

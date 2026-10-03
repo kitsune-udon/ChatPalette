@@ -20,9 +20,10 @@ ShortcutDefinitions() {
         {Id:"shared1",Label:"共通の弾幕 1",Default:"^!3",Scope:"ブラウザー"},
         {Id:"shared2",Label:"共通の弾幕 2",Default:"^!4",Scope:"ブラウザー"},
         {Id:"chat_focus",Label:"チャット欄へフォーカス",Default:"^!f",Scope:"ブラウザー"},
-        {Id:"chat_clear",Label:"チャット欄をクリア",Default:"^!c",Scope:"ブラウザー"},
-        {Id:"reactions_show",Label:"リアクションUIを表示",Default:"^!e",Scope:"ブラウザー"},
-        {Id:"reaction",Label:"リアクションを実行",Default:"^!r",Scope:"ブラウザー"},
+        {Id:"chat_clear",Label:"チャット欄をクリア",Default:"^!w",Scope:"ブラウザー"},
+        {Id:"reactions_show",Label:"リアクションUIを表示",Default:"^!r",Scope:"ブラウザー"},
+        {Id:"reaction",Label:"リアクションを実行",Default:"^!t",Scope:"ブラウザー"},
+        {Id:"chat_send",Label:"Enterでメッセージ送信",Default:"^!e",Scope:"ブラウザー"},
         {Id:"stop",Label:"リアクションを停止",Default:"Esc",Scope:"実行・待機中"}]
     return definitions
 }
@@ -30,6 +31,44 @@ DefaultShortcutKeys() {
     keys := Map()
     for definition in ShortcutDefinitions()
         keys[definition.Id] := definition.Default
+    return keys
+}
+; Only validated v4/v1 maps use this conversion. Custom assignments never change.
+UpgradeLegacyShortcutKeys(legacy) {
+    if legacy.Has("chat_send")
+        throw Error("旧形式のキー設定に不明な操作があります。")
+    keys := legacy.Clone(), keys["chat_send"] := ""
+    ValidateShortcutMap(keys)
+    oldDefaults := Map("chat_clear","^!c","reactions_show","^!e","reaction","^!r")
+    moved := Map(), defaults := DefaultShortcutKeys()
+    for action, key in oldDefaults {
+        if CanonicalShortcutKey(keys[action]) = key {
+            moved[action] := keys[action]
+            keys[action] := defaults[action]
+        }
+    }
+    ; Reverting one blocked move can block another; the valid old map bounds the loop.
+    loop {
+        reverted := false
+        for action, original in moved {
+            if CanonicalShortcutKey(keys[action]) = CanonicalShortcutKey(original)
+                continue
+            for other, key in keys {
+                if other != action && key != "" && CanonicalShortcutKey(key) = CanonicalShortcutKey(keys[action]) {
+                    keys[action] := original, reverted := true
+                    break
+                }
+            }
+        }
+        if !reverted
+            break
+    }
+    available := true
+    for action, key in keys
+        if CanonicalShortcutKey(key) = CanonicalShortcutKey(defaults["chat_send"])
+            available := false
+    keys["chat_send"] := available ? defaults["chat_send"] : ""
+    ValidateShortcutMap(keys)
     return keys
 }
 ValidShortcutKey(key) {

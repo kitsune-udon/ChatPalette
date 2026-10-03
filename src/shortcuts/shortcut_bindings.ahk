@@ -3,7 +3,7 @@ ReactionHotkeyContext(*) {
     return IsBrowser(WinExist("A"))
 }
 StopHotkeyContext(*) {
-    return !!ActiveReactionJob
+    return !!ActiveReactionJob || !!ActiveShortcutCommand || !!ShortcutCommands.Length
 }
 GetShortcutKey(action) {
     return ShortcutKeys[action]
@@ -23,6 +23,8 @@ NativeSetShortcutHotkey(action,key,enabled := true) {
     else
         HotIf(action = "stop" ? StopHotkeyContext : ReactionHotkeyContext)
     try {
+        ; Commands run once on release; cancellation remains immediate on press.
+        key .= action = "stop" ? "" : " Up"
         if enabled
             Hotkey(key,HandleConfiguredShortcut.Bind(action),"T1 On")
         else
@@ -75,15 +77,9 @@ CommitShortcutBindings(previous,next,commit := 0) {
     }
 }
 HandleConfiguredShortcut(action,*) {
-    if action = "palette"
-        return ShowPalette()
     if action = "stop"
         return CancelReaction()
-    if action = "reaction"
-        return QueueQuickReaction()
-    if SubStr(action,1,7) = "profile" || SubStr(action,1,6) = "shared"
-        return HandleDanmakuShortcut(SubStr(action,1,-1),Integer(SubStr(action,-1)))
-    return HandlePageShortcut(action)
+    return EnqueueConfiguredShortcut(action)
 }
 SaveShortcutMap(keys) {
     previousCritical := A_IsCritical

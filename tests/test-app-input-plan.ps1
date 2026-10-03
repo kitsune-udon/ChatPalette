@@ -239,14 +239,13 @@ Invoke-AppFixture -Body @'
     AutoMode := false
     RuntimePorts.BrowserRequest := IdentityRequest
     RuntimePorts.Foreground := (hwnd) => InputForeground && hwnd=123
-    RuntimePorts.ShortcutRelease := (*) => true
     RuntimePorts.Text := (text) => InputSent.Push(text)
     fixture := {Profiles:[{Id:"delivery-profile",Name:"profile",Channel:"",Items:[
         {Id:"delivery-profile-first",Name:"first",Text:"Selected draft",Slot:1},
         {Id:"delivery-profile-other",Name:"other",Text:"Other draft",Slot:2}]}],SharedDanmakuItems:[
         {Id:"delivery-shared-first",Name:"first",Text:"Selected draft",Slot:1},
         {Id:"delivery-shared-other",Name:"other",Text:"Other draft",Slot:2}]}
-    for route in ["shortcut","focused"] {
+    for route in ["shortcut","queued"] {
         for scope in ["shared","profile"] {
             InputScope := scope
             for change in ["text","delete","replace","move","reorder","rename","slot","slot_before_plan","validation_foreground"] {
@@ -257,8 +256,13 @@ Invoke-AppFixture -Body @'
                 InputSelected := GetLibraryItems(fixture,profileId)[1]
                 if route="shortcut"
                     RequestShortcutInput(scope,1,123)
-                else
-                    RunPageAction("chat_focus",123)
+                else {
+                    Critical("On")
+                    try {
+                        EnqueueConfiguredShortcut("chat_focus",123)
+                        DrainShortcutQueue()
+                    } finally Critical("Off")
+                }
                 succeeds := change="reorder" || change="rename" || change="slot" || change="slot_before_plan"
                 label := route "/" scope "/" change
                 Assert(InputChecks=1,label ": verifies the browser exactly once")
@@ -273,11 +277,11 @@ Invoke-AppFixture -Body @'
 '@ -Helpers @'
 IdentityRequest(hwnd,mode,video,extra) {
     if mode="chat_focus" {
-        QueueFocusedDanmaku(InputScope,1,hwnd)
+        EnqueueConfiguredShortcut(InputScope "1",hwnd)
         return {State:"focused",Video:"abcdefghijk",Detail:"identity-proof"}
     }
     if mode="browser_context" {
-        if InputChange="slot_before_plan" {
+        if InputChange="slot_before_plan" && (!ActiveShortcutCommand || ActiveShortcutCommand.HasOwnProp("Scope")) {
             profileId := InputScope="shared" ? "" : "delivery-profile"
             other := GetLibraryItems({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},profileId)[2]
             SaveShortcutItemAssignments(profileId,other.Id,"")
@@ -326,16 +330,20 @@ IdentityVerify(hwnd,video) {
 Invoke-AppFixture -Body @'
     global InputGate := "", GateOwner := 0, GateSent := [], GateChecks := 0
     RuntimePorts.BrowserRequest := GateRequest
-    RuntimePorts.ShortcutRelease := (*) => true
     RuntimePorts.Text := (text) => GateSent.Push(text)
-    for route in ["shortcut","focused"] {
+    for route in ["shortcut","queued"] {
         for gate in ["editor","reaction","page","busy"] {
             InputGate := gate, GateSent := [], GateChecks := 0, GateOwner := {Window:123,Label:"input gate fixture"}
             try {
                 if route="shortcut"
                     RequestShortcutInput("shared",1,123)
-                else
-                    RunPageAction("chat_focus",123)
+                else {
+                    Critical("On")
+                    try {
+                        EnqueueConfiguredShortcut("chat_focus",123)
+                        DrainShortcutQueue()
+                    } finally Critical("Off")
+                }
                 label := route "/" gate
                 Assert(GateChecks=1,label ": target verification actually reaches the competing operation")
                 Assert(!GateSent.Length,label ": active operation prevents the planned send")
@@ -351,7 +359,7 @@ Invoke-AppFixture -Body @'
 GateRequest(hwnd,mode,video,extra) {
     global GateChecks, ActiveEditorDialog, ActiveReactionJob, ActivePageAction, IsBrowserOperationBusy
     if mode="chat_focus" {
-        QueueFocusedDanmaku("shared",1,hwnd)
+        EnqueueConfiguredShortcut("shared1",hwnd)
         return {State:"focused",Video:"abcdefghijk",Detail:"gate-proof"}
     }
     if mode="browser_context"

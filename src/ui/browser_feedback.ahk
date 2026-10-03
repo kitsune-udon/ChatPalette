@@ -2,14 +2,14 @@
 BrowserOperationLabel(mode) {
     static modes := Map("なし","まだ実行していません", "resolve","配信者の自動判別",
         "verify_input","チャット欄・コメント欄の確認", "browser_context","現在の動画の確認",
-        "chat_clear","チャット欄のクリア", "chat_focus","チャット欄への移動", "verify_chat","チャット欄の確認", "reactions_show","リアクションUIの表示操作",
+        "chat_clear","チャット欄のクリア", "chat_send","Enterでメッセージ送信", "chat_focus","チャット欄への移動", "verify_chat","チャット欄の確認", "reactions_show","リアクションUIの表示操作",
         "reaction_capture","リアクションボタンの登録", "reaction_check","リアクションの検出確認",
         "reaction_send","リアクションボタンの操作")
     return modes.Get(mode,"不明な操作：" mode)
 }
 BrowserResultInfo(state) {
     static states := Map("inserted","保留した弾幕を入力しました", "input_cancelled","対象変更・期限切れなどにより弾幕入力を中止しました", "未実行","まだ実行していません", "ok","確認できました", "registered","登録できました",
-        "cleared","クリアキーを送りました（内容は未取得）", "focused","チャット欄へ移動しました", "hovered","表示用UIへマウスを移動しました（表示は未確認）",
+        "cleared","クリアキーを送りました（内容は未取得）", "enter_sent","Enterキーを送りました（送信受理は未確認）", "focused","チャット欄へ移動しました", "hovered","表示用UIへマウスを移動しました（表示は未確認）",
         "configured","設定済み（認識は未確認）", "ready","操作対象を確認できました", "operated","ボタンを操作しました（受理は未確認）",
         "chat_missing","入力可能なチャット欄が見つかりません", "chat_ambiguous","チャット入力欄が複数あります",
         "focus_failed","チャット欄へのフォーカス移動を確認できませんでした",

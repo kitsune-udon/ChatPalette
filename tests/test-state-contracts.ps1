@@ -185,7 +185,6 @@ IsBrowserOperationBusy := false
 CancelReaction()
 Assert(currentJob.Phase="finished" && currentJob.Cancelled && !ActiveReactionJob,"cancel cleanup finishes once")
 Assert(!SetReactionJobPhase(currentJob,"running"),"finished cancellation cannot resume")
-RuntimePorts.ShortcutRelease := (keys) => true
 RuntimePorts.Foreground := (hwnd) => true
 RuntimePorts.BrowserRequest := CancelQueuedContext
 queued := CreateReactionJob({Mode:"queued",Window:123})

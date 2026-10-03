@@ -11,10 +11,10 @@ class RuntimePorts {
     static Foreground := 0
     static Text := 0
     static ClearChat := 0
+    static SendEnter := 0
     static Clock := 0
     static TimingPrecision := 0
     static ShortcutKey := 0
-    static ShortcutRelease := 0
 }
 IsTargetForeground(hwnd) {
     return RuntimePorts.Foreground ? RuntimePorts.Foreground.Call(hwnd) : !!WinActive("ahk_id " hwnd)

@@ -213,7 +213,7 @@ try {
             TargetBrowserHwnd := browser.Hwnd
             PaletteChoice.Choose(2), PaletteCount.Choose(3), PaletteInterval.Choose(2)
             calls := NavigationRequests, restarts := NavigationRestarts
-            owner := phase="ipc" ? 0 : {Window:browser.Hwnd,Pending:0,AcceptsPending:phase="focus_wait"}
+            owner := phase="ipc" ? 0 : {Window:browser.Hwnd}
             ActivePageAction := owner, IsBrowserOperationBusy := phase="ipc"
             label := entry.Name "/" phase
             AssertNavigationWindows("before " label)

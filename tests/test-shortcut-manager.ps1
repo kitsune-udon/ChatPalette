@@ -11,7 +11,7 @@ Invoke-AppFixture -Body @'
     SaveShortcutItemAssignments("",secondId,firstId)
     Assert(SharedDanmakuItems[shared.Index].Slot=2 && SharedDanmakuItems[-1].Slot=1,"item slot swap retains identity")
     panel := ShowShortcutManager("chat_focus")
-    Assert(panel.List.GetCount()=10 && ActiveEditorDialog,"one screen contains every action")
+    Assert(panel.List.GetCount()=11 && ActiveEditorDialog,"one screen contains every action")
     Assert(!panel.SaveButton.Enabled && !panel.ItemsSaveButton.Enabled,"unchanged drafts disable both saves")
     priorCalls := BindingCalls.Length, priorFocusKey := GetShortcutKey("chat_focus")
     panel.Stage.Call("!^F")

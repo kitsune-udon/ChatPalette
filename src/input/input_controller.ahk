@@ -21,11 +21,15 @@ ResolveDanmakuInput(request) {
     context := ResolveInputContext(request.ProfileId = "" ? "shared" : "profile",request.Window)
     return context ? PlanDanmakuInput(request,context) : 0
 }
-ResolveShortcutInput(scope, slot, hwnd) {
+ResolveShortcutInput(scope, slot, hwnd, shortcut := 0) {
+    if shortcut && !ShortcutRequestCurrent(shortcut)
+        return 0
     context := ResolveInputContext(scope,hwnd)
     if !context
         return 0
-    return PlanShortcutInput({Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},context,slot)
+    if shortcut && !(context.Video == shortcut.Session.Video)
+        throw Error("動画が変わりました。ショートカットを押し直してください。")
+    return PlanShortcutInput(shortcut ? shortcut.Library : {Profiles:Profiles,SharedDanmakuItems:SharedDanmakuItems},context,slot)
 }
 ; Callers choose the library snapshot; assignment resolution is identical for both routes.
 PlanShortcutInput(library, context, slot) {
@@ -54,7 +58,7 @@ ValidateDanmakuInput(plan) {
     }
     throw Error("弾幕が変更されました。選び直してください。")
 }
-SendPlannedDanmaku(plan, pageAction := 0) {
+SendPlannedDanmaku(plan, shortcut := 0) {
     previousCritical := A_IsCritical
     Critical("On")
     try {
@@ -62,9 +66,8 @@ SendPlannedDanmaku(plan, pageAction := 0) {
         try ValidateDanmakuInput(plan)
         catch
             return {State:"input_cancelled"}
-        canSend := pageAction
-            ? (pageAction.Window = plan.Window && CanContinueFocusedDanmaku(pageAction))
-            : (OperationAllowed("input") && IsTargetForeground(plan.Window))
+        canSend := OperationAllowed("input") && IsTargetForeground(plan.Window)
+            && (!shortcut || (shortcut.Window = plan.Window && ShortcutRequestCurrent(shortcut)))
         if !canSend
             return {State:"input_cancelled"}
         return SendInputText(plan.Text)
@@ -73,28 +76,29 @@ SendPlannedDanmaku(plan, pageAction := 0) {
 RequestDanmakuInput(request) {
     RunDanmakuInput(() => ResolveDanmakuInput(request),request.Origin)
 }
-RequestShortcutInput(scope, slot, hwnd) {
-    RunDanmakuInput(() => ResolveShortcutInput(scope,slot,hwnd),"shortcut")
+RequestShortcutInput(scope, slot, hwnd, shortcut := 0) {
+    return RunDanmakuInput(() => ResolveShortcutInput(scope,slot,hwnd,shortcut),"shortcut",shortcut)
 }
-RunDanmakuInput(resolve, origin) {
+RunDanmakuInput(resolve, origin, shortcut := 0) {
     if !OperationAllowed("input")
-        return
+        return {State:"input_cancelled"}
     try {
         plan := resolve.Call()
         if !plan || !OperationAllowed("input")
-            return
+            return {State:"input_cancelled"}
         if origin = "palette"
             PaletteWindow.Hide()
-        result := DeliverDanmakuInput(plan,origin = "palette")
+        result := DeliverDanmakuInput(plan,origin = "palette",shortcut)
     } catch as failure {
         PaletteHint.Text := failure.Message
         ShowStatusTip(failure.Message,3000)
-        return
+        return {State:"input_cancelled"}
     }
     if result.State != "inserted"
         ShowInputFailure(result.State)
+    return result
 }
-DeliverDanmakuInput(plan, activate := false) {
+DeliverDanmakuInput(plan, activate := false, shortcut := 0) {
     hwnd := plan.Window
     if activate {
         try WinActivate("ahk_id " hwnd)
@@ -107,8 +111,13 @@ DeliverDanmakuInput(plan, activate := false) {
     }
     if !IsTargetForeground(hwnd)
         return {State:"input_cancelled"}
-    verified := VerifyInputTarget(hwnd, plan.Video)
+    if shortcut && shortcut.Session.Focus {
+        focus := shortcut.Session.Focus
+        shortcut.Session.Focus := 0
+        verified := VerifyChatFocus(hwnd,focus)
+    } else
+        verified := VerifyInputTarget(hwnd, plan.Video)
     if verified.State != "ok"
         return verified
-    return SendPlannedDanmaku(plan)
+    return SendPlannedDanmaku(plan,shortcut)
 }

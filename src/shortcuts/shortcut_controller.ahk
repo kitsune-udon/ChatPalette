@@ -9,75 +9,75 @@ ShortcutBlocked(action := "input") {
     return true
 }
 
-WaitShortcutRelease(binding) {
-    keys := [RegExReplace(binding,"[!^+]",""),"Control","Alt","Shift"]
-    return RuntimePorts.ShortcutRelease ? RuntimePorts.ShortcutRelease.Call(keys) : NativeWaitShortcutRelease(keys)
-}
-
-NativeWaitShortcutRelease(keys) {
-    for key in keys {
-        if !KeyWait(key, "T2") {
-            ShowStatusTip("キーを離してから、もう一度押してください。",2500)
-            return false
-        }
-    }
-    return true
-}
-
-
-
-
 HandleDanmakuShortcut(scope,slot) {
-    if QueueFocusedDanmaku(scope,slot,WinExist("A"))
-        return
-    if ShortcutBlocked()
-        return
-    hwnd := WinExist("A")
-    if !IsBrowser(hwnd) || !WaitShortcutRelease(GetShortcutKey(scope slot))
-        return
-    RequestShortcutInput(scope,slot,hwnd)
+    return EnqueueConfiguredShortcut(scope slot)
 }
 
 HandlePageShortcut(action) {
-    if ShortcutBlocked("input")
-        return
-    hwnd := WinExist("A")
-    if IsBrowser(hwnd)
-        RunPageAction(action,hwnd,GetShortcutKey(action))
+    return EnqueueConfiguredShortcut(action)
 }
 CanContinuePageAction(operation) {
     if ActivePageAction != operation || !IsTargetForeground(operation.Window)
+        return false
+    if operation.HasOwnProp("Shortcut") && operation.Shortcut && !ShortcutRequestCurrent(operation.Shortcut)
         return false
     state := CurrentOperationState()
     ; Exclude this owner from the shared policy, while retaining the IPC busy check.
     state.BrowserBusy := IsBrowserOperationBusy
     return EvaluateOperation("input",state).Allowed
 }
-RunPageAction(action, hwnd, releaseBinding := "") {
+RunPageAction(action, hwnd, shortcut := 0) {
     global ActivePageAction
     if !OperationAllowed("input") || !IsTargetForeground(hwnd)
         return false
-    if action != "chat_focus" && action != "chat_clear" && action != "reactions_show"
+    if action != "chat_focus" && action != "chat_clear" && action != "reactions_show" && action != "chat_send"
         throw Error("不明なページ操作です。")
-    started := AppClockMs(), stage := action = "reactions_show" ? "表示操作" : "フォーカス"
+    started := AppClockMs(), stage := action = "reactions_show" ? "表示操作" : action = "chat_send" ? "送信前の確認" : "フォーカス"
     result := {State:"unknown"}
-    operation := {Window:hwnd,Pending:0,AcceptsPending:action = "chat_focus"}
+    operation := {Window:hwnd,Video:"",Shortcut:shortcut}
     ActivePageAction := operation
     try {
-        if releaseBinding != "" && !WaitShortcutRelease(releaseBinding) {
-            result := {State:"cancelled"}
-            return false
-        }
         if !CanContinuePageAction(operation) {
             result := {State:"cancelled"}
             return false
         }
-        result := RequestBrowserOperation(hwnd,action = "chat_clear" ? "chat_focus" : action)
-        ; Close acceptance before deciding whether to drain; keep the page owner until publication.
-        operation.AcceptsPending := false
+        if action = "chat_send" {
+            if shortcut && shortcut.Session.Focus {
+                focus := shortcut.Session.Focus
+                shortcut.Session.Focus := 0
+                result := VerifyChatFocus(hwnd,focus)
+            } else
+                result := VerifyInputTarget(hwnd,shortcut ? shortcut.Session.Video : "")
+        } else
+            result := RequestBrowserOperation(hwnd,action = "chat_clear" ? "chat_focus" : action,shortcut ? shortcut.Session.Video : "")
         if !CanContinuePageAction(operation) {
             result := {State:"cancelled"}
             return false
+        }
+        operation.Video := result.HasOwnProp("Video") ? result.Video : ""
+        if shortcut && !(operation.Video == shortcut.Session.Video) {
+            result := {State:"changed"}
+            return false
+        }
+        if action = "chat_send" && result.State = "ok" {
+            if !result.HasOwnProp("Detail") || result.Detail != "chat" {
+                result := {State:"wrong_input"}
+                return false
+            }
+            previousCritical := A_IsCritical
+            Critical("On")
+            try {
+                if !CanContinuePageAction(operation) {
+                    result := {State:"cancelled"}
+                    return false
+                }
+                stage := "Enterキー送信", result := {State:"unknown"}
+                if RuntimePorts.SendEnter
+                    RuntimePorts.SendEnter.Call()
+                else
+                    Send("{Enter}")
+                result := {State:"enter_sent"}
+            } finally Critical(previousCritical)
         }
         if action = "chat_clear" && result.State = "focused" {
             stage := "クリア前の確認"
@@ -100,14 +100,9 @@ RunPageAction(action, hwnd, releaseBinding := "") {
                 } finally Critical(previousCritical)
             }
         }
-        if operation.Pending && result.State = "focused" {
-            stage := "保留した弾幕の入力"
-            result := CompleteFocusedDanmaku(operation,result)
-        }
     } catch {
         result := {State:"unknown"}
     } finally {
-        operation.AcceptsPending := false
         ; Result publication belongs to this operation; cleanup also runs if rendering fails.
         if ActivePageAction = operation {
             try {
@@ -122,7 +117,9 @@ RunPageAction(action, hwnd, releaseBinding := "") {
             }
         }
     }
-    return result.State = "inserted" || result.State = "focused" || result.State = "cleared" || result.State = "hovered"
+    if shortcut && ShortcutRequestCurrent(shortcut)
+        shortcut.Result := result
+    return result.State = "focused" || result.State = "cleared" || result.State = "hovered" || result.State = "enter_sent"
 }
 
 EffectiveShortcutSummary() {

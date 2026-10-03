@@ -17,7 +17,7 @@ job := CreateReactionJob({Mode:"queued"})
 ActiveReactionJob := job
 SetReactionStatus("phase snapshot fixture")
 info := ReadDiagnosticSnapshot()
-Assert(info.PhaseCode="queued" && info.Phase="キーを離すのを待っています","diagnostics show the active queued job")
+Assert(info.PhaseCode="queued" && info.Phase="ショートカット開始待ち","diagnostics show the active queued job")
 SetReactionJobPhase(job,"waiting")
 info := ReadDiagnosticSnapshot()
 Assert(info.PhaseCode="waiting" && info.Phase="開始・登録待ち","diagnostics read waiting from the job before another message is published")

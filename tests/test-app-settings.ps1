@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 Invoke-AppFixture -Body @'
     preferences := CreatePreferences()
     Assert(!preferences.HasOwnProp("Profiles") && !preferences.HasOwnProp("SharedDanmakuItems"),"preferences carry no library payload")
-    Assert(preferences.ShortcutKeys.Count=10 && !preferences.HasOwnProp("ReactionShortcut"),"all shortcuts have one state owner")
+    Assert(preferences.ShortcutKeys.Count=11 && !preferences.HasOwnProp("ReactionShortcut"),"all shortcuts have one state owner")
     modeBefore := AutoMode, modeChange := CreatePreferences()
     modeChange.AutoMode := !modeBefore
     ApplyPreferences(modeChange)

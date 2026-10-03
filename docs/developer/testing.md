@@ -106,7 +106,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | SQLite基盤・保存 | [test-sqlite.ps1](../../tests/test-sqlite.ps1) | 差分保存・トランザクション・比較基準の確定、競合と故障時の保全、JSONバックアップのロック拒否と再試行、終了後のDBコピーからの復旧。Unicode・長文・複数配信者の保存往復は独立した合成データで確認し、アプリ初期化を要しない |
 | 登録保存・同期 | [test-registration-storage.ps1](../../tests/test-registration-storage.ps1) | 実DBとパイプ通信を使い、登録の検証・保存・同期を画面操作不要で確認。中止・同期失敗時のデータと理由を保全し、再同期まで操作を拒否 |
 | 登録状態の表示 | [test-registration-display.ps1](../../tests/test-registration-display.ps1) | DBを直接読み、通信・操作制限・診断更新を行わないこと。読み取り失敗と回復も非表示コントロールで確認するHeadless検査 |
-| 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面・キー解放は代替処理を使うHeadless検査 |
+| 状態と識別子 | [test-state-contracts.ps1](../../tests/test-state-contracts.ps1) | IDによる選択、保存順と計画の不変性、状態公開と割り込み、ジョブの所有。非表示コントロールを直接扱い、前面は代替処理を使うHeadless検査 |
 | 設定整合性・復旧 | [test-settings-integrity.ps1](../../tests/test-settings-integrity.ps1) | 欠損・不正な設定や上限超過の拒否、DB原本の保持、初期化前の退避・付随ファイルの保全・途中失敗の復元を画面不要で検査 |
 | 起動・復旧 | [test-startup.ps1](../../tests/test-startup.ps1) | 標準の`/Validate`による構文検査・起動中プロセスとDBの保持、空・破損DBの原本保持、初期作成中断後の再試行 |
 | 空のライブラリ | [test-empty-settings.ps1](../../tests/test-empty-settings.ps1) | 新規状態・最後の削除・配信者なしの共通弾幕・再読み込み |
@@ -121,7 +121,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | 診断画面の生成・更新 | [test-diagnostics.ps1](../../tests/test-diagnostics.ps1) | 構築失敗時の資源解放、表示とコピーの一致、更新失敗からの復旧。他の画面の故障注入とは独立した環境で検証 |
 | 通知の寿命 | [test-status-tip.ps1](../../tests/test-status-tip.ps1) | 実ツールチップの期限・置換・継続表示・消去 |
 | 画面・診断の回帰 | [test-review-regressions.ps1](../../tests/test-review-regressions.ps1) | 診断・補助画面・開始失敗・中止・小画面配置の連携 |
-| 即時リアクション | [test-quick-reaction.ps1](../../tests/test-quick-reaction.ps1) | キー解放・動画確認・開始前の中止と交代、実行への引き継ぎ。非表示画面と代替処理を使い、実キー・ワーカー・前面操作は不要 |
+| 即時リアクション | [test-quick-reaction.ps1](../../tests/test-quick-reaction.ps1) | 動画確認・開始前の中止と交代、実行への引き継ぎ。非表示画面と代替処理を使い、実キー・ワーカー・前面操作は不要 |
 | 送信中の所有 | [test-reaction-send-ownership.ps1](../../tests/test-reaction-send-ownership.ps1) | 前面確認・応答中に交代したジョブの資源解放と後続処理の保護。前面・通信・タイマー精度を代替処理にし、非表示コントロールを扱うHeadless検査 |
 | カウントダウン | [test-reaction-countdown.ps1](../../tests/test-reaction-countdown.ps1) | 待機・登録再試行・通知中の交代と中止、古いタイマーの抑止。前面・通信を代替処理にし、利用者の入力やフォーカスを要しないHeadless検査 |
 | リアクション開始 | [test-reaction-start.ps1](../../tests/test-reaction-start.ps1) | 開始途中の交代と中止、後続ジョブへのタイマー・結果の誤反映防止 |
@@ -133,12 +133,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\run.ps1 -Sandbox
 | リアクション検出 | [test-reactions.ps1](../../tests/test-reactions.ps1) | 5種類の識別、登録情報の妥当性、一括取得の整合性、操作直前の対象確認 |
 | UIA参照 | [test-cache.ps1](../../tests/test-cache.ps1) | UIA参照の再検証・失効・登録置換、不正な検索計画の拒否 |
 | ページ操作 | [test-page-actions.ps1](../../tests/test-page-actions.ps1) | チャット・表示用UIの識別と対象確認。クリックや送信をしないこと。比較用の別UIA要素はテスト所有の非表示ウィンドウから取得し、他アプリを必要としないHeadless検査 |
-| フォーカス後の保留入力 | [test-focused-input.ps1](../../tests/test-focused-input.ps1) | 1件だけの保留、期限とキー解放、対象変更時の中止、保留状態の解放 |
+| ショートカットキュー | [test-shortcut-queue.ps1](../../tests/test-shortcut-queue.ps1) | 同一キー・混在操作のFIFO、停止と新セッションの分離、待機、対象・本文・配信者変更、フォーカストークンの消費、失敗時の後続破棄 |
+| チャット送信キー | [test-chat-send.ps1](../../tests/test-chat-send.ps1) | FIFOの本文→Enter、チャット限定、対象変更・停止・不明結果、Ctrl＋Alt／Ctrl＋Shift保持中の通常Enterを隔離欄で確認 |
+| 旧キー設定の移行 | [test-shortcut-upgrade.ps1](../../tests/test-shortcut-upgrade.ps1) | DB4／JSON1の同一変換、独自割当・衝突の維持、原本不変、不正データ拒否、キー行と形式番号のロールバック |
 | ページ操作キー | [test-page-shortcuts.ps1](../../tests/test-page-shortcuts.ps1) | クリア前の再検証、操作競合と編集画面からの操作の拒否 |
 | ページ操作の所有 | [test-page-action-ownership.ps1](../../tests/test-page-action-ownership.ps1) | 受付から結果通知までの所有、交代後の結果保護、クリア直前のタイマー割り込みと例外時の復帰。前面・通信・入力を代替処理にするHeadless検査 |
 | キー登録と保存 | [test-shortcut-bindings.ps1](../../tests/test-shortcut-bindings.ps1) | 起動時の登録、キー交換、保存失敗・登録失敗からの復元。キー登録を代替処理にし、実DBを使うHeadless検査。画面・ワーカー・アプリ初期化は不要 |
 | キー管理画面 | [test-shortcut-manager.ps1](../../tests/test-shortcut-manager.ps1) | 画面からのキー変更・競合・保存と失敗時の下書き保持、対象別の弾幕割当、未保存変更の破棄確認 |
-| 実キーの経路 | [test-page-hotkeys.ps1](../../tests/test-page-hotkeys.ps1) | 登録した実キーからのフォーカス・クリア・表示要求と、保留経由の単一入力 |
+| 実キーの経路 | [test-page-hotkeys.ps1](../../tests/test-page-hotkeys.ps1) | 登録した実キーのKeyUp、修飾キー保持中の入力・クリア、遅い操作中の複数キーと同一キーのFIFO |
 | 文字入力 | [test-input.ps1](../../tests/test-input.ps1) | チャット・コメントの分類、フォーカスと入力欄の同一性、対象外の拒否 |
 | メモリキャッシュ | [test-storage.ps1](../../tests/test-storage.ps1) | メモリキャッシュの再利用・期限・件数・失敗後の再取得と登録更新 |
 | ブラウザー診断の出力 | [test-browser-report.ps1](../../tests/test-browser-report.ps1) | 不正な引数の拒否、診断出力先の解決・作成、失敗記録、既存レポートの保護。実ブラウザー操作なし |

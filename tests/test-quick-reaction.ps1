@@ -7,8 +7,8 @@ $quickTests = @'
 global QuickScenario := "", QuickRequests := 0, QuickReplacement := 0
 DefaultReactionCount := 1, DefaultReactionIntervalMs := 0
 for entry in [["changed","changed","lookup detail"], ["unavailable","unavailable","lookup detail"],
-    ["request_error","unknown","context exception"], ["release_error","unknown","key exception"],
-    ["release_timeout","unavailable",""], ["before_switch","wrong_window",""],
+    ["request_error","unknown","context exception"],
+    ["before_switch","wrong_window",""],
     ["after_switch","wrong_window",""], ["cancel","cancelled",""]] {
     QuickScenario := entry[1], QuickRequests := 0
     queued := CreateReactionJob({Mode:"queued",Window:123})
@@ -19,16 +19,18 @@ for entry in [["changed","changed","lookup detail"], ["unavailable","unavailable
     Assert(LastReactionResult.Reason==entry[2] && LastReactionResult.Detail==entry[3],"final cause retained: " QuickScenario)
     Assert(LastReactionResult.Mode="queued" && LastReactionResult.Completed=0 && ReactionExecutionStatus.Phase="finished"
         && ReactionExecutionStatus.Message==LastReactionResult.Message && PaletteStatusControl.Text==LastReactionResult.Message,"visible result belongs to this unstarted attempt: " QuickScenario)
-    Assert(QuickRequests=(InStr(QuickScenario,"release_") || QuickScenario="before_switch" ? 0 : 1),"no send or retry after start failure: " QuickScenario)
+    Assert(QuickRequests=(QuickScenario="before_switch" ? 0 : 1),"no send or retry after start failure: " QuickScenario)
 }
-QuickScenario := "replacement", QuickRequests := 0
-previousResult := LastReactionResult
-queued := CreateReactionJob({Mode:"queued",Window:123})
-ActiveReactionJob := queued
-QuickReaction()
-Assert(ActiveReactionJob=QuickReplacement && QuickReplacement.Phase="queued" && LastReactionResult=previousResult
-    && ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message="replacement pending","old start cannot finalize or overwrite replacement")
-CancelReaction()
+for replacementState in ["ok", "unavailable"] {
+    QuickScenario := "replacement", QuickRequests := 0
+    previousResult := LastReactionResult
+    queued := CreateReactionJob({Mode:"queued",Window:123})
+    ActiveReactionJob := queued
+    QuickReaction()
+    Assert(ActiveReactionJob=QuickReplacement && QuickReplacement.Phase="queued" && LastReactionResult=previousResult
+        && ReactionExecutionStatus.Phase!="finished" && ReactionExecutionStatus.Message="replacement pending","old start cannot finalize or overwrite replacement")
+    CancelReaction()
+}
 QuickScenario := "success", QuickRequests := 0
 ActiveReactionJob := CreateReactionJob({Mode:"queued",Window:123})
 QuickReaction()
@@ -47,31 +49,11 @@ CancelReaction()
 cancelledMessage := ReactionExecutionStatus.Message
 QuickReaction()
 Assert(ReactionExecutionStatus.Message = cancelledMessage, "queued cancellation result is retained")
-for released in [false, true] {
-    replacementJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
-    RuntimePorts.ShortcutRelease := ReplaceShortcutJob.Bind(replacementJob,released)
-    ActiveReactionJob := CreateReactionJob({Mode:"queued", Cancelled:false, Window:0})
-    SetReactionStatus("新しい開始待ち", false)
-    QuickReaction()
-    Assert(ActiveReactionJob = replacementJob && ReactionExecutionStatus.Phase = "queued", "old shortcut cleanup preserves replacement job")
-}
-RuntimePorts.ShortcutRelease := QuickRelease
-CancelReaction()
 Assert(!DllCall("IsWindowVisible","Ptr",PaletteWindow.Hwnd) && !ManagementWindow && !ReactionOverlay && !ActiveEditorDialog,
     "quick reaction checks keep all application views hidden")
 Assert(!ApplicationShortcutsInstalled && !WorkerState.ProcessHandle,"quick reaction checks need no live shortcuts or worker")
 FileAppend("PASS: " Checks " quick reaction result checks; no real browser operations`n","*")
 ExitApp()
-; Model Esc and a replacement shortcut while the original KeyWait is suspended.
-ReplaceShortcutJob(replacement, released, keys) {
-    global ActiveReactionJob := replacement
-    return released
-}
-QuickRelease(keys) {
-    if QuickScenario="release_error"
-        throw Error("key exception")
-    return QuickScenario!="release_timeout"
-}
 QuickForeground(hwnd) {
     return QuickScenario!="before_switch" && !(QuickScenario="after_switch" && QuickRequests)
 }
@@ -97,11 +79,10 @@ QuickRequest(hwnd,mode,video,extra) {
         ActiveReactionJob := QuickReplacement
         SetReactionStatus("replacement pending")
     }
-    return {State:QuickScenario="changed" || QuickScenario="unavailable" ? QuickScenario : "ok", Video:"abcdefghijk", Detail:"lookup detail"}
+    return {State:QuickScenario="replacement" ? replacementState : (QuickScenario="changed" || QuickScenario="unavailable" ? QuickScenario : "ok"), Video:"abcdefghijk", Detail:"lookup detail"}
 }
 '@
 Invoke-AppTest -Runtime $release -Body $quickTests -Setup @'
-RuntimePorts.ShortcutRelease := QuickRelease
 RuntimePorts.Foreground := QuickForeground
 RuntimePorts.BrowserRequest := QuickRequest
 '@

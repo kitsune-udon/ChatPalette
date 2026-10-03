@@ -30,7 +30,7 @@ Critical(23)
 InstallApplicationShortcuts()
 Assert(A_IsCritical=23,"successful installation preserves caller interruption state")
 Critical(beforeCritical)
-Assert(ApplicationShortcutsInstalled && StartupBindings.Count=9,"retry installs all assigned keys")
+Assert(ApplicationShortcutsInstalled && StartupBindings.Count=10,"retry installs all assigned keys")
 for action,key in ShortcutKeys
     Assert(key="" ? !StartupBindings.Has(action) : StartupBindings[action]==key,"retry respects the configured assignment for " action)
 callCount := StartupCalls.Length

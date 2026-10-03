@@ -146,7 +146,6 @@ StartRequest(hwnd,mode,video,extra) {
 Invoke-AppTest -Runtime $startRuntime -Body $startTests -TimeoutMs 60000 -Setup @'
 RuntimePorts.BrowserIdentity := (hwnd) => !!hwnd
 RuntimePorts.Foreground := (hwnd) => true
-RuntimePorts.ShortcutRelease := (keys) => true
 RuntimePorts.BrowserRequest := StartRequest
 RuntimePorts.TimingPrecision := (enabled) => false
 '@

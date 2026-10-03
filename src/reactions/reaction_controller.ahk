@@ -55,10 +55,14 @@ FinishReactionJob(job) {
     return true
 }
 
-QueueQuickReaction(*) {
+QueueQuickReaction(shortcut := 0,*) {
     if ShortcutBlocked("reaction")
-        return
-    StartReactionJob(CreateReactionJob({Mode: "queued", Window: WinExist("A")}))
+        return false
+    job := CreateReactionJob({Mode:"queued",Window:shortcut ? shortcut.Window : WinExist("A"),
+        Video:shortcut ? shortcut.Session.Video : "",Shortcut:shortcut})
+    if !StartReactionJob(job,!shortcut)
+        return false
+    return shortcut ? QuickReaction() : true
 }
 
 ScheduleReaction(mode, delay, options := 0) {
@@ -89,13 +93,13 @@ ScheduleReaction(mode, delay, options := 0) {
 }
 
 ; Both entry paths publish, present and schedule through the same owner lifetime.
-StartReactionJob(job) {
+StartReactionJob(job, deferQuick := true) {
     global ActiveReactionJob
     ActiveReactionJob := job
     started := false, startFailure := 0
     try {
         if job.Mode = "queued"
-            message := "ショートカットを受け付けました。キーを離してください。"
+            message := "ショートカットを受け付けました。開始します。"
         else {
             PaletteWindow.Hide()
             WinActivate("ahk_id " job.Window)
@@ -108,7 +112,7 @@ StartReactionJob(job) {
         if ActiveReactionJob != job || job.Cancelled
             return false
         ShowReactionProgress()
-        started := job.Mode = "queued" ? ArmReactionTimer(job,QuickReaction,-1)
+        started := job.Mode = "queued" ? (!deferQuick || ArmReactionTimer(job,QuickReaction,-1))
             : ArmReactionTimer(job,ReactionCountdown,1000)
         return started
     } catch as failure {
@@ -212,6 +216,7 @@ ShouldWaitForRegistration(job, reply) {
 }
 
 CancelReaction(*) {
+    CancelShortcutQueue()
     StopReactionTimers()
     if !ActiveReactionJob
         return
@@ -248,6 +253,10 @@ RunReactionSendLoop(job) {
                 return
             if !IsTargetForeground(job.Window) {
                 reply := {State:"wrong_window"}
+                return
+            }
+            if job.HasOwnProp("Shortcut") && job.Shortcut && !ShortcutRequestCurrent(job.Shortcut) {
+                job.Cancelled := true
                 return
             }
             job.StartedAt := AppClockMs()
@@ -331,10 +340,10 @@ QuickReaction(*) {
     queuedJob := ActiveReactionJob
     hwnd := queuedJob.Window, startFailure := 0
     try {
-        if !WaitShortcutRelease(GetShortcutKey("reaction"))
-            return
         if ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
+        if queuedJob.HasOwnProp("Shortcut") && queuedJob.Shortcut && !ShortcutRequestCurrent(queuedJob.Shortcut)
+            return false
         if !IsTargetForeground(hwnd) {
             startFailure := {State:"wrong_window"}
             return
@@ -346,14 +355,22 @@ QuickReaction(*) {
             startFailure := context.State != "ok" ? context : {State:"wrong_window"}
             return
         }
+        if queuedJob.HasOwnProp("Video") && queuedJob.Video != "" && !(context.Video == queuedJob.Video) {
+            startFailure := {State:"changed"}
+            return false
+        }
+        if queuedJob.HasOwnProp("Shortcut") && queuedJob.Shortcut && !ShortcutRequestCurrent(queuedJob.Shortcut)
+            return false
         choice := DefaultReactionKind
         if !choice || ActiveReactionJob != queuedJob || queuedJob.Cancelled
             return
         sendJob := CreateReactionJob({Mode: "reaction_send", Window: hwnd, Video: context.Video,
             Applied:"適用：標準設定 / " ReactionNames[choice],
-            Choice: choice, Total: DefaultReactionCount, Interval: DefaultReactionIntervalMs})
+            Choice: choice, Total: DefaultReactionCount, Interval: DefaultReactionIntervalMs,
+            Shortcut:queuedJob.HasOwnProp("Shortcut") ? queuedJob.Shortcut : 0})
         ActiveReactionJob := sendJob
         RunReactionSendLoop(sendJob)
+        return sendJob.Phase = "finished" && !sendJob.Cancelled && sendJob.Completed = sendJob.Total
     } catch as operationError {
         startFailure := {State:"unknown",Detail:operationError.Message}
     } finally {
@@ -365,7 +382,7 @@ QuickReaction(*) {
             else if startFailure
                 ReactionNotice(startFailure,queuedJob)
             else
-                SetReactionStatus("開始できませんでした。キーを離し、YouTubeを最前面にして再実行してください。",true,"",queuedJob,"unavailable")
+                SetReactionStatus("開始できませんでした。YouTubeを最前面にして再実行してください。",true,"",queuedJob,"unavailable")
         }
     }
 }
