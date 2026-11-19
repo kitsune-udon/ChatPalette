@@ -250,7 +250,9 @@ const App = struct {
     window: win.HWND = null,
     palette: view.Palette = .{},
     manager: management.Management = .{},
-    help: support.Help = .{},
+    help: support.Document = .{},
+    diagnostic_view: support.Document = .{},
+    reaction_details: support.Document = .{},
     history: storage.LibraryHistory,
     prefs_arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(allocator),
     tray: bool = false,
@@ -326,10 +328,12 @@ const App = struct {
     fn deinit(self: *App) void {
         self.keyboard.remove();
         self.removeTray();
+        self.help.close();
+        self.diagnostic_view.close();
+        self.reaction_details.close();
         self.reaction_progress.close();
         self.status_tip.close();
         if (self.reaction_result) |result| result.deinit();
-        self.help.close();
         self.palette.close();
         self.manager.close();
         if (self.window != null) _ = win.DestroyWindow(self.window);
@@ -408,8 +412,8 @@ const App = struct {
             menu_quit => self.quit(false),
             menu_restart => self.requestRestart(),
             menu_manage => self.openManagement(false),
-            menu_help => self.showHelp(),
-            menu_keys, menu_diag, menu_import, menu_export, menu_reaction_result => self.dialogCommand(command, null),
+            menu_help, menu_diag, menu_reaction_result => self.showInformation(command),
+            menu_keys, menu_import, menu_export => self.dialogCommand(command, null),
             menu_capture => self.startPreparation(.reaction_capture),
             menu_check => self.startPreparation(.reaction_check),
             else => {},
@@ -760,10 +764,31 @@ const App = struct {
         return self.window;
     }
 
-    fn showHelp(self: *App) void {
-        if (!self.canEdit() or self.manager.isEditing()) return;
+    fn showInformation(self: *App, command: u16) void {
+        if (self.quitting or self.modal or self.manager.isEditing()) return;
         const parent = self.dialogParent();
-        self.help.show(parent, .{ .context = self, .open = openShortcutsFromHelp }) catch |failure| self.saveFailure(parent, failure);
+        const activate = self.canEdit();
+        switch (command) {
+            menu_help => {
+                if (!activate) return;
+                self.help.show(parent, .{ .help = .{ .context = self, .open = openShortcutsFromHelp } }, true) catch
+                    self.notify("使い方を表示できませんでした。");
+            },
+            menu_diag => self.diagnostic_view.show(parent, .{ .diagnostic = .{
+                .source = .{ .context = self, .read = readDiagnosticSnapshot },
+                .version = version,
+            } }, activate) catch self.notify("診断情報を表示できませんでした。"),
+            menu_reaction_result => self.showReactionDetails(parent, activate) catch
+                self.notify("リアクションの実行結果を表示できませんでした。"),
+            else => unreachable,
+        }
+    }
+
+    fn showReactionDetails(self: *App, parent: win.HWND, activate: bool) !void {
+        if (activate) self.reaction_progress.hide();
+        const text = if (self.reaction_result) |result| try result.document(allocator) else null;
+        defer if (text) |value| allocator.free(value);
+        try self.reaction_details.show(parent, .{ .reaction = text }, activate);
     }
 
     fn dialogCommand(self: *App, command: win.BOOL, shortcut_help: win.HWND) void {
@@ -838,14 +863,6 @@ const App = struct {
         const parent = self.dialogParent();
         switch (command) {
             menu_keys => try self.openShortcuts(parent),
-            menu_reaction_result => {
-                self.reaction_progress.hide();
-                const result = self.reaction_result orelse return support.document(parent, "リアクションの実行結果", "まだ実行していません。", false);
-                const document = try result.document(allocator);
-                defer allocator.free(document);
-                try support.document(parent, "リアクションの実行結果", document, true);
-            },
-            menu_diag => try self.diagnostics(parent),
             menu_export => {
                 const path = (try support.selectJson(parent, true)) orelse return;
                 defer allocator.free(path);
@@ -907,10 +924,6 @@ const App = struct {
         const outcome = management.savedViewWarning(self.manager.refreshFailed(), self.palette.refresh_failed) orelse "ユーザーデータを取り込みました。";
         self.report(outcome);
         return outcome;
-    }
-
-    fn diagnostics(self: *const App, parent: win.HWND) !void {
-        try support.diagnosticDocument(parent, .{ .context = self, .read = readDiagnosticSnapshot }, version);
     }
 
     fn readDiagnosticSnapshot(context: *const anyopaque) diagnostic.Snapshot {
@@ -1150,6 +1163,24 @@ const App = struct {
         return .unknown;
     }
 
+    fn shortcutFailureNotice(self: *const App, slot_input: bool, cause: anyerror, buffer: *[512]u8) []const u8 {
+        if (self.cleanupNotice(cause)) |notice| return notice;
+        const page_recorded = if (self.last_page) |page_operation| page_operation.latest else false;
+        const fallback = if (page_recorded) self.last_state else @tagName(self.workerFailureReason(cause));
+        if (!slot_input) return fallback;
+        const failure = self.last_worker_failure orelse return fallback;
+        if (failure.cause != cause) return fallback;
+        const notice = switch (self.last_mode orelse return fallback) {
+            .browser_context => "動画を確認できなかったため、弾幕は入力していません。",
+            .resolve => "配信者を確認できなかったため、弾幕は入力していません。",
+            .verify_input, .verify_chat => "入力欄を確認できなかったため、弾幕は入力していません。",
+            else => return fallback,
+        };
+        var detail: [256]u8 = undefined;
+        const reason = failure.format(&detail) catch return notice;
+        return std.fmt.bufPrint(buffer, "{s} {s}", .{ notice, reason }) catch notice;
+    }
+
     fn requestOnPage(self: *App, mode: transport.Mode, target: usize, video: []const u8, page_proof: []const u8, extra: []const transport.Field) !transport.Reply {
         const generation = self.queue.generation;
         var fields: [3]transport.Field = undefined;
@@ -1213,9 +1244,8 @@ const App = struct {
                 if (!self.quitting and self.quickReactionStarting())
                     _ = self.failReactionStart(self.workerFailureReason(failure), self.workerFailureDetail(failure, &detail));
             } else if (!self.shortcutSuperseded(command.generation)) {
-                const page_recorded = if (self.last_page) |page_operation| page_operation.latest else false;
-                const state = if (page_recorded) self.last_state else @tagName(self.workerFailureReason(failure));
-                self.report(self.cleanupNotice(failure) orelse state);
+                var notice: [512]u8 = undefined;
+                self.report(self.shortcutFailureNotice(command.slot != null, failure, &notice));
             }
             break :result false;
         };
@@ -1956,9 +1986,9 @@ const App = struct {
         if (!self.canEdit() or self.manager.isEditing()) return;
         const origin = self.reactionOrigin();
         if (origin.foreground != null and origin.foreground == self.manager.window and input.browser(origin.target) == null) {
-            const result = feedback.Result.init(.wrong_window, null, "YouTubeを前面にし、パレットを開いて対象を選んでください。");
-            var summary: [reaction_summary_capacity]u8 = undefined;
-            self.manager.setNotice(result.summary(&summary));
+            const notice = "YouTubeを前面にし、パレットを開いて対象を選んでください。";
+            const result = feedback.Result.init(.wrong_window, null, notice);
+            self.manager.setNotice(notice);
             if (self.reactionContextCurrent(origin)) self.showReactionResult(result) else result.deinit();
             return;
         }
@@ -2439,6 +2469,152 @@ test "palette operation buttons follow the worker wait, search publication and s
     try std.testing.expect(Probe.observed_waits == 2 and Probe.observed_draws >= 4 and Probe.blocked and Probe.forwarded == 0);
 }
 
+fn expectModeless(condition: bool, comptime message: []const u8, args: anytype) !void {
+    if (condition) return;
+    std.debug.print("Modeless document check: " ++ message ++ "\n", args);
+    return error.TestUnexpectedResult;
+}
+
+test "modeless diagnostics and reaction details leave waiting and palette ownership intact" {
+    const CopyProbe = struct {
+        shown: []const u8,
+        copied_snapshot: bool = false,
+
+        fn observe(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            if (message != win.WM_COPY) return win.DefSubclassProc(hwnd, message, wparam, lparam);
+            const self: *@This() = @ptrFromInt(context);
+            const text = windows.text(hwnd, std.testing.allocator) catch return 0;
+            defer std.testing.allocator.free(text);
+            self.copied_snapshot = std.mem.eql(u8, self.shown, text);
+            return 0; // Observe the native copy request without writing the clipboard.
+        }
+    };
+    const t = std.testing;
+    var directory = t.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(t.allocator, ".");
+    defer t.allocator.free(root);
+    const path = try std.fs.path.join(t.allocator, &.{ root, "settings.db" });
+    defer t.allocator.free(path);
+    var db = try storage.Store.open(t.allocator, path);
+    defer db.close();
+    try db.save(.{ .preferences = .{ .auto_mode = false } });
+    var wc = std.mem.zeroes(win.WNDCLASSW);
+    wc.hInstance = win.GetModuleHandleW(null);
+    wc.lpszClassName = windows.wide("ChatPalette.ModelessInformationTest");
+    wc.lpfnWndProc = messageHandler;
+    if (win.RegisterClassW(&wc) == 0) return error.RegisterInformationHost;
+    defer _ = win.UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    var app: App = .{
+        .executable = windows.wide("information-fixture.exe"),
+        .db = &db,
+        .snapshot = try db.load(t.allocator),
+        .history = storage.LibraryHistory.init(t.allocator),
+        .running_digest = null,
+    };
+    var live = true;
+    defer if (live) app.deinit();
+    current = &app;
+    defer current = null;
+    app.window = win.CreateWindowExW(0, wc.lpszClassName, windows.wide(""), 0, 0, 0, 1, 1, null, null, wc.hInstance, null) orelse
+        return error.CreateInformationHost;
+    try app.palette.open(app.window);
+    const palette = app.palette.window;
+    _ = win.ShowWindow(palette, win.SW_SHOWNOACTIVATE);
+    const target = app.window;
+    app.target = target;
+    app.preparation = .{
+        .mode = .reaction_capture,
+        .target = windows.number(target),
+        .video = "ZigTest0001".*,
+        .page = @splat('a'),
+        .generation = app.reaction_generation,
+        .due = win.GetTickCount64() + 60_000,
+    };
+    const foreground = win.GetForegroundWindow();
+    app.menuCommand(menu_diag);
+    const diagnostics_window = app.diagnostic_view.dialog.window orelse return error.ShowDiagnosticView;
+    const diagnostic_edit = win.GetDlgItem(diagnostics_window, 100);
+    const registration_text = try windows.text(diagnostic_edit, t.allocator);
+    defer t.allocator.free(registration_text);
+    try expectModeless(std.mem.indexOf(u8, registration_text, "(waiting)") != null, "registration snapshot omitted waiting", .{});
+    try expectModeless(!app.modal and app.preparation != null and !app.canEdit(), "registration changed after opening diagnostics: modal={} preparation={} allowed={}", .{ app.modal, app.preparation != null, app.canEdit() });
+    try t.expectEqual(foreground, win.GetForegroundWindow());
+    const owner = win.GetWindow(diagnostics_window, win.GW_OWNER);
+    try expectModeless(owner == palette and win.IsWindowEnabled(palette) != 0, "diagnostics owner: palette={x} owner={x} enabled={d}", .{ windows.number(palette), windows.number(owner), win.IsWindowEnabled(palette) });
+
+    app.preparation = null;
+    app.reaction_clock = try std.time.Timer.start();
+    app.reaction = .{
+        .target = windows.number(target),
+        .video = "ZigTest0001".*,
+        .page = @splat('a'),
+        .kind = 1,
+        .count = 3,
+        .interval = 2000,
+        .due_ns = 60 * std.time.ns_per_s,
+    };
+    app.worker.active = true;
+    app.last_mode = .reaction_send;
+    app.last_state = "menu_closed";
+    app.menuCommand(menu_diag);
+    try t.expectEqual(diagnostics_window, app.diagnostic_view.dialog.window);
+    try expectModeless(app.worker.active and app.reaction.?.completed == 0 and !app.reaction.?.active_request, "reopening diagnostics changed an active worker or send", .{});
+    app.worker.active = false;
+    _ = win.SendMessageW(diagnostics_window, win.WM_COMMAND, 4, 0);
+    const shown = try windows.text(diagnostic_edit, t.allocator);
+    defer t.allocator.free(shown);
+    try expectModeless(std.mem.indexOf(u8, shown, "結果 menu_closed") != null and std.mem.indexOf(u8, shown, "(waiting)") != null, "refreshed diagnostics omitted result or waiting", .{});
+    var copy: CopyProbe = .{ .shown = shown };
+    try expectModeless(win.SetWindowSubclass(diagnostic_edit, CopyProbe.observe, 93, @intFromPtr(&copy)) != 0, "diagnostic edit subclass could not be installed", .{});
+    app.last_state = "changed";
+    _ = win.SendMessageW(diagnostics_window, win.WM_COMMAND, 3, 0);
+    _ = win.RemoveWindowSubclass(diagnostic_edit, CopyProbe.observe, 93);
+    try expectModeless(copy.copied_snapshot and !app.queue.busy() and !app.modal and app.target == target, "diagnostic copy: snapshot={} queue_busy={} modal={} target_preserved={}", .{ copy.copied_snapshot, app.queue.busy(), app.modal, app.target == target });
+
+    app.menuCommand(menu_reaction_result);
+    const result_window = app.reaction_details.dialog.window orelse return error.ShowReactionDetails;
+    try expectModeless(win.IsWindowEnabled(win.GetDlgItem(result_window, 3)) == 0, "copy enabled with no reaction result", .{});
+    try expectModeless(app.reaction != null and app.reaction.?.completed == 0 and win.GetForegroundWindow() == foreground, "showing previous result changed the waiting send or foreground", .{});
+    app.reaction = null;
+    app.reaction_result = feedback.Result.init(.wrong_window, null, "fixture detail");
+    app.menuCommand(menu_reaction_result);
+    try t.expectEqual(result_window, app.reaction_details.dialog.window);
+    const result_text = try windows.text(win.GetDlgItem(result_window, 100), t.allocator);
+    defer t.allocator.free(result_text);
+    try expectModeless(std.mem.indexOf(u8, result_text, "fixture detail") != null and win.IsWindowEnabled(win.GetDlgItem(result_window, 3)) != 0, "reaction result did not refresh its text and copy action", .{});
+    app.menuCommand(menu_help);
+    const help_window = app.help.dialog.window orelse return error.ShowModelessHelp;
+    for ([_]win.HWND{ diagnostics_window, result_window, help_window }) |document_window| {
+        _ = win.ShowWindow(palette, win.SW_HIDE);
+        _ = win.ShowWindow(document_window, win.SW_SHOW);
+        _ = win.SetForegroundWindow(document_window);
+        _ = win.SetActiveWindow(document_window);
+        try t.expectEqual(document_window, win.GetForegroundWindow());
+        shortcut(.{ .action = .palette, .window = windows.number(document_window) });
+        var posted: win.MSG = undefined;
+        if (win.PeekMessageW(&posted, app.window, drain_message, drain_message, win.PM_REMOVE) == 0 or
+            posted.message != drain_message) return error.ModelessPaletteShortcutNotPosted;
+        dispatch(&posted);
+        try expectModeless(win.IsWindowVisible(palette) != 0 and win.IsWindowVisible(document_window) != 0, "palette shortcut visibility: from_diagnostic={} palette={d} document={d}", .{ document_window == diagnostics_window, win.IsWindowVisible(palette), win.IsWindowVisible(document_window) });
+        try expectModeless(app.target == target and !app.modal, "palette shortcut changed target or installed a modal lock", .{});
+    }
+
+    app.quit(false);
+    try expectModeless(app.quitting, "normal app quit did not begin with documents visible", .{});
+    // PostQuitMessage is delivered after the posted queue has been serviced.
+    var message: win.MSG = undefined;
+    const received = while (win.PeekMessageW(&message, null, 0, 0, win.PM_REMOVE) != 0) {
+        if (message.message == win.WM_QUIT) break true;
+        dispatch(&message);
+    } else false;
+    try expectModeless(received, "normal app quit did not deliver WM_QUIT", .{});
+    app.deinit();
+    live = false;
+    try expectModeless(win.IsWindow(diagnostics_window) == 0 and win.IsWindow(result_window) == 0 and
+        win.IsWindow(help_window) == 0 and win.IsWindow(palette) == 0, "normal app quit left a document or palette alive", .{});
+}
+
 test "modeless help releases its original palette after shortcut editing" {
     const Probe = struct {
         app: *App,
@@ -2507,7 +2683,8 @@ test "modeless help releases its original palette after shortcut editing" {
     const help_window = app.help.dialog.window orelse return error.ShowModelessHelp;
     const button = win.GetDlgItem(help_window, 5) orelse return error.MissingHelpShortcutButton;
     const document_control = win.GetDlgItem(help_window, 100) orelse return error.MissingHelpDocument;
-    try t.expect(win.GetWindow(help_window, win.GW_OWNER) == parent and win.IsWindowEnabled(parent) != 0 and app.canEdit());
+    const owner = win.GetWindow(help_window, win.GW_OWNER);
+    try expectModeless(owner == parent and win.IsWindowEnabled(parent) != 0 and app.canEdit(), "help owner: parent={x} owner={x} enabled={d} allowed={}", .{ windows.number(parent), windows.number(owner), win.IsWindowEnabled(parent), app.canEdit() });
 
     var probe: Probe = .{ .app = &app, .help = help_window, .button = button };
     Probe.active = &probe;
@@ -2518,16 +2695,16 @@ test "modeless help releases its original palette after shortcut editing" {
         probe.locked = false;
         // The editor is created synchronously before its nested queue first services this timer.
         const timer = Probe.SetTimer(null, 0, 10, Probe.closeEditor);
-        try t.expect(timer != 0);
+        try expectModeless(timer != 0, "could not arm timer for shortcut editor", .{});
         defer _ = win.KillTimer(null, timer);
         if (from_help)
             _ = win.SendMessageW(help_window, win.WM_COMMAND, 5, @bitCast(windows.number(button)))
         else
             app.menuCommand(menu_keys);
         var quit_message: win.MSG = undefined;
-        try t.expect(win.PeekMessageW(&quit_message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) == 0);
-        try t.expect(probe.locked and win.IsWindowEnabled(parent) != 0 and app.canEdit());
-        try t.expect(win.IsWindowEnabled(help_window) != 0 and win.IsWindowVisible(help_window) != 0);
+        try expectModeless(win.PeekMessageW(&quit_message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) == 0, "timer could not close shortcut editor: from_help={} opens={d}", .{ from_help, probe.opens });
+        try expectModeless(probe.locked and win.IsWindowEnabled(parent) != 0 and app.canEdit(), "shortcut editor close: from_help={} locked={} parent_enabled={d} allowed={}", .{ from_help, probe.locked, win.IsWindowEnabled(parent), app.canEdit() });
+        try expectModeless(win.IsWindowEnabled(help_window) != 0 and win.IsWindowVisible(help_window) != 0, "help not enabled and visible after editor close: from_help={} enabled={d} visible={d}", .{ from_help, win.IsWindowEnabled(help_window), win.IsWindowVisible(help_window) });
         try t.expectEqual(document_control, win.GetDlgItem(help_window, 100));
     }
     try t.expectEqual(@as(usize, 2), probe.opens);
@@ -2540,12 +2717,12 @@ test "modeless help releases its original palette after shortcut editing" {
     const foreground = win.GetForegroundWindow();
     _ = win.SendMessageW(help_window, win.WM_CLOSE, 0, 0);
     if (foreground == other) try t.expectEqual(other, win.GetForegroundWindow());
-    try t.expect(win.IsWindowVisible(help_window) == 0 and win.IsWindowEnabled(parent) != 0);
+    try expectModeless(win.IsWindowVisible(help_window) == 0 and win.IsWindowEnabled(parent) != 0, "help close: visible={d} parent_enabled={d}", .{ win.IsWindowVisible(help_window), win.IsWindowEnabled(parent) });
     app.menuCommand(menu_help);
     const reopened = app.help.dialog.window orelse return error.ReopenModelessHelp;
-    try t.expect(win.GetWindow(reopened, win.GW_OWNER) == parent and win.IsWindowVisible(reopened) != 0);
+    try expectModeless(win.GetWindow(reopened, win.GW_OWNER) == parent and win.IsWindowVisible(reopened) != 0, "reopened help owner or visibility changed", .{});
     app.help.close();
-    try t.expect(win.IsWindow(reopened) == 0 and win.IsWindowEnabled(parent) != 0);
+    try expectModeless(win.IsWindow(reopened) == 0 and win.IsWindowEnabled(parent) != 0, "destroying help left a window or parent lock", .{});
 }
 
 test "management channel lookup distinguishes current failures and drops obsolete notifications" {
@@ -2653,6 +2830,34 @@ test "management channel lookup distinguishes current failures and drops obsolet
         try t.expect(!app.manager.isEditing() and !app.worker.active);
     }
     try t.expectEqual(@as(usize, 0), app.history.length);
+}
+
+test "slot lookup failures distinguish verification from a lost input acknowledgement" {
+    const Probe = struct {
+        var requests: usize = 0;
+        fn loseReply(client: *transport.Client, _: std.mem.Allocator, _: [:0]const u16, _: transport.Mode, _: usize, _: []const u8, _: []const transport.Field, _: transport.Pump) !transport.Reply {
+            requests += 1;
+            client.request_may_have_arrived = true;
+            return error.WorkerTimeout;
+        }
+    };
+    const t = std.testing;
+    var app: App = .{ .executable = windows.wide("fixture"), .snapshot = undefined, .db = undefined, .history = undefined, .running_digest = null };
+    for ([_]struct { mode: transport.Mode, notice: []const u8 }{
+        .{ .mode = .browser_context, .notice = "動画を確認できなかったため、弾幕は入力していません。 補助プロセスの要求失敗 WorkerTimeout" },
+        .{ .mode = .verify_input, .notice = "入力欄を確認できなかったため、弾幕は入力していません。 補助プロセスの要求失敗 WorkerTimeout" },
+        .{ .mode = .input_insert, .notice = "unknown" },
+    }) |case| {
+        Probe.requests = 0;
+        try t.expectError(error.WorkerTimeout, app.requestUsing(case.mode, 1, "", &.{}, Probe.loseReply));
+        var buffer: [512]u8 = undefined;
+        try t.expectEqualStrings(case.notice, app.shortcutFailureNotice(true, error.WorkerTimeout, &buffer));
+        try t.expectEqualStrings("unknown", app.shortcutFailureNotice(false, error.WorkerTimeout, &buffer));
+        try t.expectEqual(case.mode, app.last_mode.?);
+        try t.expectEqual(@as(usize, 1), Probe.requests);
+        app.last_worker_failure.?.cleanup = error.WorkerDidNotExit;
+        try t.expectEqualStrings(worker_exit_notice, app.shortcutFailureNotice(true, error.WorkerTimeout, &buffer));
+    }
 }
 
 test "desktop records the communication cause and an unconfirmed worker exit together" {
@@ -3904,6 +4109,8 @@ fn dispatch(message: *win.MSG) void {
         if (app.manager.filterMessage(message)) return;
         if (app.palette.filterMessage(message)) return;
         if (app.help.filterMessage(message)) return;
+        if (app.diagnostic_view.filterMessage(message)) return;
+        if (app.reaction_details.filterMessage(message)) return;
     }
     _ = win.TranslateMessage(message);
     _ = win.DispatchMessageW(message);

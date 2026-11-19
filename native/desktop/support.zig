@@ -23,7 +23,11 @@ const item_status_id = 205;
 extern "user32" fn EnumThreadWindows(win.DWORD, *const fn (win.HWND, win.LPARAM) callconv(.winapi) win.BOOL, win.LPARAM) callconv(.winapi) win.BOOL;
 
 var shortcut_editor: win.HWND = null;
-var help_window: win.HWND = null;
+const modeless_document_property = windows.wide("ChatPalette.ModelessDocument");
+
+fn isModelessDocument(window: win.HWND) bool {
+    return win.GetPropW(window, modeless_document_property) != null;
+}
 
 pub fn shortcutEditorAwayFrom(foreground: win.HWND) win.HWND {
     const editor = shortcut_editor orelse return null;
@@ -136,6 +140,7 @@ fn addChoice(hwnd: win.HWND, label: []const u8) !void {
 
 const Dialog = struct {
     window: win.HWND = null,
+    modeless: bool = false,
     disabled_parent: win.HWND = null,
     original_focus: win.HWND = null,
     close_requested: bool = false,
@@ -200,7 +205,8 @@ const Dialog = struct {
             self.document_status = try control(self.window, "STATIC", "", 0, 0);
         }
         if (allow_copy) {
-            self.reset = try control(self.window, "BUTTON", "表示中の診断情報をコピー", reset_id, win.WS_TABSTOP);
+            const label = if (self.diagnostic != null) "表示中の診断情報をコピー" else "表示中の実行結果をコピー";
+            self.reset = try control(self.window, "BUTTON", label, reset_id, win.WS_TABSTOP);
             _ = win.EnableWindow(self.reset, 0);
         }
         if (self.help_shortcuts != null)
@@ -229,6 +235,15 @@ const Dialog = struct {
         const snapshot = config.source.read(config.source.context);
         try self.paintDocument(try snapshot.format(&buffer, config.version));
         windows.setText(self.document_status, "");
+    }
+
+    fn updateReactionDocument(self: *Dialog, value: ?[]const u8) !void {
+        if (self.finishing or self.close_requested) return;
+        self.finishing = true;
+        defer self.finishing = false;
+        try self.paintDocument(value orelse "まだ実行していません。");
+        if (value == null) _ = win.EnableWindow(self.reset, 0);
+        _ = win.ShowWindow(self.reset, if (value != null) win.SW_SHOWNOACTIVATE else win.SW_HIDE);
     }
 
     fn openHelpShortcuts(self: *Dialog) void {
@@ -288,8 +303,8 @@ const Dialog = struct {
         }
         self.close_requested = true;
         // A sent close can run inside GetMessageW. Wake the modal loop before hiding the dialog.
-        if (self.help_shortcuts == null) _ = win.PostMessageW(self.window, win.WM_NULL, 0, 0);
-        if (self.help_shortcuts != null and win.GetForegroundWindow() == self.window) {
+        if (!self.modeless) _ = win.PostMessageW(self.window, win.WM_NULL, 0, 0);
+        if (self.modeless and win.GetForegroundWindow() == self.window) {
             self.restoreParentFocus(win.GetWindow(self.window, win.GW_OWNER));
         }
         _ = win.ShowWindow(self.window, win.SW_HIDE);
@@ -508,9 +523,9 @@ const Dialog = struct {
     fn parentHasSuccessor(self: *const Dialog, parent: win.HWND) bool {
         const popup = win.GetWindow(parent, win.GW_ENABLEDPOPUP);
         if (popup == null or popup == parent) return false;
-        if (popup != help_window) return popup != self.window and win.IsWindowVisible(popup) != 0;
+        if (!isModelessDocument(popup)) return popup != self.window and win.IsWindowVisible(popup) != 0;
 
-        // A visible modeless help window does not hold the parent's modal lock.
+        // A visible modeless document does not hold the parent's modal lock.
         const Search = struct {
             parent: win.HWND,
             dialog: win.HWND,
@@ -518,7 +533,7 @@ const Dialog = struct {
 
             fn check(candidate: win.HWND, context: win.LPARAM) callconv(.winapi) win.BOOL {
                 const search: *@This() = @ptrFromInt(@as(usize, @bitCast(context)));
-                search.found = candidate != search.dialog and candidate != help_window and
+                search.found = candidate != search.dialog and !isModelessDocument(candidate) and
                     win.GetWindow(candidate, win.GW_OWNER) == search.parent and
                     win.IsWindowVisible(candidate) != 0 and win.IsWindowEnabled(candidate) != 0;
                 return @intFromBool(!search.found);
@@ -541,7 +556,7 @@ const Dialog = struct {
             self.disabled_parent = parent;
             return false;
         }
-        if (owned and self.help_shortcuts == null) self.restoreParentFocus(parent);
+        if (owned and !self.modeless) self.restoreParentFocus(parent);
         return true;
     }
 
@@ -568,9 +583,9 @@ const Dialog = struct {
         }
     }
 
-    fn show(self: *Dialog) !bool {
+    fn show(self: *Dialog, activate: bool) !bool {
         if (self.close_requested) return false;
-        _ = win.ShowWindow(self.window, win.SW_SHOW);
+        _ = win.ShowWindow(self.window, if (activate) win.SW_SHOW else win.SW_SHOWNOACTIVATE);
         if (self.close_requested) return false;
         if (win.IsWindowVisible(self.window) == 0) return error.ShowSupportWindow;
         return true;
@@ -599,7 +614,7 @@ const Dialog = struct {
         self.original_focus = win.GetFocus();
         self.disableParent(parent);
         defer _ = self.releaseParent();
-        if (!try self.show()) return;
+        if (!try self.show(true)) return;
         if (self.editor != null) shortcut_editor = self.window;
         defer if (shortcut_editor == self.window) {
             shortcut_editor = null;
@@ -669,8 +684,8 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
     const pointer: usize = @bitCast(win.GetWindowLongPtrW(hwnd, win.GWLP_USERDATA));
     if (pointer == 0) return win.DefWindowProcW(hwnd, message, wparam, lparam);
     const dialog: *Dialog = @ptrFromInt(pointer);
-    if (message == win.WM_NCDESTROY and dialog.help_shortcuts != null) {
-        if (help_window == hwnd) help_window = null;
+    if (message == win.WM_NCDESTROY and dialog.modeless) {
+        _ = win.RemovePropW(hwnd, modeless_document_property);
         if (dialog.window == hwnd) dialog.window = null;
         return win.DefWindowProcW(hwnd, message, wparam, lparam);
     }
@@ -711,7 +726,9 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             cancel_id => dialog.requestClose(),
             reset_id => if (dialog.document != null) {
                 // Read from the completed edit control. The source is only read on open or refresh.
-                if (dialog.reset != null and dialog.document_ready and !dialog.finishing and !dialog.close_requested) {
+                if (dialog.reset != null and dialog.document_ready and !dialog.finishing and
+                    !dialog.close_requested and win.IsWindowEnabled(dialog.reset) != 0)
+                {
                     dialog.finishing = true;
                     defer dialog.finishing = false;
                     _ = win.SendMessageW(dialog.document, win.EM_SETSEL, 0, -1);
@@ -781,62 +798,77 @@ pub fn shortcuts(parent: win.HWND, snapshot: *const storage.Snapshot, context: *
     try dialog.run(parent);
 }
 
-pub fn document(parent: win.HWND, comptime title: []const u8, value: []const u8, allow_copy: bool) !void {
-    var dialog: Dialog = .{};
-    defer dialog.close();
-    try dialog.openDocument(parent, title, allow_copy);
-    try dialog.paintDocument(value);
-    try dialog.run(parent);
-}
+pub const Document = struct {
+    pub const Content = union(enum) {
+        help: HelpShortcuts,
+        diagnostic: DiagnosticDocument,
+        reaction: ?[]const u8,
+    };
 
-pub fn diagnosticDocument(parent: win.HWND, source: DiagnosticSource, version: []const u8) !void {
-    var dialog: Dialog = .{ .diagnostic = .{ .source = source, .version = version } };
-    defer dialog.close();
-    try dialog.openDocument(parent, "診断情報", true);
-    try dialog.updateDiagnostic();
-    try dialog.run(parent);
-}
-
-pub const Help = struct {
     dialog: Dialog = .{},
     opening: bool = false,
 
-    pub fn show(self: *Help, parent: win.HWND, shortcut_route: HelpShortcuts) !void {
+    pub fn show(self: *Document, parent: win.HWND, content: Content, activate: bool) !void {
         if (self.opening or self.dialog.finishing) return;
         self.opening = true;
         defer self.opening = false;
-        if (self.dialog.window != null and !self.dialog.close_requested and win.IsWindowVisible(self.dialog.window) != 0) {
-            windows.recallOwnedWindow(self.dialog.window);
+        if (self.dialog.window != null and !self.dialog.close_requested) {
+            switch (content) {
+                .help => {},
+                .diagnostic => try self.dialog.updateDiagnostic(),
+                .reaction => |value| try self.dialog.updateReactionDocument(value),
+            }
+            if (activate and !self.dialog.close_requested) {
+                windows.recallOwnedWindow(self.dialog.window);
+            } else if (win.IsWindowVisible(self.dialog.window) == 0) {
+                _ = try self.dialog.show(false);
+            }
             return;
         }
         self.close();
-        self.dialog.help_shortcuts = shortcut_route;
+        self.dialog.modeless = true;
         errdefer self.close();
-        try self.dialog.openDocument(parent, "使い方", false);
-        help_window = self.dialog.window;
-        try self.dialog.paintDocument(help);
+        switch (content) {
+            .help => |route| {
+                self.dialog.help_shortcuts = route;
+                try self.dialog.openDocument(parent, "使い方", false);
+                try self.dialog.paintDocument(help);
+            },
+            .diagnostic => |diagnostic| {
+                self.dialog.diagnostic = diagnostic;
+                try self.dialog.openDocument(parent, "診断情報", true);
+                try self.dialog.updateDiagnostic();
+            },
+            .reaction => |value| {
+                try self.dialog.openDocument(parent, "リアクションの実行結果", true);
+                try self.dialog.updateReactionDocument(value);
+            },
+        }
+        if (win.SetPropW(self.dialog.window, modeless_document_property, self.dialog.window) == 0)
+            return error.MarkModelessDocument;
         self.dialog.prepare(parent);
         if (win.GetForegroundWindow() == parent) self.dialog.original_focus = win.GetFocus();
-        if (try self.dialog.show()) self.dialog.focus();
+        if (try self.dialog.show(activate) and activate) self.dialog.focus();
     }
 
-    pub fn close(self: *Help) void {
+    pub fn close(self: *Document) void {
         self.dialog.close();
         self.dialog = .{};
     }
 
-    pub fn filterMessage(self: *Help, message: *win.MSG) bool {
+    pub fn filterMessage(self: *Document, message: *win.MSG) bool {
         return self.dialog.filterMessage(message);
     }
 
-    pub fn suspendOwnerForShortcuts(self: *Help, source: win.HWND) bool {
-        if (self.opening or source != self.dialog.window or !self.dialog.finishing or self.dialog.close_requested) return false;
+    pub fn suspendOwnerForShortcuts(self: *Document, source: win.HWND) bool {
+        if (self.dialog.help_shortcuts == null or self.opening or source != self.dialog.window or
+            !self.dialog.finishing or self.dialog.close_requested) return false;
         if (!self.dialog.releaseParent()) return false;
         self.dialog.disableParent(win.GetWindow(source, win.GW_OWNER));
         return self.dialog.window == source;
     }
 
-    pub fn resumeOwnerAfterShortcuts(self: *Help) void {
+    pub fn resumeOwnerAfterShortcuts(self: *Document) void {
         const title = if (self.dialog.releaseParent()) "使い方" else "親画面を有効にできませんでした。「閉じる」で再試行";
         windows.setText(self.dialog.window, title);
     }
