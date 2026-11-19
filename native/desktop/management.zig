@@ -2,6 +2,7 @@ const std = @import("std");
 const storage = @import("../storage/store.zig");
 const windows = @import("win.zig");
 const shortcuts = @import("shortcuts.zig");
+const ResolveFailure = @import("diagnostics.zig").ResolveFailure;
 const viewport = @import("viewport.zig");
 const Viewport = viewport.Viewport;
 const win = windows.api;
@@ -25,6 +26,7 @@ pub fn savedViewWarning(management_failed: bool, palette_failed: bool) ?[]const 
 
 pub const ChannelRequest = struct {
     allocator: std.mem.Allocator,
+    failure: ?anyerror = null,
     author: ?[]u8 = null,
     channel: ?[]u8 = null,
     target: usize = 0,
@@ -557,7 +559,7 @@ pub const Management = struct {
         if (!std.mem.eql(u8, self.editingId(), scope)) setIdentity(&self.editing, scope) catch {};
     }
 
-    fn setNotice(self: Management, value: []const u8) void {
+    pub fn setNotice(self: Management, value: []const u8) void {
         const warning = if (self.parent_restore != null) parent_restore_notice else "";
         const separator = if (value.len != 0 and warning.len != 0) "\r\n" else "";
         const labelled = if (value.len != 0 or warning.len != 0)
@@ -625,6 +627,17 @@ pub const Management = struct {
             self.showErrorText(details);
             return;
         }
+        const channel_notice: ?[]const u8 = switch (err) {
+            error.ChannelLookupNetwork => ResolveFailure.network.message(),
+            error.ChannelLookupMetadata => ResolveFailure.metadata.message(),
+            error.ChannelLookupAutomation => ResolveFailure.automation.message(),
+            error.ChannelLookupResult => "チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。",
+            error.ChannelLookupCommunication => "補助プロセスと通信できず、チャンネルを確認できませんでした。",
+            error.ChannelLookupTimeout => "チャンネルを確認する補助プロセスの応答が時間内に届きませんでした。",
+            error.ChannelLookupWorkerExit => "補助プロセスの終了を確認できず、チャンネルを確認できませんでした。原因は診断情報で確認できます。",
+            else => null,
+        };
+        if (channel_notice) |message| return self.showErrorText(message);
         const failure = self.db.failureCodes();
         if (failure.rollback) |rollback| {
             var buffer: [256]u8 = undefined;
@@ -779,6 +792,7 @@ pub const Management = struct {
         var request = ChannelRequest{ .allocator = on };
         errdefer request.deinit();
         _ = win.SendMessageW(self.host, wm_resolve_channel, 0, pointerParam(&request));
+        if (request.failure) |failure| return failure;
         if (request.channel == null or request.channel.?.len == 0 or request.target == 0 or request.target_pid == 0) return error.ChannelMissing;
         return request;
     }
@@ -810,9 +824,16 @@ pub const Management = struct {
             const profile = self.snapshot.data.findProfile(dialog.origin) orelse return error.ProfileMissing;
             dialog.original_name = try owned.dupe(u8, profile.name);
         } else if (mode == .link_profile) {
-            var candidate = try self.resolveChannel(allocator);
+            const owner = self.window;
+            const generation = self.editor_generation;
+            var candidate = self.resolveChannel(allocator) catch |failure| {
+                if (failure == error.ChannelLookupStale or !self.editAllowed() or self.window != owner or
+                    self.editor_generation != generation or self.dialog.close_after_open) return;
+                self.showError(failure);
+                return;
+            };
             defer candidate.deinit();
-            if (!self.editAllowed()) return;
+            if (!self.editAllowed() or self.window != owner or self.editor_generation != generation or self.dialog.close_after_open) return;
             if (dialog.origin.len != 0 and self.snapshot.data.findProfile(dialog.origin) == null) return error.ProfileMissing;
             dialog.channel = try owned.dupe(u8, candidate.channel.?);
             const author = candidate.author orelse "";
@@ -1163,8 +1184,8 @@ pub const Management = struct {
                 const target = try allocator.dupe(u8, self.dialog.scopes[index].id);
                 defer allocator.free(target);
                 var latest = self.resolveChannel(allocator) catch |failure| {
-                    if (self.dialog.window != request_window or self.editor_generation != request_generation) return;
-                    return failure;
+                    if (failure == error.ChannelLookupStale or self.dialog.window != request_window or self.editor_generation != request_generation) return;
+                    return error.ChannelMissing;
                 };
                 defer latest.deinit();
                 if (self.dialog.window != request_window or self.editor_generation != request_generation or !self.editAllowed()) return;

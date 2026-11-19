@@ -39,10 +39,13 @@ const SortOrder = enum {
     }
 };
 const sort_row = 32;
+const interval_hint_row = 24;
+const notice_row = 34;
+const reaction_detail_rows = interval_hint_row + 3 * notice_row - 24;
 const minimum_width = 344;
 const compact_width = 535;
-const minimum_height = 394 + sort_row;
-const compact_minimum_height = 426 + sort_row;
+const minimum_height = 394 + sort_row + reaction_detail_rows;
+const compact_minimum_height = 426 + sort_row + reaction_detail_rows;
 
 pub const ReactionOptions = struct { kind: u8, count: u32, interval: u32 };
 pub const reaction_counts = storage.Preferences.reaction_counts;
@@ -109,10 +112,13 @@ pub const Palette = struct {
     reaction_kind: win.HWND = null,
     reaction_count: win.HWND = null,
     reaction_interval: win.HWND = null,
+    interval_hint: win.HWND = null,
     start_button: win.HWND = null,
     save_defaults: win.HWND = null,
     load_defaults: win.HWND = null,
     message: win.HWND = null,
+    reaction_notice: win.HWND = null,
+    settings_notice: win.HWND = null,
     search_hint: win.HWND = null,
     viewport: Viewport = .{},
     data: storage.Data = .{},
@@ -168,6 +174,7 @@ pub const Palette = struct {
         self.reaction_kind = try control(self.window, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP, .reaction_kind);
         self.reaction_count = try control(self.window, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP, .reaction_count);
         self.reaction_interval = try control(self.window, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP, .reaction_interval);
+        self.interval_hint = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         self.start_button = try control(self.window, "BUTTON", "リアクションを開始（3秒後）", win.WS_TABSTOP, .start);
         self.save_defaults = try control(self.window, "BUTTON", "標準設定に保存", win.WS_TABSTOP, .save_defaults);
         self.load_defaults = try control(self.window, "BUTTON", "標準設定を読み込む", win.WS_TABSTOP, .load_defaults);
@@ -177,7 +184,9 @@ pub const Palette = struct {
         for (reaction_counts) |value| _ = addText(self.reaction_count, win.CB_ADDSTRING, try std.fmt.bufPrint(&label, "{d} 回", .{value}));
         for (reaction_intervals) |value|
             _ = addText(self.reaction_interval, win.CB_ADDSTRING, if (value == 0) "待機なし" else try std.fmt.bufPrint(&label, "{d} ms", .{value}));
-        self.message = try control(self.window, "STATIC", "YouTubeの入力欄を選んでから弾幕を入力します。", 0, null);
+        self.message = try control(self.window, "STATIC", "YouTubeの入力欄を選んでから弾幕を入力します。", win.SS_NOPREFIX, null);
+        self.reaction_notice = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
+        self.settings_notice = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         self.search_hint = try control(self.window, "STATIC", "", 0, null);
         _ = win.SendMessageW(self.search, win.EM_SETCUEBANNER, 1, @bitCast(@intFromPtr(windows.wide("弾幕名・本文を検索").ptr)));
         self.font.applyChildren(self.window);
@@ -219,6 +228,10 @@ pub const Palette = struct {
 
     pub fn status(self: Palette, value: []const u8) void {
         windows.setText(self.message, value);
+    }
+
+    pub fn settingsStatus(self: Palette, value: []const u8) void {
+        windows.setText(self.settings_notice, value);
     }
 
     pub fn registrationStatus(self: Palette, value: []const u8) void {
@@ -277,6 +290,20 @@ pub const Palette = struct {
         _ = win.SendMessageW(self.reaction_kind, win.CB_SETCURSEL, defaults.reaction_kind - 1, 0);
         _ = win.SendMessageW(self.reaction_count, win.CB_SETCURSEL, std.mem.indexOfScalar(u32, &reaction_counts, defaults.reaction_count) orelse 0, 0);
         _ = win.SendMessageW(self.reaction_interval, win.CB_SETCURSEL, std.mem.indexOfScalar(u32, &reaction_intervals, defaults.reaction_interval_ms) orelse 0, 0);
+        self.updateIntervalHint();
+    }
+
+    pub fn loadReactionDefaults(self: Palette, defaults: storage.Preferences) void {
+        self.resetReaction(defaults);
+        self.settingsStatus("標準設定を読み込みました。変更は今回の実行だけに適用します。");
+    }
+
+    fn updateIntervalHint(self: Palette) void {
+        const interval = win.SendMessageW(self.reaction_interval, win.CB_GETCURSEL, 0, 0);
+        windows.setText(self.interval_hint, if (interval == 0)
+            "前の操作が終わり次第、次を実行します。"
+        else
+            "指定間隔には処理時間を含みます。");
     }
 
     pub fn operationButtons(self: *Palette, allowed: bool, active: bool) void {
@@ -542,7 +569,7 @@ pub const Palette = struct {
         const extra: i32 = if (compact) 32 else 0;
         const context_row: i32 = 21;
         const registration_row: i32 = 21;
-        const list_height = @max(height - 324 - extra - registration_row - context_row - sort_row, 28);
+        const list_height = @max(height - 324 - extra - registration_row - context_row - sort_row - reaction_detail_rows, 28);
         const below_list = context_row + sort_row + list_height;
         self.place(self.mode, padding, 12, 112, 180);
         self.place(self.profile, 134, 12, width - 264, 242);
@@ -566,13 +593,18 @@ pub const Palette = struct {
         self.place(self.reaction_kind, padding, 209 + controls_top, kind_width, 210);
         self.place(self.reaction_count, padding + kind_width + 8, 209 + controls_top, count_width, 190);
         self.place(self.reaction_interval, interval_x, 209 + controls_top, @min(112, width - interval_x - padding), 235);
-        self.place(self.start_button, padding, 242 + controls_top, 186, 27);
-        self.place(self.stop_button, padding + 192, 242 + controls_top, 58, 27);
+        self.place(self.interval_hint, padding, 239 + controls_top, full, 22);
+        const buttons_top = 242 + controls_top + interval_hint_row;
+        self.place(self.start_button, padding, buttons_top, 186, 27);
+        self.place(self.stop_button, padding + 192, buttons_top, 58, 27);
         const defaults_x: i32 = if (compact) padding else padding + 255;
-        self.place(self.save_defaults, defaults_x, 242 + controls_top + extra, 111, 27);
-        self.place(self.load_defaults, defaults_x + 117, 242 + controls_top + extra, 135, 27);
-        self.place(self.message, padding, 276 + controls_top + extra, full, 25);
-        self.place(self.search_hint, padding, 300 + controls_top + extra, full, 22);
+        self.place(self.save_defaults, defaults_x, buttons_top + extra, 111, 27);
+        self.place(self.load_defaults, defaults_x + 117, buttons_top + extra, 135, 27);
+        const notices_top = buttons_top + extra + 34;
+        self.place(self.message, padding, notices_top, full, notice_row - 2);
+        self.place(self.reaction_notice, padding, notices_top + notice_row, full, notice_row - 2);
+        self.place(self.settings_notice, padding, notices_top + 2 * notice_row, full, notice_row - 2);
+        self.place(self.search_hint, padding, notices_top + 3 * notice_row, full, 22);
     }
 };
 
@@ -661,9 +693,11 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
                 _ = win.SendMessageW(palette.host, wm_mode, @intCast(@max(0, win.SendMessageW(palette.mode, win.CB_GETCURSEL, 0, 0))), 0);
             if (id == @intFromEnum(Id.profile) and code == win.CBN_SELCHANGE and !palette.refreshing)
                 _ = win.SendMessageW(palette.host, wm_profile, @bitCast(win.SendMessageW(palette.profile, win.CB_GETCURSEL, 0, 0)), 0);
+            if (id == @intFromEnum(Id.reaction_interval) and code == win.CBN_SELCHANGE) palette.updateIntervalHint();
             if (id == @intFromEnum(Id.start) and code == win.BN_CLICKED) palette.reactionCommand(wm_start_reaction);
             if (id == @intFromEnum(Id.save_defaults) and code == win.BN_CLICKED) palette.reactionCommand(wm_save_defaults);
-            if (id == @intFromEnum(Id.load_defaults) and code == win.BN_CLICKED) palette.resetReaction(palette.data.preferences);
+            if (id == @intFromEnum(Id.load_defaults) and code == win.BN_CLICKED)
+                palette.loadReactionDefaults(palette.data.preferences);
         },
         else => return win.DefWindowProcW(hwnd, message, wparam, lparam),
     }
@@ -734,6 +768,15 @@ test "compact palette leaves room for the registration row and the bottom guidan
     var palette: Palette = .{};
     defer palette.close();
     try palette.open(null);
+    palette.resetReaction(.{ .reaction_interval_ms = 0 });
+    const no_wait = try windows.text(palette.interval_hint, std.testing.allocator);
+    defer std.testing.allocator.free(no_wait);
+    try std.testing.expect(std.mem.indexOf(u8, no_wait, "前の操作") != null);
+    _ = win.SendMessageW(palette.reaction_interval, win.CB_SETCURSEL, 1, 0);
+    _ = win.SendMessageW(palette.window, win.WM_COMMAND, (@as(usize, win.CBN_SELCHANGE) << 16) | @intFromEnum(Id.reaction_interval), @bitCast(@intFromPtr(palette.reaction_interval)));
+    const timed = try windows.text(palette.interval_hint, std.testing.allocator);
+    defer std.testing.allocator.free(timed);
+    try std.testing.expect(std.mem.indexOf(u8, timed, "処理時間") != null);
     try Probe.resizeClient(&palette, minimum_width, compact_minimum_height);
     var client: win.RECT = undefined;
     try expect(win.GetClientRect(palette.window, &client) != 0);
@@ -742,8 +785,9 @@ test "compact palette leaves room for the registration row and the bottom guidan
         palette.search,            palette.link_button,           palette.sort_label,     palette.sort_selector,
         palette.list,              palette.preview,               palette.insert_button,  palette.manage_button,
         palette.reaction_heading,  palette.reaction_registration, palette.reaction_kind,  palette.reaction_count,
-        palette.reaction_interval, palette.start_button,          palette.stop_button,    palette.save_defaults,
-        palette.load_defaults,     palette.message,               palette.search_hint,
+        palette.reaction_interval, palette.interval_hint,         palette.start_button,   palette.stop_button,
+        palette.save_defaults,     palette.load_defaults,         palette.message,        palette.reaction_notice,
+        palette.settings_notice,   palette.search_hint,
     }) |control_window| {
         const bounds = try Probe.boundsInClient(&palette, control_window);
         try expect(bounds.left >= 0 and bounds.right <= client.right);
@@ -755,7 +799,7 @@ test "compact palette leaves room for the registration row and the bottom guidan
     try Probe.resizeClient(&palette, minimum_width, 410);
     _ = win.SendMessageW(palette.window, win.WM_VSCROLL, win.SB_BOTTOM, 0);
     try expect(palette.viewport.y > 0 and win.GetClientRect(palette.window, &client) != 0);
-    for ([_]win.HWND{ palette.load_defaults, palette.message, palette.search_hint }) |tail| {
+    for ([_]win.HWND{ palette.load_defaults, palette.message, palette.reaction_notice, palette.settings_notice, palette.search_hint }) |tail| {
         const bounds = try Probe.boundsInClient(&palette, tail);
         try expect(bounds.top >= 0 and bounds.bottom <= client.bottom);
     }

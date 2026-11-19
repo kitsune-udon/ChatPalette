@@ -178,7 +178,7 @@ pub fn run(allocator: std.mem.Allocator, mode: []const u8, output: []const u8, r
     const report = try std.json.Stringify.valueAlloc(alloc, .{
         .mode = mode,
         .repeats = repeats,
-        .warmups = @as(u8, if (startup) 0 else 1),
+        .warmups = @as(u8, 1),
         .measurements = summary,
     }, .{ .whitespace = .indent_2 });
     var directory = try std.fs.cwd().openDir(absolute, .{ .no_follow = true });

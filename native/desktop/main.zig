@@ -461,7 +461,7 @@ const App = struct {
         self.refreshRegistrationStatus();
         self.status_tip.close();
         if (target_source == .previous_target and target_source.previous_target == .load_defaults)
-            self.palette.resetReaction(self.snapshot.data.preferences);
+            self.palette.loadReactionDefaults(self.snapshot.data.preferences);
         self.palette.show();
         if (returning_from != null and self.manager.window == returning_from and
             !self.manager.isEditing() and win.IsWindowVisible(self.palette.window) != 0)
@@ -542,17 +542,66 @@ const App = struct {
     }
 
     fn resolveChannel(self: *App, channel: *management.ChannelRequest) void {
+        self.resolveChannelUsing(channel, input.browser, transport.Client.request);
+    }
+
+    const ChannelLookupOrigin = struct {
+        target: win.HWND,
+        owner: win.DWORD,
+        foreground: win.HWND,
+        generation: u64,
+    };
+
+    fn channelLookupCurrent(self: *const App, origin: ChannelLookupOrigin) bool {
+        if (!self.canEdit() or self.target != origin.target or self.queue.generation != origin.generation or
+            win.GetForegroundWindow() != origin.foreground) return false;
+        var owner: win.DWORD = 0;
+        _ = win.GetWindowThreadProcessId(origin.target, &owner);
+        return owner == origin.owner;
+    }
+
+    fn resolveChannelUsing(self: *App, channel: *management.ChannelRequest, comptime browser: @TypeOf(input.browser), comptime exchange: @TypeOf(transport.Client.request)) void {
+        channel.failure = error.ChannelLookupStale;
         const target = self.target;
-        if (!self.canEdit() or input.browser(target) == null) return;
+        if (!self.canEdit()) return;
+        if (browser(target) == null) {
+            channel.failure = error.ChannelMissing;
+            return;
+        }
         var owner: win.DWORD = 0;
         _ = win.GetWindowThreadProcessId(target, &owner);
         if (owner == 0) return;
+        const origin: ChannelLookupOrigin = .{
+            .target = target,
+            .owner = owner,
+            .foreground = win.GetForegroundWindow(),
+            .generation = self.queue.generation,
+        };
         defer self.finishQuit();
-        const reply = self.request(.resolve, windows.number(target), "", &.{}) catch return;
+        const reply = self.requestUsing(.resolve, windows.number(target), "", &.{}, exchange) catch |failure| {
+            if (!self.channelLookupCurrent(origin)) return;
+            channel.failure = if (self.cleanupNotice(failure) != null)
+                error.ChannelLookupWorkerExit
+            else if (failure == error.WorkerTimeout)
+                error.ChannelLookupTimeout
+            else
+                error.ChannelLookupCommunication;
+            return;
+        };
         defer reply.deinit();
-        var current_owner: win.DWORD = 0;
-        _ = win.GetWindowThreadProcessId(target, &current_owner);
-        if (self.quitting or self.target != target or owner != current_owner or !reply.is("ok") or reply.field("Channel").len == 0) return;
+        if (!self.channelLookupCurrent(origin) or reply.is("changed") or reply.is("cancelled")) return;
+        channel.failure = error.ChannelLookupResult;
+        if (!reply.is("ok")) {
+            if (diagnostic.ResolveFailure.fromWorker(reply.field("Detail"))) |reason| {
+                channel.failure = switch (reason) {
+                    .network => error.ChannelLookupNetwork,
+                    .metadata => error.ChannelLookupMetadata,
+                    .automation => error.ChannelLookupAutomation,
+                };
+            }
+            return;
+        }
+        if (reply.field("Channel").len == 0) return;
         const author = channel.allocator.dupe(u8, reply.field("Author")) catch return;
         const key = channel.allocator.dupe(u8, reply.field("Channel")) catch {
             channel.allocator.free(author);
@@ -562,6 +611,7 @@ const App = struct {
         channel.channel = key;
         channel.target = windows.number(target);
         channel.target_pid = owner;
+        channel.failure = null;
     }
 
     fn libraryChanged(self: *App) void {
@@ -1751,7 +1801,7 @@ const App = struct {
             else
                 null;
             const text = current_update.text[0..current_update.len];
-            const status_updated = self.palette.message == null or windows.setTextChecked(self.palette.message, text);
+            const status_updated = self.palette.reaction_notice == null or windows.setTextChecked(self.palette.reaction_notice, text);
             if (self.pending_reaction_progress != null or (terminal and current_update.revision != self.reaction_revision)) continue;
             const overlay_updated = self.reaction_progress.update(text, self.keyboard.tracker.bindings, current_update.phase);
             self.reaction_render_at = win.GetTickCount64();
@@ -1868,8 +1918,8 @@ const App = struct {
     fn paletteReaction(self: *App, options: view.ReactionOptions, save: bool) void {
         if (self.updating_reaction_buttons or !self.canEdit() or self.manager.isEditing()) return;
         if (save) {
-            self.saveReactionDefaults(options) catch return self.report("標準設定を保存できませんでした。");
-            return self.report("リアクションの標準設定を保存しました。");
+            self.saveReactionDefaults(options) catch return self.palette.settingsStatus("標準設定を保存できませんでした。");
+            return self.palette.settingsStatus("リアクションの標準設定を保存しました。ショートカット実行にも使います。");
         }
         const origin = self.reactionOrigin();
         if (origin.foreground != self.palette.window) return self.publishReactionResult(.wrong_window, null, "");
@@ -1891,6 +1941,13 @@ const App = struct {
     fn startPreparation(self: *App, mode: transport.Mode) void {
         if (!self.canEdit() or self.manager.isEditing()) return;
         const origin = self.reactionOrigin();
+        if (origin.foreground != null and origin.foreground == self.manager.window and input.browser(origin.target) == null) {
+            const result = feedback.Result.init(.wrong_window, null, "YouTubeを前面にし、パレットを開いて対象を選んでください。");
+            var summary: [reaction_summary_capacity]u8 = undefined;
+            self.manager.setNotice(result.summary(&summary));
+            if (self.reactionContextCurrent(origin)) self.showReactionResult(result) else result.deinit();
+            return;
+        }
         const target = windows.number(origin.target);
         const context = self.reactionContext(origin) orelse return;
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
@@ -2368,6 +2425,113 @@ test "palette operation buttons follow the worker wait, search publication and s
     try std.testing.expect(Probe.observed_waits == 2 and Probe.observed_draws >= 4 and Probe.blocked and Probe.forwarded == 0);
 }
 
+test "management channel lookup distinguishes current failures and drops obsolete notifications" {
+    const Probe = struct {
+        const Case = enum { no_target, no_result, network, metadata, automation, transport_error, timeout, changed_page, retargeted, stopped };
+        threadlocal var scenario: Case = .no_target;
+        threadlocal var requests: usize = 0;
+        threadlocal var alternate: win.HWND = null;
+
+        fn browser(hwnd: win.HWND) ?[]const u8 {
+            return if (hwnd != null) "brave" else null;
+        }
+
+        fn exchange(client: *transport.Client, heap: std.mem.Allocator, _: [:0]const u16, mode: transport.Mode, target: usize, expected: []const u8, fields: []const transport.Field, _: transport.Pump) !transport.Reply {
+            const app = current.?;
+            try std.testing.expect(mode == .resolve and target == windows.number(app.target));
+            try std.testing.expect(expected.len == 0 and fields.len == 0);
+            requests += 1;
+            client.active = true;
+            defer client.active = false;
+            const data = switch (scenario) {
+                .no_target => return error.UnexpectedChannelLookup,
+                .no_result => "State=unavailable\nDetail=unrecognized detail",
+                .network => "State=unavailable\nDetail=HttpResponseFailed",
+                .metadata => "State=unavailable\nDetail=MissingAuthor",
+                .automation => "State=unavailable\nDetail=AutomationUnavailable",
+                .transport_error => return error.WorkerWaitFailed,
+                .timeout => return error.WorkerTimeout,
+                .changed_page => "State=changed\nDetail=old detail",
+                .retargeted => {
+                    app.target = alternate;
+                    return error.WorkerWaitFailed;
+                },
+                .stopped => {
+                    app.stop();
+                    return error.WorkerTimeout;
+                },
+            };
+            return .{ .alloc = heap, .payload = try heap.dupe(u8, data) };
+        }
+
+        fn host(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+            const app = current orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
+            if (message == management.wm_edit_allowed) return @intFromBool(app.canEdit());
+            if (message == management.wm_resolve_channel) {
+                const request: *management.ChannelRequest = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                app.resolveChannelUsing(request, browser, exchange);
+                return 0;
+            }
+            return win.DefWindowProcW(hwnd, message, wparam, lparam);
+        }
+    };
+    const t = std.testing;
+    var directory = t.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(t.allocator, ".");
+    defer t.allocator.free(root);
+    const path = try std.fs.path.join(t.allocator, &.{ root, "settings.db" });
+    defer t.allocator.free(path);
+    var db = try storage.Store.open(t.allocator, path);
+    defer db.close();
+    var app: App = .{
+        .executable = windows.wide("channel-lookup-fixture.exe"),
+        .db = &db,
+        .snapshot = try db.load(t.allocator),
+        .history = storage.LibraryHistory.init(t.allocator),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    current = &app;
+    defer current = null;
+    var wc = std.mem.zeroes(win.WNDCLASSW);
+    wc.hInstance = win.GetModuleHandleW(null);
+    wc.lpszClassName = windows.wide("ChatPalette.ChannelLookupNoticeTest");
+    wc.lpfnWndProc = Probe.host;
+    try t.expect(win.RegisterClassW(&wc) != 0);
+    app.window = win.CreateWindowExW(0, wc.lpszClassName, windows.wide(""), 0, 0, 0, 1, 1, null, null, wc.hInstance, null) orelse
+        return error.CreateChannelLookupHost;
+    Probe.alternate = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 1, 1, null, null, wc.hInstance, null) orelse
+        return error.CreateAlternateChannelTarget;
+    defer _ = win.DestroyWindow(Probe.alternate);
+    try app.manager.open(app.window, &db, &app.snapshot, &app.history);
+    const prior = "以前の管理通知";
+    for ([_]struct { scenario: Probe.Case, expected: []const u8 }{
+        .{ .scenario = .no_target, .expected = "通知：YouTubeを前面にし、Ctrl+Alt+Q でパレットを開いて連携してください。" },
+        .{ .scenario = .no_result, .expected = "通知：チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。" },
+        .{ .scenario = .network, .expected = "通知：YouTubeから配信者情報を受け取れませんでした。" },
+        .{ .scenario = .metadata, .expected = "通知：YouTubeから受け取った配信者情報を確認できませんでした。" },
+        .{ .scenario = .automation, .expected = "通知：ブラウザーから動画情報を確認できませんでした。" },
+        .{ .scenario = .transport_error, .expected = "通知：補助プロセスと通信できず、チャンネルを確認できませんでした。" },
+        .{ .scenario = .timeout, .expected = "通知：チャンネルを確認する補助プロセスの応答が時間内に届きませんでした。" },
+        .{ .scenario = .changed_page, .expected = prior },
+        .{ .scenario = .retargeted, .expected = prior },
+        .{ .scenario = .stopped, .expected = prior },
+    }) |sample| {
+        Probe.scenario = sample.scenario;
+        Probe.requests = 0;
+        app.target = if (sample.scenario == .no_target) null else app.window;
+        windows.setText(app.manager.notice, prior);
+        app.manager.linkFromPalette();
+        const notice = try windows.text(app.manager.notice, t.allocator);
+        defer t.allocator.free(notice);
+        try t.expectEqualStrings(sample.expected, notice);
+        try t.expectEqual(@as(usize, if (sample.scenario == .no_target) 0 else 1), Probe.requests);
+        try t.expect(!app.manager.isEditing() and !app.worker.active);
+    }
+    try t.expectEqual(@as(usize, 0), app.history.length);
+}
+
 test "desktop records the communication cause and an unconfirmed worker exit together" {
     const testing = std.testing;
     const Probe = struct {
@@ -2586,6 +2750,28 @@ test "diagnostics derive phases from pending and live reaction work" {
     try testing.expectEqual(diagnostic.Phase.finished, app.diagnosticReactionPhase(5000));
 }
 
+test "reaction progress preserves palette input and settings notices" {
+    const testing = std.testing;
+    var app: App = .{ .executable = undefined, .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null };
+    try app.palette.open(null);
+    defer app.palette.close();
+    app.window = app.palette.window;
+    app.palette.status("入力欄を確認してください。");
+    app.palette.loadReactionDefaults(.{});
+    try app.openReactionProgress();
+    defer app.reaction_progress.close();
+    app.updateReactionProgress("リアクションの操作が完了しました。", .finished);
+    const input_notice = try windows.text(app.palette.message, testing.allocator);
+    defer testing.allocator.free(input_notice);
+    const reaction_notice = try windows.text(app.palette.reaction_notice, testing.allocator);
+    defer testing.allocator.free(reaction_notice);
+    const settings_notice = try windows.text(app.palette.settings_notice, testing.allocator);
+    defer testing.allocator.free(settings_notice);
+    try testing.expectEqualStrings("入力欄を確認してください。", input_notice);
+    try testing.expectEqualStrings("リアクションの操作が完了しました。", reaction_notice);
+    try testing.expectEqualStrings("標準設定を読み込みました。変更は今回の実行だけに適用します。", settings_notice);
+}
+
 test "stop invalidates a reaction context even before a preparation or send job exists" {
     var app: App = .{
         .executable = undefined,
@@ -2697,7 +2883,7 @@ test "a stop reentered from progress rendering leaves the terminal controls and 
     };
     defer app.reaction_progress.close();
     defer if (app.reaction_result) |result| result.deinit();
-    app.palette.message = status;
+    app.palette.reaction_notice = status;
     app.reaction_clock = try std.time.Timer.start();
     app.reaction = .{
         .target = 1,
@@ -2818,7 +3004,7 @@ test "reaction buttons reconcile a stop while starting and a replacement while r
     try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
     try testing.expect(win.IsWindowEnabled(start) != 0 and win.IsWindowEnabled(stop_button) == 0);
 
-    app.palette.message = status;
+    app.palette.reaction_notice = status;
     try app.queue.enqueue(allocator, .{ .action = .reaction, .window = 1 }, 0, null);
     const generation = app.queue.generation;
     try testing.expect(win.SetWindowSubclass(status, Reentry.duringTerminalStatus, 2, @intFromPtr(&probe)) != 0);
