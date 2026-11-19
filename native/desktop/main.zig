@@ -967,9 +967,10 @@ const App = struct {
     fn drain(self: *App) void {
         if (self.worker.active or self.reaction != null or self.preparation != null or self.modal or self.quitting) return;
         const command = self.queue.next() orelse return;
-        if (command.event.action == .reaction) self.starting_reaction = command;
+        const quick = command.event.action == .reaction;
+        if (quick) self.starting_reaction = command;
         const success = self.execute(command) catch |failure| result: {
-            if (command.event.action == .reaction) {
+            if (quick) {
                 var detail: [256]u8 = undefined;
                 if (!self.quitting and self.quickReactionStarting())
                     _ = self.failReactionStart(self.workerFailureReason(failure), self.workerFailureDetail(failure, &detail));
@@ -980,10 +981,12 @@ const App = struct {
             }
             break :result false;
         };
-        self.starting_reaction = null;
-        // The timer job owns this command until the last requested operation is acknowledged.
-        if (success and command.event.action == .reaction) return;
-        self.queue.finish(command, success);
+        // Quick start can hand off to a timer job or release the command before publishing a failure.
+        if (!quick or self.starting_reaction != null) {
+            self.starting_reaction = null;
+            self.queue.finish(command, success);
+        }
+        if (self.reaction != null) return;
         self.updateReactionButtons();
         self.finishQuit();
         if (!self.quitting and self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
@@ -1316,7 +1319,9 @@ const App = struct {
     }
 
     fn failReactionStart(self: *App, reason: feedback.Reason, detail: []const u8) bool {
+        const command = self.starting_reaction;
         self.starting_reaction = null;
+        if (command) |starting| self.queue.finish(starting, false);
         self.showReactionResult(feedback.Result.quickStart(reason, detail));
         return false;
     }
@@ -2231,6 +2236,7 @@ test "reaction buttons reconcile a stop while starting and a replacement while r
         app: *App,
         replacement: ?operations.Reaction = null,
         replacement_started: bool = false,
+        replacement_enqueue_error: ?anyerror = null,
 
         fn duringEnable(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, id: win.UINT_PTR, data: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
             if (message == win.WM_ENABLE) {
@@ -2238,6 +2244,19 @@ test "reaction buttons reconcile a stop while starting and a replacement while r
                 const probe: *@This() = @ptrFromInt(data);
                 if (probe.replacement) |job| probe.replacement_started = probe.app.startReaction(job, 1000);
                 probe.app.stop();
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+
+        fn duringTerminalStatus(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, id: win.UINT_PTR, data: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            if (message == win.WM_SETTEXT) {
+                _ = win.RemoveWindowSubclass(hwnd, duringTerminalStatus, id);
+                const probe: *@This() = @ptrFromInt(data);
+                probe.app.queue.enqueue(allocator, .{ .action = .reaction, .window = 1 }, 0, null) catch |failure| {
+                    probe.replacement_enqueue_error = failure;
+                    return win.DefSubclassProc(hwnd, message, wparam, lparam);
+                };
+                probe.app.reaction_revision +%= 1;
             }
             return win.DefSubclassProc(hwnd, message, wparam, lparam);
         }
@@ -2251,10 +2270,13 @@ test "reaction buttons reconcile a stop while starting and a replacement while r
         return error.TestReactionStartControl;
     const stop_button = win.CreateWindowExW(0, windows.wide("BUTTON"), windows.wide(""), win.WS_CHILD, 0, 0, 20, 20, host, null, module, null) orelse
         return error.TestReactionStopControl;
+    const status = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), win.WS_CHILD, 0, 0, 20, 20, host, null, module, null) orelse
+        return error.TestReactionStatusControl;
     var app: App = .{ .executable = undefined, .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null, .window = host };
     defer app.reaction_progress.close();
     defer app.cancelReactionTimer();
     defer if (app.reaction_result) |result| result.deinit();
+    defer app.queue.deinit(allocator);
     app.palette.start_button = start;
     app.palette.stop_button = stop_button;
     app.updateReactionButtons();
@@ -2281,6 +2303,19 @@ test "reaction buttons reconcile a stop while starting and a replacement while r
     try testing.expectEqual(@as(u32, 5), app.reaction_result.?.counts.?.total);
     try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
     try testing.expect(win.IsWindowEnabled(start) != 0 and win.IsWindowEnabled(stop_button) == 0);
+
+    app.palette.message = status;
+    try app.queue.enqueue(allocator, .{ .action = .reaction, .window = 1 }, 0, null);
+    const generation = app.queue.generation;
+    try testing.expect(win.SetWindowSubclass(status, Reentry.duringTerminalStatus, 2, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(status, Reentry.duringTerminalStatus, 2);
+    app.drain();
+    try testing.expectEqual(@as(?anyerror, null), probe.replacement_enqueue_error);
+    try testing.expectEqual(@as(usize, 1), app.queue.pending.items.len);
+    try testing.expect(!app.queue.active and app.queue.pending.items[0].generation != generation);
+    try testing.expectEqual(feedback.Reason.wrong_window, app.reaction_result.?.reason);
+    try testing.expectEqual(@as(u32, 0), app.reaction_result.?.counts.?.completed);
+    try testing.expect(win.IsWindowEnabled(start) == 0 and win.IsWindowEnabled(stop_button) != 0);
 }
 
 test "registration display reads only the selected browser and preserves operation state on read failure" {
