@@ -364,6 +364,35 @@ fn captureDetail(
     try out.append(allocator, ']');
 }
 
+fn imageBelongsToButton(client: *uia.Client, image: *win.Element, button: *win.Element) !bool {
+    var current = try win.objectOrNull(win.Element, "GetParentElement", client.raw, .{image});
+    defer if (current) |element| win.release(element);
+    for (0..7) |_| {
+        const element = current orelse return false;
+        if (try client.same(element, button)) return true;
+        if (try win.get(i32, "get_CurrentControlType", element, .{}) == sdk.UIA_ButtonControlTypeId) return false;
+        current = try win.objectOrNull(win.Element, "GetParentElement", client.raw, .{element});
+        win.release(element);
+    }
+    return false;
+}
+
+fn matchingButton(client: *uia.Client, candidates: []const CaptureRecord, first: usize, second: usize, reaction_kind: usize) ?usize {
+    const button, const image = if (candidates[first].token.type == sdk.UIA_ButtonControlTypeId)
+        .{ first, second }
+    else
+        .{ second, first };
+    if (candidates[button].token.type != sdk.UIA_ButtonControlTypeId or candidates[image].token.type != sdk.UIA_ImageControlTypeId)
+        return null;
+    for (0..labels.len) |kind| {
+        if (kind != reaction_kind and (aliasMatches(candidates[button].token, kind) or aliasMatches(candidates[image].token, kind)))
+            return null;
+    }
+    // Firefox can expose an invokable image with the same label inside its button.
+    if (!(imageBelongsToButton(client, candidates[image].element, candidates[button].element) catch false)) return null;
+    return button;
+}
+
 pub fn capture(allocator: std.mem.Allocator, client: *uia.Client, window: *uia.Window, point: win.Point, page: ?*win.Element) !Capture {
     const invoke = try win.booleanCondition(client.automation, sdk.UIA_IsInvokePatternAvailablePropertyId);
     defer win.release(invoke);
@@ -392,6 +421,7 @@ pub fn capture(allocator: std.mem.Allocator, client: *uia.Client, window: *uia.W
         var tokens: [5]Token = undefined;
         var matches = [_]usize{0} ** 5;
         var selected = [_]usize{0} ** 5;
+        var duplicates: [5]usize = undefined;
         var candidates: std.ArrayList(CaptureRecord) = .empty;
         defer for (candidates.items) |candidate| win.release(candidate.element);
         var i: i32 = 0;
@@ -411,7 +441,15 @@ pub fn capture(allocator: std.mem.Allocator, client: *uia.Client, window: *uia.W
                     tokens[n] = token;
                     selected[n] = index;
                 }
+                if (matches[n] == 2) duplicates[n] = index;
             }
+        }
+        for (0..5) |n| {
+            if (matches[n] != 2) continue;
+            const button_index = matchingButton(client, candidates.items, selected[n], duplicates[n], n) orelse continue;
+            matches[n] = 1;
+            selected[n] = button_index;
+            tokens[n] = candidates.items[button_index].token;
         }
         if (std.mem.allEqual(usize, &matches, 1) and validTokens(tokens)) return .{ .tokens = tokens };
         if (depth != 0) try diagnostics.appendSlice(allocator, " / ");
@@ -423,6 +461,37 @@ pub fn capture(allocator: std.mem.Allocator, client: *uia.Client, window: *uia.W
     var limit: std.ArrayList(u8) = .empty;
     try appendLimited(&limit, allocator, diagnostics.items, 5000);
     return .{ .detail = limit.items };
+}
+
+test "registration counts a reaction button and its image once but rejects other duplicates" {
+    const provider = @import("uia_test_provider.zig");
+    var client = provider.client();
+    var menu: provider.Node = .{ .kind = sdk.UIA_GroupControlTypeId };
+    var button: provider.Node = .{ .kind = sdk.UIA_ButtonControlTypeId, .parent = &menu };
+    var other_button: provider.Node = .{ .kind = sdk.UIA_ButtonControlTypeId, .parent = &menu };
+    var wrapper: provider.Node = .{ .kind = sdk.UIA_GroupControlTypeId, .parent = &button };
+    var image: provider.Node = .{ .kind = sdk.UIA_ImageControlTypeId, .parent = &wrapper };
+    var candidates = [_]CaptureRecord{
+        .{ .token = .{ .name = "Heart", .id = "", .class = "", .type = button.kind }, .element = &button.element },
+        .{ .token = .{ .name = "Heart", .id = "", .class = "", .type = image.kind }, .element = &image.element },
+    };
+    try std.testing.expectEqual(@as(?usize, 0), matchingButton(&client, &candidates, 0, 1, 0));
+    try std.testing.expectEqual(@as(?usize, 0), matchingButton(&client, &candidates, 1, 0, 0));
+
+    candidates[1].token.name = "Heart Smile";
+    try std.testing.expect(matchingButton(&client, &candidates, 0, 1, 0) == null);
+    candidates[1].token.name = "Heart";
+
+    image.parent = &other_button;
+    try std.testing.expect(matchingButton(&client, &candidates, 0, 1, 0) == null);
+    image.parent = &wrapper;
+    wrapper.parent_fails = true;
+    try std.testing.expect(matchingButton(&client, &candidates, 0, 1, 0) == null);
+    candidates[1].element = &other_button.element;
+    candidates[1].token.type = other_button.kind;
+    try std.testing.expect(matchingButton(&client, &candidates, 0, 1, 0) == null);
+    for ([_]*provider.Node{ &menu, &button, &other_button, &wrapper, &image }) |node|
+        try node.expectReleased();
 }
 
 test "a bad registration cannot replace live selectors and aliases cover all five kinds" {
