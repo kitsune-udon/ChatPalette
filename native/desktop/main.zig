@@ -1291,7 +1291,7 @@ const App = struct {
     }
 
     fn insertFromPalette(self: *App, index: usize) void {
-        if (self.modal) return;
+        if (self.modal or self.palette.refreshing or self.palette.refresh_failed) return;
         const context = self.paletteContext();
         self.deliverPaletteItem(index, context) catch |failure| {
             if (self.paletteContextCurrent(context) and (self.foreground(windows.number(context.target)) or
@@ -2619,6 +2619,7 @@ test "saved library edits and imports report view failures and recover without r
     const Fault = struct {
         fn rejectRefresh(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: usize, _: usize) callconv(.winapi) win.LRESULT {
             if (message == win.CB_ADDSTRING) return win.CB_ERRSPACE;
+            if (message == win.LB_ADDSTRING) return win.LB_ERRSPACE;
             if (message == win.LVM_SETITEMCOUNT) return 0;
             return win.DefSubclassProc(hwnd, message, wparam, lparam);
         }
@@ -2661,8 +2662,8 @@ test "saved library edits and imports report view failures and recover without r
     const duplicate_id: win.WPARAM = @intCast(win.GetDlgCtrlID(duplicate));
 
     {
-        try testing.expect(win.SetWindowSubclass(app.palette.profile, Fault.rejectRefresh, 1, 0) != 0);
-        defer _ = win.RemoveWindowSubclass(app.palette.profile, Fault.rejectRefresh, 1);
+        try testing.expect(win.SetWindowSubclass(app.palette.list, Fault.rejectRefresh, 1, 0) != 0);
+        defer _ = win.RemoveWindowSubclass(app.palette.list, Fault.rejectRefresh, 1);
         _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, duplicate_id, @bitCast(@intFromPtr(duplicate)));
         const duplicate_notice = try windows.text(app.manager.notice, heap);
         defer heap.free(duplicate_notice);

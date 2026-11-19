@@ -501,10 +501,14 @@ pub const Management = struct {
     }
 
     fn changed(self: *Management, new_selection: ?[]const u8) void {
+        self.changedWithNotice(new_selection, "保存しました。");
+    }
+
+    fn changedWithNotice(self: *Management, new_selection: ?[]const u8, success: []const u8) void {
         setIdentity(&self.selection, new_selection orelse "") catch {};
         self.refresh();
         const palette_failed = win.SendMessageW(self.host, wm_changed, 0, 0) != 0;
-        windows.setText(self.notice, savedViewWarning(self.refreshFailed(), palette_failed) orelse "保存しました。");
+        windows.setText(self.notice, savedViewWarning(self.refreshFailed(), palette_failed) orelse success);
     }
 
     fn showError(self: Management, err: anyerror) void {
@@ -595,7 +599,8 @@ pub const Management = struct {
 
     fn runItemCommand(self: *Management, value: storage.ItemCommand) !void {
         const selected = try self.history.item(self.db, self.snapshot, self.editingId(), value);
-        self.changed(selected);
+        if (selected == null and (value == .up or value == .down)) return;
+        self.changedWithNotice(selected, if (value == .delete) "削除しました。" else "保存しました。");
     }
 
     fn profileMenu(self: *Management) !void {

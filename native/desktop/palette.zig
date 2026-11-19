@@ -62,6 +62,7 @@ pub const Palette = struct {
     refreshing: bool = false,
     resetting_search: bool = false,
     refresh_failed: bool = false,
+    scope_refresh_failed: bool = false,
     detected_profile: bool = false,
 
     pub fn open(self: *Palette, host: win.HWND) !void {
@@ -155,23 +156,31 @@ pub const Palette = struct {
         const refreshing = self.refreshing;
         self.refreshing = true;
         defer self.refreshing = refreshing;
-        self.refresh_failed = false;
-        self.profile_choices.clear();
+        self.scope_refresh_failed = false;
         self.data = data;
         _ = win.SendMessageW(self.mode, win.CB_SETCURSEL, if (data.preferences.auto_mode) 0 else 1, 0);
-        _ = win.SendMessageW(self.profile, win.CB_RESETCONTENT, 0, 0);
-        if (!addText(self.profile, win.CB_ADDSTRING, "配信者未選択")) self.refresh_failed = true;
+        if (!self.profile_choices.sameNames(data.profiles)) {
+            self.profile_choices.clear();
+            _ = win.SendMessageW(self.profile, win.CB_RESETCONTENT, 0, 0);
+            if (!addText(self.profile, win.CB_ADDSTRING, "配信者未選択")) self.scope_refresh_failed = true;
+            for (data.profiles) |profile| {
+                if (!addText(self.profile, win.CB_ADDSTRING, profile.name)) self.scope_refresh_failed = true;
+            }
+        }
         const profile_id = self.visibleProfileId();
         var selected: usize = 0;
         for (data.profiles, 1..) |profile, index| {
-            if (!addText(self.profile, win.CB_ADDSTRING, profile.name)) self.refresh_failed = true;
-            if (std.mem.eql(u8, profile.id, profile_id)) selected = index;
+            if (std.mem.eql(u8, profile.id, profile_id)) {
+                selected = index;
+                break;
+            }
         }
-        if (self.window != null and !self.refresh_failed) self.profile_choices.publish(data.profiles) catch {
-            self.refresh_failed = true;
+        if (self.window != null and !self.scope_refresh_failed) self.profile_choices.publish(data.profiles) catch {
+            self.scope_refresh_failed = true;
         };
-        _ = win.EnableWindow(self.profile, @intFromBool(!data.preferences.auto_mode and !self.refresh_failed));
-        _ = win.SendMessageW(self.profile, win.CB_SETCURSEL, selected, 0);
+        _ = win.EnableWindow(self.profile, @intFromBool(!data.preferences.auto_mode and !self.scope_refresh_failed));
+        if (win.SendMessageW(self.profile, win.CB_GETCURSEL, 0, 0) != @as(win.LRESULT, @intCast(selected)))
+            _ = win.SendMessageW(self.profile, win.CB_SETCURSEL, selected, 0);
         self.refreshItems();
     }
 
@@ -259,10 +268,7 @@ pub const Palette = struct {
         self.refreshing = true;
         defer self.refreshing = refreshing;
         self.cancelSearch();
-        const raw_query = windows.text(self.search, allocator) catch {
-            self.refresh_failed = true;
-            return;
-        };
+        const raw_query = windows.text(self.search, allocator) catch return self.failItemRefresh();
         defer allocator.free(raw_query);
         const query = std.mem.trim(u8, raw_query, " \t");
         _ = win.SendMessageW(self.list, win.WM_SETREDRAW, 0, 0);
@@ -275,7 +281,7 @@ pub const Palette = struct {
         var truncated = false;
         if (self.data.findProfile(self.visibleProfileId())) |profile| {
             for (profile.items) |item| {
-                if (self.addMatch(query, item, profile.name, profile.id)) {
+                if (self.addMatch(query, item, profile.name, profile.id) catch return self.failItemRefresh()) {
                     truncated = true;
                     break;
                 }
@@ -283,12 +289,13 @@ pub const Palette = struct {
         }
         if (!truncated) {
             for (self.data.shared_items) |item| {
-                if (self.addMatch(query, item, "共通", "")) {
+                if (self.addMatch(query, item, "共通", "") catch return self.failItemRefresh()) {
                     truncated = true;
                     break;
                 }
             }
         }
+        self.refresh_failed = self.scope_refresh_failed;
         windows.setText(self.search_hint, if (truncated)
             "先頭500件を表示しています。検索で絞り込んでください。"
         else if (self.count > 0)
@@ -306,19 +313,21 @@ pub const Palette = struct {
         self.showSelection();
     }
 
-    fn addMatch(self: *Palette, query: []const u8, item: storage.Item, scope: []const u8, profile_id: []const u8) bool {
+    fn failItemRefresh(self: *Palette) void {
+        self.refresh_failed = true;
+        self.count = 0;
+        _ = win.SendMessageW(self.list, win.LB_RESETCONTENT, 0, 0);
+        windows.setText(self.search_hint, "弾幕一覧を更新できませんでした。検索し直してください。");
+        self.showSelection();
+    }
+
+    fn addMatch(self: *Palette, query: []const u8, item: storage.Item, scope: []const u8, profile_id: []const u8) !bool {
         if (!matchesQuery(query, item)) return false;
         if (self.count == self.rows.len) return true;
         const key = if (item.slot == 0) "" else self.data.preferences.shortcut_keys[(if (profile_id.len == 0) @as(usize, 3) else 1) + item.slot - 1];
-        const text = std.fmt.allocPrint(allocator, "{s}　{s}{s}{s}{s}", .{ scope, item.name, if (key.len > 0) "　[" else "", key, if (key.len > 0) "]" else "" }) catch {
-            self.refresh_failed = true;
-            return false;
-        };
+        const text = try std.fmt.allocPrint(allocator, "{s}　{s}{s}{s}{s}", .{ scope, item.name, if (key.len > 0) "　[" else "", key, if (key.len > 0) "]" else "" });
         defer allocator.free(text);
-        if (!addText(self.list, win.LB_ADDSTRING, text)) {
-            self.refresh_failed = true;
-            return false;
-        }
+        if (!addText(self.list, win.LB_ADDSTRING, text)) return error.RenderPaletteRow;
         self.rows[self.count] = .{ .item = item, .profile_id = profile_id };
         self.count += 1;
         return false;
@@ -334,9 +343,9 @@ pub const Palette = struct {
     }
 
     fn insert(self: *Palette) void {
-        if (self.settleSearchForAction()) return;
+        if (self.refreshing or self.settleSearchForAction() or self.refresh_failed) return;
         const index = win.SendMessageW(self.list, win.LB_GETCURSEL, 0, 0);
-        if (index >= 0 and index < self.count)
+        if (!self.refreshing and !self.refresh_failed and index >= 0 and index < self.count)
             _ = win.SendMessageW(self.host, wm_insert, @intCast(index), 0);
     }
 
@@ -481,6 +490,38 @@ test "palette matches across name and text and folds Unicode case" {
     try std.testing.expect(!matchesQuery("別", item));
 }
 
+test "palette keeps unchanged native labels and replaces their displayed ID mapping" {
+    const Probe = struct {
+        fn countResets(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, reference: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const resets: *usize = @ptrFromInt(reference);
+            if (message == win.CB_RESETCONTENT) resets.* += 1;
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+    var palette: Palette = .{};
+    defer palette.close();
+    try palette.open(null);
+    var resets: usize = 0;
+    try std.testing.expect(win.SetWindowSubclass(palette.profile, Probe.countResets, 6, @intFromPtr(&resets)) != 0);
+    defer _ = win.RemoveWindowSubclass(palette.profile, Probe.countResets, 6);
+
+    var profiles = [_]storage.Profile{ .{ .id = "one", .name = "Same" }, .{ .id = "two", .name = "Same" } };
+    var data: storage.Data = .{ .profiles = &profiles, .preferences = .{ .auto_mode = false, .input_profile_id = "two" } };
+    palette.refresh(data);
+    palette.refresh(data);
+    try std.testing.expectEqual(@as(usize, 1), resets);
+    try std.testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(palette.profile, win.CB_GETCURSEL, 0, 0));
+    profiles[1].id = "replacement";
+    data.preferences.input_profile_id = "replacement";
+    palette.refresh(data);
+    try std.testing.expectEqual(@as(usize, 1), resets);
+    try std.testing.expectEqualStrings("replacement", palette.profile_choices.resolve(data, 2).?);
+    profiles[1].name = "same";
+    palette.refresh(data);
+    try std.testing.expectEqual(@as(usize, 2), resets);
+    try std.testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(palette.profile, win.CB_GETCURSEL, 0, 0));
+}
+
 test "compact palette leaves room for the registration row and the bottom guidance" {
     var palette: Palette = .{};
     defer palette.close();
@@ -559,10 +600,12 @@ test "scheduled palette search delays only large current scopes and settles befo
         inputs: usize = 0,
         edits: usize = 0,
         redraws: usize = 0,
+        reject_row: bool = false,
 
         fn observeList(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, reference: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
             const self: *@This() = @ptrFromInt(reference);
             if (message == win.LB_RESETCONTENT) self.redraws += 1;
+            if (message == win.LB_ADDSTRING and self.reject_row) return win.LB_ERRSPACE;
             return win.DefSubclassProc(hwnd, message, wparam, lparam);
         }
 
@@ -658,6 +701,21 @@ test "scheduled palette search delays only large current scopes and settles befo
     palette.searchTimer(due + 100, true);
     try std.testing.expectEqualStrings("item-200", palette.rows[0].item.id);
     try std.testing.expectEqual(before_hide + 2, probe.redraws);
+
+    probe.reject_row = true;
+    windows.setText(palette.search, "alpha");
+    palette.flushSearch();
+    try std.testing.expect(palette.refresh_failed and palette.count == 0);
+    try std.testing.expectEqual(@as(win.LRESULT, 0), win.SendMessageW(palette.list, win.LB_GETCOUNT, 0, 0));
+    palette.insert();
+    try std.testing.expectEqual(@as(usize, 1), probe.inputs);
+
+    probe.reject_row = false;
+    windows.setText(palette.search, "beta");
+    palette.flushSearch();
+    try std.testing.expect(!palette.refresh_failed and win.IsWindowEnabled(palette.insert_button) != 0);
+    palette.insert();
+    try std.testing.expectEqual(@as(usize, 2), probe.inputs);
 }
 
 test "resetting the imported library clears the native search and drops the old selection" {
