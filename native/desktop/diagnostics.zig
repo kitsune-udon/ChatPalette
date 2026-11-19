@@ -144,6 +144,36 @@ pub const WorkerFailure = struct {
     }
 };
 
+pub const ResolveFailure = enum {
+    network,
+    metadata,
+    automation,
+
+    pub fn fromWorker(detail: []const u8) ?ResolveFailure {
+        const reasons = std.StaticStringMap(ResolveFailure).initComptime(.{
+            .{ "HttpOpenFailed", .network },
+            .{ "HttpSetupFailed", .network },
+            .{ "HttpConnectionFailed", .network },
+            .{ "HttpRequestFailed", .network },
+            .{ "HttpResponseFailed", .network },
+            .{ "HttpReadFailed", .network },
+            .{ "MetadataTooLarge", .metadata },
+            .{ "MissingAuthor", .metadata },
+            .{ "InvalidChannel", .metadata },
+            .{ "AutomationUnavailable", .automation },
+        });
+        return reasons.get(detail);
+    }
+
+    pub fn message(self: ResolveFailure) []const u8 {
+        return switch (self) {
+            .network => "YouTubeから配信者情報を受け取れませんでした。",
+            .metadata => "YouTubeから受け取った配信者情報を確認できませんでした。",
+            .automation => "ブラウザーから動画情報を確認できませんでした。",
+        };
+    }
+};
+
 /// Only diagnostic conditions are admitted. Worker reply text, window identity,
 /// profiles, item text and local paths have no field in the displayed document.
 pub const Snapshot = struct {
@@ -154,6 +184,7 @@ pub const Snapshot = struct {
     state: State,
     elapsed_ms: u64,
     worker_failure: ?WorkerFailure = null,
+    resolve_failure: ?ResolveFailure = null,
     stop_failure: ?anyerror = null,
     phase: Phase,
     worker_running: bool,
@@ -180,7 +211,7 @@ pub const Snapshot = struct {
                 @tagName(page.action), page.stage.label(), @tagName(page.state), page.browser.label(),
             });
         } else "";
-        return std.fmt.bufPrint(buffer, "ChatPalette {s}\r\nWindows x64\r\n配布物 {s}\r\nブラウザー {s}\r\n直近の操作 {s}\r\n結果 {s}{s}\r\n処理時間 {d} ms{s}{s}{s}{s}\r\nリアクション {s} ({s})\r\n補助プロセス {s}\r\n自動判別 {s}\r\nDB形式 5   JSON形式 2\r\n再起動は現在の展開先の ChatPalette.exe から行います。", .{
+        return std.fmt.bufPrint(buffer, "ChatPalette {s}\r\nWindows x64\r\n配布物 {s}\r\nブラウザー {s}\r\n直近の操作 {s}\r\n結果 {s}{s}\r\n処理時間 {d} ms{s}{s}{s}{s}{s}{s}\r\nリアクション {s} ({s})\r\n補助プロセス {s}\r\n自動判別 {s}\r\nDB形式 5   JSON形式 2\r\n再起動は現在の展開先の ChatPalette.exe から行います。", .{
             version,
             self.distribution.label(),
             browser.label(),
@@ -190,6 +221,8 @@ pub const Snapshot = struct {
             elapsed_ms,
             if (failure.len != 0) "\r\n" else "",
             failure,
+            if (self.resolve_failure != null) "\r\n配信者の自動判定 " else "",
+            if (self.resolve_failure) |reason| reason.message() else "",
             if (self.stop_failure != null) "\r\n終了操作での補助プロセス終了失敗 " else "",
             if (self.stop_failure) |value| @errorName(value) else "",
             self.phase.label(),
@@ -199,3 +232,11 @@ pub const Snapshot = struct {
         });
     }
 };
+
+test "resolve diagnostics classify known failures without preserving reply text" {
+    try std.testing.expectEqual(ResolveFailure.network, ResolveFailure.fromWorker("HttpResponseFailed").?);
+    try std.testing.expectEqual(ResolveFailure.metadata, ResolveFailure.fromWorker("MissingAuthor").?);
+    try std.testing.expectEqual(ResolveFailure.automation, ResolveFailure.fromWorker("AutomationUnavailable").?);
+    try std.testing.expect(ResolveFailure.fromWorker("HttpResponseFailed C:/private/data") == null);
+    try std.testing.expect(ResolveFailure.fromWorker("https://www.youtube.com/watch?v=ZigTest0001") == null);
+}

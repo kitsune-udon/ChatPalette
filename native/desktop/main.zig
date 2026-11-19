@@ -18,7 +18,7 @@ const version = @import("app_info").version;
 
 const allocator = std.heap.page_allocator;
 pub const Startup = enum { normal, quiet, smoke };
-const PaletteTarget = enum { active_window, previous_target, shortcut };
+const PaletteTarget = union(enum) { active_window, previous_target, shortcut: operations.Command };
 const tray_message = win.WM_APP + 2;
 const drain_message = win.WM_APP + 3;
 const advance_reaction_message = win.WM_APP + 4;
@@ -234,6 +234,7 @@ const App = struct {
     last_state: []const u8 = "未実行",
     last_elapsed: u64 = 0,
     last_worker_failure: ?diagnostic.WorkerFailure = null,
+    last_resolve_failure: ?diagnostic.ResolveFailure = null,
     last_stop_failure: ?anyerror = null,
 
     const Preparation = struct {
@@ -343,14 +344,19 @@ const App = struct {
 
     fn show(self: *App, target_source: PaletteTarget) void {
         if (self.quitting or self.modal) return;
+        if (target_source == .shortcut) {
+            const command = target_source.shortcut;
+            if (!self.commandCurrent(command) or command.library != self.library_revision) return;
+        }
         if (self.manager.isEditing()) {
             self.manager.show();
             return;
         }
         if (self.reaction != null or self.preparation != null) return self.reaction_progress.show();
         if (self.worker.active or (self.queue.active and target_source != .shortcut)) return;
+        const active_window = win.GetForegroundWindow();
         if (target_source != .previous_target) {
-            const active_window = win.GetForegroundWindow();
+            if (target_source == .shortcut and windows.number(active_window) != target_source.shortcut.event.window) return;
             if (input.browser(active_window) != null) {
                 self.target = active_window;
             } else {
@@ -360,8 +366,11 @@ const App = struct {
             }
         }
         self.palette.detected_profile = false;
-        if (self.snapshot.data.preferences.auto_mode and self.target != null)
-            self.detectProfile();
+        if (self.snapshot.data.preferences.auto_mode and self.target != null and active_window != null) {
+            const context = self.paletteContext();
+            self.detectProfile(context, active_window);
+            if (!self.quitting and (!self.paletteContextCurrent(context) or !self.foreground(windows.number(active_window)))) return;
+        }
         if (self.quitting) return self.finishQuit();
         self.palette.refresh(self.snapshot.data);
         self.refreshRegistrationStatus();
@@ -491,7 +500,7 @@ const App = struct {
             return self.report("自動判別の設定を保存できませんでした。");
         };
         if (automatic and self.target != null) {
-            self.detectProfile();
+            self.detectProfile(self.paletteContext(), win.GetForegroundWindow());
             if (!self.quitting) self.palette.refresh(self.snapshot.data);
         }
         self.finishQuit();
@@ -507,15 +516,34 @@ const App = struct {
         };
     }
 
-    fn detectProfile(self: *App) void {
-        const target = self.target;
-        if (input.browser(target) == null) return self.report("unavailable");
-        const response = self.request(.resolve, windows.number(target), "", &.{}) catch |failure|
-            return self.report(self.cleanupNotice(failure) orelse "unavailable");
+    const PaletteContext = struct {
+        target: win.HWND,
+        generation: u64,
+        library: u64,
+    };
+
+    fn paletteContext(self: *const App) PaletteContext {
+        return .{ .target = self.target, .generation = self.queue.generation, .library = self.library_revision };
+    }
+
+    fn paletteContextCurrent(self: *const App, context: PaletteContext) bool {
+        return !self.quitting and self.target == context.target and
+            self.queue.generation == context.generation and self.library_revision == context.library;
+    }
+
+    fn detectProfile(self: *App, context: PaletteContext, origin: win.HWND) void {
+        const foreground_window = windows.number(origin);
+        if (!self.foreground(foreground_window)) return;
+        if (input.browser(context.target) == null) return self.report("unavailable");
+        const response = self.request(.resolve, windows.number(context.target), "", &.{}) catch |failure| {
+            if (self.paletteContextCurrent(context) and self.foreground(foreground_window))
+                self.report(self.cleanupNotice(failure) orelse self.resolveFailureNotice());
+            return;
+        };
         defer response.deinit();
-        if (self.quitting or self.target != target) return;
+        if (!self.paletteContextCurrent(context) or !self.foreground(foreground_window)) return;
         const channel = response.field("Channel");
-        if (!response.is("ok") or channel.len == 0) return self.report("unavailable");
+        if (!response.is("ok") or channel.len == 0) return self.report(self.resolveFailureNotice());
         const profile = (self.selectDetectedProfile(channel) catch return self.report("自動選択を保存できませんでした。")) orelse
             return self.report("配信者が未連携です。管理からチャンネルを連携できます。");
         const label = std.fmt.allocPrint(allocator, "自動選択 {s}", .{profile.name}) catch return;
@@ -688,6 +716,7 @@ const App = struct {
             .state = diagnostic.State.fromCode(self.last_state),
             .elapsed_ms = self.last_elapsed,
             .worker_failure = self.last_worker_failure,
+            .resolve_failure = self.last_resolve_failure,
             .stop_failure = self.last_stop_failure,
             .phase = self.diagnosticReactionPhase(now),
             .worker_running = self.worker.process != null and win.WaitForSingleObject(self.worker.process, 0) == win.WAIT_TIMEOUT,
@@ -816,6 +845,7 @@ const App = struct {
     fn requestUsing(self: *App, mode: transport.Mode, target: usize, expected: []const u8, fields: []const transport.Field, comptime exchange: @TypeOf(transport.Client.request)) !transport.Reply {
         if (self.worker.active) return error.WorkerBusy;
         if (self.last_page) |*page_operation| page_operation.latest = false;
+        self.last_resolve_failure = null;
         const started = win.GetTickCount64();
         defer {
             self.last_mode = mode;
@@ -834,6 +864,8 @@ const App = struct {
         self.last_worker_failure = null;
         self.last_stop_failure = null;
         const state = reply.field("State");
+        if (mode == .resolve and reply.is("unavailable"))
+            self.last_resolve_failure = diagnostic.ResolveFailure.fromWorker(reply.field("Detail"));
         self.last_state = if (mode.inputOutcome()) |outcome|
             (if (reply.is(outcome)) outcome else @tagName(diagnostic.State.fromWorker(state)))
         else
@@ -845,6 +877,10 @@ const App = struct {
         const failure = self.last_worker_failure orelse return null;
         if (failure.cause != cause or failure.cleanup == null) return null;
         return "補助プロセスの終了を確認できませんでした。原因は診断情報で確認できます。";
+    }
+
+    fn resolveFailureNotice(self: *const App) []const u8 {
+        return if (self.last_resolve_failure) |failure| failure.message() else "配信者情報を確認できませんでした。";
     }
 
     fn workerFailureDetail(self: *const App, cause: anyerror, buffer: *[256]u8) []const u8 {
@@ -935,7 +971,7 @@ const App = struct {
         if (!self.commandCurrent(command)) return false;
         const action = command.event.action;
         if (action == .palette) {
-            self.show(.shortcut);
+            self.show(.{ .shortcut = command });
             return true;
         }
         const browser = input.browser(@ptrFromInt(target)) orelse return false;
@@ -1126,11 +1162,17 @@ const App = struct {
         const profile_slot = action == .profile1 or action == .profile2;
         if (command.library != self.library_revision) return false;
         const profile_id = if (profile_slot and prefs.auto_mode) detected: {
-            const reply = try self.requestOnPage(.resolve, target, &video, &page_token, &.{});
+            const reply = self.requestOnPage(.resolve, target, &video, &page_token, &.{}) catch |failure| {
+                if (!self.commandCurrent(command) or command.library != self.library_revision) return false;
+                return failure;
+            };
             defer reply.deinit();
-            if (!self.commandCurrent(command) or !reply.is("ok") or !std.mem.eql(u8, reply.field("Video"), &video))
+            if (!self.commandCurrent(command) or command.library != self.library_revision) return false;
+            if (reply.is("unavailable")) {
+                self.report(self.resolveFailureNotice());
                 return false;
-            if (command.library != self.library_revision) return false;
+            }
+            if (!self.pageReplySucceeded(reply, video, .ok)) return false;
             const profile = (self.selectDetectedProfile(reply.field("Channel")) catch {
                 self.report("自動選択を保存できませんでした。");
                 return false;
@@ -1169,12 +1211,16 @@ const App = struct {
     }
 
     fn insertFromPalette(self: *App, index: usize) void {
-        self.deliverPaletteItem(index) catch |failure| {
-            if (!self.quitting) {
+        const context = self.paletteContext();
+        self.deliverPaletteItem(index, context) catch |failure| {
+            if (self.paletteContextCurrent(context) and (self.foreground(windows.number(context.target)) or
+                self.foreground(windows.number(self.palette.window))))
+            {
                 self.palette.refresh(self.snapshot.data);
                 self.report(switch (failure) {
                     error.ProfileChanged => "配信者が変わりました。弾幕を選び直してください。",
                     error.ProfileSelectionNotSaved => "自動選択を保存できませんでした。",
+                    error.ProfileLookupFailed => self.resolveFailureNotice(),
                     error.TargetChanged, error.ForegroundChanged => "changed",
                     error.VideoUnavailable => "unavailable",
                     else => self.cleanupNotice(failure) orelse @tagName(self.workerFailureReason(failure)),
@@ -1186,12 +1232,10 @@ const App = struct {
         if (self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
 
-    fn deliverPaletteItem(self: *App, index: usize) !void {
+    fn deliverPaletteItem(self: *App, index: usize, owner: PaletteContext) !void {
         if (self.quitting or self.queue.active or self.worker.active or self.reaction != null or index >= self.palette.count) return;
-        const target = self.target;
+        const target = owner.target;
         if (input.browser(target) == null) return self.report("unavailable");
-        const generation = self.queue.generation;
-        const revision = self.library_revision;
         const row = self.palette.rows[index];
         const text = try allocator.dupe(u8, row.item.text);
         defer allocator.free(text);
@@ -1205,8 +1249,11 @@ const App = struct {
         if (auto_profile) self.palette.detected_profile = false;
         const context = try self.requestOnPage(if (auto_profile) .resolve else .browser_context, hwnd, "", "bind", &.{});
         defer context.deinit();
-        if (!self.foreground(hwnd) or self.queue.generation != generation or self.library_revision != revision) return error.TargetChanged;
-        if (!context.is("ok")) return error.VideoUnavailable;
+        if (!self.foreground(hwnd) or !self.paletteContextCurrent(owner)) return error.TargetChanged;
+        if (!context.is("ok")) return if (auto_profile and context.is("unavailable"))
+            error.ProfileLookupFailed
+        else
+            error.VideoUnavailable;
         const video = operations.videoId(context.field("Video")) orelse return error.VideoUnavailable;
         const page_token = operations.pageToken(context.field("PageToken")) orelse return error.TargetChanged;
         if (auto_profile) {
@@ -1218,14 +1265,14 @@ const App = struct {
         }
         const checked = try self.requestOnPage(.verify_input, hwnd, &video, &page_token, &.{});
         defer checked.deinit();
-        if (!self.foreground(hwnd) or self.queue.generation != generation or self.library_revision != revision) return error.TargetChanged;
+        if (!self.foreground(hwnd) or !self.paletteContextCurrent(owner)) return error.TargetChanged;
         if (!checked.is("ok") or !std.mem.eql(u8, checked.field("Video"), &video)) {
             self.report(checked.field("State"));
             self.palette.show();
             return;
         }
         const outcome = try self.commitInput(.input_insert, hwnd, video, page_token, text);
-        if (outcome != .inserted and !self.quitting) {
+        if (outcome != .inserted and self.paletteContextCurrent(owner) and self.foreground(hwnd)) {
             _ = self.rejectPage(outcome);
             self.palette.show();
         }
