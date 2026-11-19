@@ -270,7 +270,7 @@ const Dialog = struct {
     }
 
     fn requestClose(self: *Dialog) void {
-        if (self.finishing) return;
+        if (self.finishing or self.close_requested) return;
         self.finishing = true;
         defer self.finishing = false;
         if (self.editor) |editor| {
@@ -279,8 +279,11 @@ const Dialog = struct {
             if ((self.itemsDirty() or !sameKeys(editor.baseline.keys, pending.keys)) and
                 !self.askDiscard("未保存の変更を破棄して閉じますか？")) return;
         }
+        if (!self.releaseParent()) {
+            windows.setText(self.window, "親画面を有効にできませんでした。「閉じる」で再試行");
+            return;
+        }
         self.close_requested = true;
-        self.releaseParent();
         _ = win.ShowWindow(self.window, win.SW_HIDE);
     }
 
@@ -494,19 +497,31 @@ const Dialog = struct {
         self.place(self.cancel, width - 106, footer, 90, 30);
     }
 
-    fn releaseParent(self: *Dialog) void {
-        const parent = self.disabled_parent orelse return;
+    fn parentHasSuccessor(self: *const Dialog, parent: win.HWND) bool {
+        const popup = win.GetWindow(parent, win.GW_ENABLEDPOPUP);
+        return popup != null and popup != parent and popup != self.window and win.IsWindowVisible(popup) != 0;
+    }
+
+    fn releaseParent(self: *Dialog) bool {
+        const parent = self.disabled_parent orelse return true;
         self.disabled_parent = null;
-        if (win.IsWindow(parent) == 0) return;
+        if (win.IsWindow(parent) == 0 or win.GetWindow(self.window, win.GW_OWNER) != parent) return true;
+        if (self.parentHasSuccessor(parent)) return true;
         const owned = win.GetForegroundWindow() == self.window;
         _ = win.EnableWindow(parent, 1);
-        if (!owned or win.IsWindowVisible(parent) == 0 or win.IsWindowEnabled(parent) == 0) return;
+        if (win.IsWindow(parent) == 0 or win.GetWindow(self.window, win.GW_OWNER) != parent or self.parentHasSuccessor(parent)) return true;
+        if (win.IsWindowEnabled(parent) == 0) {
+            self.disabled_parent = parent;
+            return false;
+        }
+        if (!owned or win.IsWindowVisible(parent) == 0) return true;
         const current = win.GetForegroundWindow();
-        if (current != self.window and current != parent) return;
+        if (current != self.window and current != parent) return true;
         _ = win.SetForegroundWindow(parent);
         const focus = self.original_focus;
         if (win.GetForegroundWindow() == parent and focus != null and win.IsChild(parent, focus) != 0 and
             win.IsWindowVisible(focus) != 0 and win.IsWindowEnabled(focus) != 0) _ = win.SetFocus(focus);
+        return true;
     }
 
     fn run(self: *Dialog, parent: win.HWND) !void {
@@ -518,7 +533,7 @@ const Dialog = struct {
             self.original_focus = win.GetFocus();
             _ = win.EnableWindow(parent, 0);
         }
-        defer self.releaseParent();
+        defer _ = self.releaseParent();
         _ = win.ShowWindow(self.window, win.SW_SHOW);
         if (self.close_requested) return;
         if (win.IsWindowVisible(self.window) == 0) return error.ShowSupportWindow;
@@ -762,6 +777,80 @@ pub fn selectJson(parent: win.HWND, export_data: bool) !?[]const u8 {
     }
     const end = std.mem.indexOfScalar(u16, &name, 0) orelse return error.JsonFileDialog;
     return try std.unicode.utf16LeToUtf8Alloc(allocator, name[0..end]);
+}
+
+test "support retries a disabled owner without changing the displayed document or its successor" {
+    const Probe = struct {
+        fail: bool = true,
+        successor: win.HWND = null,
+        enable_attempts: usize = 0,
+
+        fn observe(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const self: *@This() = @ptrFromInt(context);
+            if (message == win.WM_ENABLE and wparam != 0) {
+                self.enable_attempts += 1;
+                if (self.successor != null) {
+                    _ = win.SetWindowPos(self.successor, win.HWND_TOP, 0, 0, 0, 0, win.SWP_NOMOVE | win.SWP_NOSIZE | win.SWP_NOACTIVATE | win.SWP_SHOWWINDOW);
+                    _ = win.EnableWindow(hwnd, 0);
+                } else if (self.fail) {
+                    _ = win.EnableWindow(hwnd, 0);
+                }
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+    const t = std.testing;
+    const module = win.GetModuleHandleW(null);
+    const parent = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), win.WS_OVERLAPPEDWINDOW, 0, 0, 360, 260, null, null, module, null) orelse
+        return error.CreateSupportRestoreParent;
+    defer _ = win.DestroyWindow(parent);
+    const successor = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), win.WS_POPUP, 0, 0, 50, 50, parent, null, module, null) orelse
+        return error.CreateSupportRestoreSuccessor;
+    defer _ = win.DestroyWindow(successor);
+    var probe: Probe = .{};
+    try t.expect(win.SetWindowSubclass(parent, Probe.observe, 82, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(parent, Probe.observe, 82);
+    _ = win.ShowWindow(parent, win.SW_SHOWNOACTIVATE);
+    const value = "保存済みです。";
+    {
+        var dialog: Dialog = .{};
+        defer dialog.close();
+        try dialog.openDocument(parent, "検証", false);
+        try dialog.paintDocument(value);
+        dialog.disabled_parent = parent;
+        _ = win.EnableWindow(parent, 0);
+        _ = win.ShowWindow(dialog.window, win.SW_SHOWNOACTIVATE);
+        _ = win.SendMessageW(dialog.window, win.WM_CLOSE, 0, 0);
+        try t.expect(!dialog.close_requested and dialog.disabled_parent == parent);
+        try t.expect(win.IsWindowVisible(dialog.window) != 0 and win.IsWindowEnabled(parent) == 0);
+        try t.expectEqual(@as(usize, 1), probe.enable_attempts);
+        const title = try windows.text(dialog.window, t.allocator);
+        defer t.allocator.free(title);
+        try t.expect(std.mem.indexOf(u8, title, "親画面を有効にできませんでした") != null);
+        const shown = try windows.text(dialog.document, t.allocator);
+        defer t.allocator.free(shown);
+        try t.expectEqualStrings(value, shown);
+        probe.fail = false;
+        _ = win.SendMessageW(dialog.window, win.WM_CLOSE, 0, 0);
+        try t.expect(dialog.close_requested and dialog.disabled_parent == null);
+        try t.expect(win.IsWindowVisible(dialog.window) == 0 and win.IsWindowEnabled(parent) != 0);
+        try t.expectEqual(@as(usize, 2), probe.enable_attempts);
+    }
+    {
+        var dialog: Dialog = .{};
+        defer dialog.close();
+        try dialog.openDocument(parent, "次の所有者", false);
+        dialog.disabled_parent = parent;
+        _ = win.EnableWindow(parent, 0);
+        _ = win.ShowWindow(dialog.window, win.SW_SHOWNOACTIVATE);
+        probe.successor = successor;
+        _ = win.SendMessageW(dialog.window, win.WM_CLOSE, 0, 0);
+        try t.expect(dialog.close_requested and dialog.disabled_parent == null);
+        try t.expect(win.IsWindowVisible(successor) != 0 and win.IsWindowEnabled(parent) == 0);
+        try t.expectEqual(@as(usize, 3), probe.enable_attempts);
+        try t.expect(dialog.releaseParent());
+        try t.expectEqual(@as(usize, 3), probe.enable_attempts);
+    }
 }
 
 test "the key editor honors semantic changes, including invalid unsaved drafts" {

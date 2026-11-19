@@ -213,6 +213,19 @@ const Stage = struct {
         const log_path = try std.fs.path.join(self.alloc, &.{ name, "stderr.txt" });
         return unitTestNames(self.alloc, try self.read(log_path));
     }
+
+    fn recordGuestStep(self: *Stage, name: []const u8, allow_stderr: bool) ![]const u8 {
+        const dir = try std.fs.path.join(self.alloc, &.{ "sandbox/results", name });
+        const stdout = try self.read(try std.fs.path.join(self.alloc, &.{ dir, "stdout.txt" }));
+        const stderr = try self.read(try std.fs.path.join(self.alloc, &.{ dir, "stderr.txt" }));
+        const metadata = try self.read(try std.fs.path.join(self.alloc, &.{ dir, "result.json" }));
+        const result = try std.json.parseFromSliceLeaky(process.Result, self.alloc, metadata, .{});
+        if (result.timed_out or result.exit_code != 0 or result.stderr_bytes != stderr.len) return error.FreezeTestCommandFailed;
+        if (!allow_stderr and stderr.len != 0) return error.UnexpectedTestStderr;
+        for ([_][]const u8{ "stdout.txt", "stderr.txt", "result.json" }, [_][]const u8{ stdout, stderr, metadata }) |file, bytes|
+            try self.record(try std.fmt.allocPrint(self.alloc, "{s}-{s}", .{ name, file }), bytes);
+        return stderr;
+    }
 };
 
 pub fn run(
@@ -280,51 +293,57 @@ pub fn run(
     const sandbox_harness = try LockedExecutable.open(alloc, try stage.path("built/bin/chatpalette-tools.exe"));
     defer sandbox_harness.handle.close();
 
-    const app_names = try stage.testList("unit-app", app_tests);
     const shortcut_names = try stage.testList("unit-shortcuts", shortcut_tests);
     const tool_names = try stage.testList("unit-tools", tools_tests);
-    const test_names = try std.json.Stringify.valueAlloc(alloc, .{
-        .app = .{ .count = app_names.len, .names = app_names },
-        .shortcuts = .{ .count = shortcut_names.len, .names = shortcut_names },
-        .tools = .{ .count = tool_names.len, .names = tool_names },
-        .startup = startup_trials,
-        .worker = "worker-lifecycle",
-        .sandbox = [_][]const u8{"--smoke"},
-    }, .{ .whitespace = .indent_2 });
-    try files.writeNew(std.fs.cwd(), try stage.path("test-list.json"), test_names);
-    try stage.record("test-list.json", test_names);
-    const startup_result = try stage.runStep("startup", &.{ startup_test.path, app.path, try stage.path("startup-result") }, stage.root, test_timeout_ms);
-    if (startup_result.stderr_bytes != 0) return error.UnexpectedTestStderr;
-    try startup_test.check();
-    try app.check();
     const app_sha = files.hex(app.sha);
-    const startup_report = try stage.read("startup-result/result.json");
-    try validateStartup(try std.json.parseFromSliceLeaky(StartupReport, alloc, startup_report, .{
-        .ignore_unknown_fields = true,
-    }), app_sha);
-    try stage.record("startup-report.json", startup_report);
-
-    const worker_result = try stage.runStep("worker-lifecycle", &.{ worker_test.path, app.path, try stage.path("worker-result") }, stage.root, 60_000);
-    if (worker_result.stderr_bytes != 0) return error.UnexpectedTestStderr;
-    try worker_test.check();
-    try app.check();
-    const worker_report = try stage.read("worker-result/result.json");
-    try validateWorkerLifecycle(alloc, worker_report, app_sha);
-    try stage.record("worker-lifecycle-report.json", worker_report);
 
     try release.requireSources(alloc, snapshot, source_manifest);
     try release.requireSources(alloc, project, source_manifest);
     std.debug.print("配布候補の検査 Windows Sandbox{s}\n", .{if (prepare_only) " の準備" else ""});
-    try sandbox.hostWithHarness(alloc, app.path, sandbox_harness.path, try stage.path("sandbox"), prepare_only, &.{"--smoke"}, .require_owned);
+    try sandbox.hostFreeze(alloc, app.path, sandbox_harness.path, try stage.path("sandbox"), prepare_only, .{
+        .paths = .{ app_tests.path, startup_test.path, worker_test.path },
+        .pins = .{
+            .harness_sha256 = files.hex(sandbox_harness.sha),
+            .runners_sha256 = .{ files.hex(app_tests.sha), files.hex(startup_test.sha), files.hex(worker_test.sha) },
+        },
+    });
     try checkDigest(try stage.path("sandbox/input/ChatPaletteTest.exe"), app.sha);
     const mounted_harness_sha = try files.readDigest(std.fs.cwd(), try stage.path("sandbox/input/ChatPaletteTools.exe"));
     if (!std.mem.eql(u8, &mounted_harness_sha, &sandbox_harness.sha)) return error.SandboxHarnessChanged;
     try app.check();
+    try app_tests.check();
+    try startup_test.check();
+    try worker_test.check();
     try sandbox_harness.check();
     try release.requireSources(alloc, snapshot, source_manifest);
     try release.requireSources(alloc, project, source_manifest);
 
     if (!prepare_only) {
+        const app_names = try unitTestNames(alloc, try stage.recordGuestStep("unit-app", true));
+        _ = try stage.recordGuestStep("startup", false);
+        const startup_report = try stage.read("sandbox/results/startup-result/result.json");
+        try validateStartup(try std.json.parseFromSliceLeaky(StartupReport, alloc, startup_report, .{
+            .ignore_unknown_fields = true,
+        }), app_sha);
+        try stage.record("startup-report.json", startup_report);
+        _ = try stage.recordGuestStep("worker-lifecycle", false);
+        const worker_report = try stage.read("sandbox/results/worker-result/result.json");
+        try validateWorkerLifecycle(alloc, worker_report, app_sha);
+        try stage.record("worker-lifecycle-report.json", worker_report);
+        const test_names = try std.json.Stringify.valueAlloc(alloc, .{
+            .app = .{ .count = app_names.len, .names = app_names },
+            .shortcuts = .{ .count = shortcut_names.len, .names = shortcut_names },
+            .tools = .{ .count = tool_names.len, .names = tool_names },
+            .startup = startup_trials,
+            .worker = "worker-lifecycle",
+            .sandbox = [_][]const u8{"--smoke"},
+        }, .{ .whitespace = .indent_2 });
+        try files.writeNew(std.fs.cwd(), try stage.path("test-list.json"), test_names);
+        try stage.record("test-list.json", test_names);
+        const audio = try stage.read("sandbox/results/audio.json");
+        const volume = try std.json.parseFromSliceLeaky(struct { muted_outputs: u32 }, alloc, audio, .{});
+        if (volume.muted_outputs == 0) return error.SandboxAudioMuteUnverified;
+        try stage.record("sandbox-audio.json", audio);
         const outcome = try stage.read("sandbox/results/result.json");
         try validateSandbox(alloc, outcome, app_sha);
         try stage.record("sandbox-report.json", outcome);

@@ -78,6 +78,8 @@ const Id = enum(u16) {
 
 const EditorMode = enum { add_item, edit_item, move_item, add_profile, rename_profile, link_profile };
 const ScopeChoice = struct { id: []const u8, name: []const u8 };
+const ParentRestore = struct { parent: win.HWND, generation: u64 };
+const parent_restore_notice = "親画面を有効にできませんでした。管理画面を開き直して再試行してください。";
 
 const Editor = struct {
     window: win.HWND = null,
@@ -211,6 +213,8 @@ pub const Management = struct {
     item_buttons: [buttons.len]win.HWND = @splat(null),
     dialog: Editor = .{},
     editor_generation: u64 = 0,
+    parent_restore: ?ParentRestore = null,
+    restoring_parent: bool = false,
 
     pub fn open(self: *Management, host: win.HWND, db: *storage.Store, snapshot: *storage.Snapshot, history: *storage.LibraryHistory) !void {
         self.host = host;
@@ -275,6 +279,7 @@ pub const Management = struct {
     pub fn show(self: *Management) void {
         if (self.window == null) return;
         if (self.raiseEditor()) return;
+        if (!self.retryParentRestore()) return;
         self.refresh();
         if (win.IsIconic(self.window) != 0) _ = win.ShowWindow(self.window, win.SW_RESTORE);
         if (win.IsZoomed(self.window) == 0) windows.fitWindow(self.window, null);
@@ -553,12 +558,53 @@ pub const Management = struct {
     }
 
     fn setNotice(self: Management, value: []const u8) void {
-        const labelled = if (value.len != 0) std.fmt.allocPrint(allocator, "通知：{s}", .{value}) catch null else null;
+        const warning = if (self.parent_restore != null) parent_restore_notice else "";
+        const separator = if (value.len != 0 and warning.len != 0) "\r\n" else "";
+        const labelled = if (value.len != 0 or warning.len != 0)
+            std.fmt.allocPrint(allocator, "通知：{s}{s}{s}", .{ value, separator, warning }) catch null
+        else
+            null;
         defer if (labelled) |text| allocator.free(text);
-        if (!windows.setTextChecked(self.notice, labelled orelse value)) return;
+        if (!windows.setTextChecked(self.notice, labelled orelse if (value.len != 0) value else warning)) return;
         const visible = win.GetWindowLongW(self.notice, win.GWL_STYLE) & win.WS_VISIBLE != 0;
         const has_text = win.GetWindowTextLengthW(self.notice) != 0;
         if (visible != has_text) _ = win.ShowWindow(self.notice, if (has_text) win.SW_SHOWNA else win.SW_HIDE);
+    }
+
+    fn updateParentRestoreNotice(self: *Management) void {
+        const shown = windows.text(self.notice, allocator) catch return;
+        defer allocator.free(shown);
+        const prefix = "通知：";
+        const text = if (std.mem.startsWith(u8, shown, prefix)) shown[prefix.len..] else shown;
+        const suffix = "\r\n" ++ parent_restore_notice;
+        const value = if (std.mem.eql(u8, text, parent_restore_notice)) "" else if (std.mem.endsWith(u8, text, suffix)) text[0 .. text.len - suffix.len] else text;
+        self.setNotice(value);
+    }
+
+    fn ownsParentRestore(self: *const Management, request: ParentRestore) bool {
+        return self.editor_generation == request.generation and self.dialog.window == null and
+            request.parent == self.window and win.IsWindow(request.parent) != 0;
+    }
+
+    fn retryParentRestore(self: *Management) bool {
+        const request = self.parent_restore orelse return true;
+        if (self.restoring_parent) return false;
+        if (!self.ownsParentRestore(request)) {
+            self.parent_restore = null;
+            return true;
+        }
+        self.restoring_parent = true;
+        defer self.restoring_parent = false;
+        if (win.IsWindowEnabled(request.parent) == 0) _ = win.EnableWindow(request.parent, 1);
+        if (self.parent_restore == null or !std.meta.eql(self.parent_restore.?, request)) return false;
+        if (!self.ownsParentRestore(request)) {
+            self.parent_restore = null;
+            return false;
+        }
+        if (win.IsWindowEnabled(request.parent) == 0) return false;
+        self.parent_restore = null;
+        self.updateParentRestoreNotice();
+        return true;
     }
 
     fn showErrorText(self: Management, message: []const u8) void {
@@ -1055,6 +1101,12 @@ pub const Management = struct {
             parent == self.window and win.IsWindowVisible(parent) != 0 and win.IsWindowEnabled(parent) != 0;
         if (return_to_parent and foreground == editor) _ = win.SetForegroundWindow(parent);
         _ = win.DestroyWindow(editor);
+        const request: ParentRestore = .{ .parent = parent, .generation = generation };
+        if (closing.parent_was_enabled and self.ownsParentRestore(request) and win.IsWindowEnabled(parent) == 0) {
+            self.parent_restore = request;
+            self.updateParentRestoreNotice();
+            return;
+        }
         if (return_to_parent and self.editor_generation == generation and self.dialog.window == null and
             parent == self.window and win.GetForegroundWindow() == parent)
         {
@@ -1385,6 +1437,83 @@ fn editorProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam
         else => return win.DefWindowProcW(hwnd, message, wparam, lparam),
     }
     return 0;
+}
+
+test "management retries restoring the original disabled parent without repeating its saved edit" {
+    const Probe = struct {
+        block: bool = true,
+        enable_attempts: usize = 0,
+
+        fn observe(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const self: *@This() = @ptrFromInt(context);
+            if (message == win.WM_ENABLE and wparam != 0) {
+                self.enable_attempts += 1;
+                if (self.block) _ = win.EnableWindow(hwnd, 0);
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+    const t = std.testing;
+    var dir = t.tmpDir(.{});
+    defer dir.cleanup();
+    const home = try dir.dir.realpathAlloc(t.allocator, ".");
+    defer t.allocator.free(home);
+    const path = try std.fs.path.join(t.allocator, &.{ home, "settings.db" });
+    defer t.allocator.free(path);
+    var db = try storage.Store.open(t.allocator, path);
+    defer db.close();
+    try db.save(.{ .shared_items = &.{.{ .id = "saved-id", .name = "通知試験", .text = "最初の本文" }} });
+    var snapshot = try db.load(t.allocator);
+    defer snapshot.deinit();
+    var history = storage.LibraryHistory.init(t.allocator);
+    defer history.deinit();
+    const host_class = wide("ChatPalette.TestRestoreManager");
+    try register(host_class, testHost);
+    const host = win.CreateWindowExW(0, host_class, wide(""), 0, 0, 0, 1, 1, null, null, win.GetModuleHandleW(null), null) orelse
+        return error.TestRestoreManagementHost;
+    defer _ = win.DestroyWindow(host);
+    const other = win.CreateWindowExW(0, wide("STATIC"), wide(""), win.WS_DISABLED, 0, 0, 1, 1, null, null, win.GetModuleHandleW(null), null) orelse
+        return error.TestOtherManagementParent;
+    defer _ = win.DestroyWindow(other);
+    var view: Management = .{};
+    try view.open(host, &db, &snapshot, &history);
+    defer view.close();
+    var probe: Probe = .{};
+    try t.expect(win.SetWindowSubclass(view.window, Probe.observe, 81, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(view.window, Probe.observe, 81);
+
+    try view.openDialogAt(.edit_item, snapshot.data.shared_items[0], "");
+    const closed_editor = view.dialog.window;
+    windows.setText(view.dialog.text, "確定した本文");
+    try view.saveDialog();
+    try t.expect(closed_editor != null and win.IsWindow(closed_editor) == 0 and !view.isEditing());
+    try t.expect(view.parent_restore != null and win.IsWindowEnabled(view.window) == 0);
+    try t.expectEqual(@as(usize, 1), probe.enable_attempts);
+    const failed_notice = try windows.text(view.notice, t.allocator);
+    defer t.allocator.free(failed_notice);
+    try t.expectEqualStrings("通知：保存しました。\r\n" ++ parent_restore_notice, failed_notice);
+
+    view.show();
+    try t.expect(view.parent_restore != null and win.IsWindowEnabled(view.window) == 0);
+    try t.expectEqual(@as(usize, 2), probe.enable_attempts);
+    probe.block = false;
+    view.show();
+    try t.expect(view.parent_restore == null and win.IsWindowEnabled(view.window) != 0);
+    try t.expectEqual(@as(usize, 3), probe.enable_attempts);
+    const restored_notice = try windows.text(view.notice, t.allocator);
+    defer t.allocator.free(restored_notice);
+    try t.expectEqualStrings("通知：保存しました。", restored_notice);
+    var saved = try db.load(t.allocator);
+    defer saved.deinit();
+    try t.expectEqualStrings("確定した本文", saved.data.shared_items[0].text);
+    try t.expectEqual(@as(usize, 1), history.length);
+    try t.expect(win.IsWindowEnabled(other) == 0);
+
+    _ = win.EnableWindow(view.window, 0);
+    try view.openDialogAt(.edit_item, saved.data.shared_items[0], "");
+    view.cancelDialog();
+    try t.expect(view.parent_restore == null and win.IsWindowEnabled(view.window) == 0);
+    try t.expectEqual(@as(usize, 3), probe.enable_attempts);
 }
 
 test "management notice wraps scrolls and supports selecting its complete text" {

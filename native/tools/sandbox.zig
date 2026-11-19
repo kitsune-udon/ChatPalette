@@ -3,6 +3,7 @@ const files = @import("files.zig");
 const process = @import("process.zig");
 const log_tail = @import("sandbox_log.zig");
 const audio = @import("sandbox_audio.zig");
+pub const freeze_suite = @import("sandbox_freeze.zig");
 
 const input_guest = "C:\\ChatPaletteInput";
 const output_guest = "C:\\ChatPaletteEvidence";
@@ -228,6 +229,7 @@ fn sandboxProcess(executable: []const u16) ?SandboxProcess {
 const Selection = struct {
     executable_sha256: []const u8,
     args: []const []const u8,
+    freeze: ?freeze_suite.Pins = null,
 };
 
 const GuestReport = struct {
@@ -346,6 +348,30 @@ pub fn hostWithHarness(
     test_args: []const []const u8,
     control: SessionControl,
 ) !void {
+    return hostSelection(allocator, app, harness, output, prepare_only, test_args, control, null);
+}
+
+pub fn hostFreeze(
+    allocator: std.mem.Allocator,
+    app: []const u8,
+    harness: []const u8,
+    output: []const u8,
+    prepare_only: bool,
+    suite: freeze_suite.Inputs,
+) !void {
+    return hostSelection(allocator, app, harness, output, prepare_only, &.{"--smoke"}, .require_owned, suite);
+}
+
+fn hostSelection(
+    allocator: std.mem.Allocator,
+    app: []const u8,
+    harness: []const u8,
+    output: []const u8,
+    prepare_only: bool,
+    test_args: []const []const u8,
+    control: SessionControl,
+    suite: ?freeze_suite.Inputs,
+) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -363,14 +389,24 @@ pub fn hostWithHarness(
     const test_bytes = try std.fs.cwd().readFileAlloc(alloc, app, max_executable_bytes);
     const app_hash = files.hex(files.digest(test_bytes));
     try files.writeNew(input, test_name, test_bytes);
+    if (suite) |sources| {
+        try freeze_suite.verify(input, tool_name, sources.pins.harness_sha256);
+        try freeze_suite.stage(input, sources);
+    }
     const selection = try std.json.Stringify.valueAlloc(alloc, Selection{
         .executable_sha256 = &app_hash,
         .args = test_args,
-    }, .{ .whitespace = .indent_2 });
+        .freeze = if (suite) |sources| sources.pins else null,
+    }, .{ .whitespace = .indent_2, .emit_null_optional_fields = false });
     try files.writeNew(input, selection_name, selection);
 
     try layout.configure(alloc, .smoke);
-    if (try host_session.run(GuestReport, alloc, layout, timeout_ms)) |report| try requireGuestSuccess(report, &app_hash);
+    const deadline = timeout_ms + if (suite != null) freeze_suite.timeout_ms else @as(u32, 0);
+    if (try host_session.run(GuestReport, alloc, layout, deadline)) |report| try requireGuestSuccess(report, &app_hash);
+    if (suite) |sources| {
+        try freeze_suite.verify(input, selection_name, files.hex(files.digest(selection)));
+        for (freeze_suite.steps, sources.pins.runners_sha256) |step, sha| try freeze_suite.verify(input, step.image, sha);
+    }
 }
 
 pub const Layout = struct {
@@ -598,6 +634,13 @@ fn guestRun(alloc: std.mem.Allocator, input_path: []const u8, output_path: []con
     defer work.close();
     try files.writeNew(work, test_name, test_bytes);
     const test_path = try std.fs.path.join(alloc, &.{ work_path, test_name });
+    const freeze_app = if (selection.freeze != null) try files.openImmutable(alloc, test_path) else null;
+    defer if (freeze_app) |locked| locked.close();
+    if (selection.freeze) |pins| {
+        if (selection.args.len != 1 or !std.mem.eql(u8, selection.args[0], "--smoke")) return error.InvalidFreezeSmokeArguments;
+        try freeze_suite.verify(work, test_name, files.hex(expected));
+        try freeze_suite.run(alloc, input, work, work_path, output, output_path, test_path, pins);
+    }
     const argv = try alloc.alloc([]const u8, selection.args.len + 1);
     argv[0] = test_path;
     @memcpy(argv[1..], selection.args);
@@ -732,6 +775,7 @@ test "Sandbox prepares the selected harness and rejects modified guest input" {
     defer staged.close();
     const selection = try readSelection(arena.allocator(), staged);
     try std.testing.expectEqualStrings("with space", selection.args[1]);
+    try std.testing.expect(selection.freeze == null);
     try std.testing.expectError(error.SandboxAudioGuestRequired, guestRun(arena.allocator(), input, results));
     try std.testing.expectError(error.FileNotFound, temporary.dir.access("prepared/results/audio.json", .{}));
     try std.testing.expectError(error.FileNotFound, temporary.dir.access("prepared/results/stdout.txt", .{}));
@@ -752,4 +796,38 @@ test "Sandbox prepares the selected harness and rejects modified guest input" {
     const saved = try files.readDigest(temporary.dir, "prepared/results/result.json");
     try std.testing.expectError(error.PathAlreadyExists, guest(alloc, input, results));
     try std.testing.expectEqual(saved, try files.readDigest(temporary.dir, "prepared/results/result.json"));
+}
+
+test "freeze prepares pinned desktop runners without launching a guest or writing test results" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    const root = try temp.dir.realpathAlloc(alloc, ".");
+    const app = try std.fs.path.join(alloc, &.{ root, "product" });
+    const harness = try std.fs.path.join(alloc, &.{ root, "controller" });
+    try files.writeNew(temp.dir, "product", "app fixture");
+    try files.writeNew(temp.dir, "controller", "tool fixture");
+    var suite: freeze_suite.Inputs = undefined;
+    suite.pins.harness_sha256 = files.hex(files.digest("tool fixture"));
+    for (freeze_suite.steps, &suite.paths, &suite.pins.runners_sha256) |step, *path, *sha| {
+        try files.writeNew(temp.dir, step.image, step.name);
+        path.* = try std.fs.path.join(alloc, &.{ root, step.image });
+        sha.* = files.hex(files.digest(step.name));
+    }
+    try hostFreeze(alloc, app, harness, try std.fs.path.join(alloc, &.{ root, "prepared" }), true, suite);
+    var mounted = try temp.dir.openDir("prepared/input", .{});
+    defer mounted.close();
+    const selected = try readSelection(alloc, mounted);
+    try std.testing.expectEqualDeep(suite.pins, selected.freeze.?);
+    try std.testing.expectEqual(@as(usize, 1), selected.args.len);
+    try std.testing.expectEqualStrings("--smoke", selected.args[0]);
+    for (freeze_suite.steps, suite.pins.runners_sha256) |step, digest| try freeze_suite.verify(mounted, step.image, digest);
+    try std.testing.expectError(error.FileNotFound, temp.dir.access("prepared/results/audio.json", .{}));
+    try std.testing.expectError(error.FileNotFound, temp.dir.access("prepared/results/unit-app/result.json", .{}));
+    try std.testing.expectError(error.FileNotFound, temp.dir.access("prepared/results/result.json", .{}));
+    suite.pins.runners_sha256[1] = files.hex(files.digest("another build"));
+    try std.testing.expectError(error.SandboxFreezeInputChanged, hostFreeze(alloc, app, harness, try std.fs.path.join(alloc, &.{ root, "wrong" }), true, suite));
+    try std.testing.expectError(error.FileNotFound, temp.dir.access("wrong/tests.wsb", .{}));
 }

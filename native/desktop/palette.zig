@@ -122,6 +122,7 @@ pub const Palette = struct {
     selected_id: ?[]u8 = null,
     sort_order: SortOrder = .saved,
     search_due: ?u64 = null,
+    operations_allowed: bool = true,
     refreshing: bool = false,
     items_refreshing: bool = false,
     items_pending: bool = false,
@@ -227,9 +228,10 @@ pub const Palette = struct {
     pub fn refresh(self: *Palette, data: storage.Data) void {
         const refreshing = self.refreshing;
         self.refreshing = true;
-        defer self.refreshing = refreshing;
+        defer self.restoreInteraction(refreshing);
         self.scope_refresh_failed = false;
         self.data = data;
+        if (!refreshing) self.updateCommandButtons();
         _ = win.SendMessageW(self.mode, win.CB_SETCURSEL, if (data.preferences.auto_mode) 0 else 1, 0);
         if (!self.profile_choices.sameNames(data.profiles)) {
             self.profile_choices.clear();
@@ -277,9 +279,26 @@ pub const Palette = struct {
         _ = win.SendMessageW(self.reaction_interval, win.CB_SETCURSEL, std.mem.indexOfScalar(u32, &reaction_intervals, defaults.reaction_interval_ms) orelse 0, 0);
     }
 
-    pub fn reactionButtons(self: Palette, active: bool) void {
-        _ = win.EnableWindow(self.start_button, @intFromBool(!active));
+    pub fn operationButtons(self: *Palette, allowed: bool, active: bool) void {
+        self.operations_allowed = allowed;
+        self.updateCommandButtons();
         _ = win.EnableWindow(self.stop_button, @intFromBool(active));
+    }
+
+    fn commandsAvailable(self: *const Palette) bool {
+        return self.operations_allowed and !self.refreshing and !self.resetting_search and !self.items_pending;
+    }
+
+    fn updateCommandButtons(self: *Palette) void {
+        _ = win.EnableWindow(self.start_button, @intFromBool(self.commandsAvailable()));
+        _ = win.EnableWindow(self.save_defaults, @intFromBool(self.commandsAvailable()));
+        const selected = self.commandsAvailable() and !self.refresh_failed and self.search_due == null and self.selectedIndex() != null;
+        _ = win.EnableWindow(self.insert_button, @intFromBool(selected and self.commandsAvailable() and !self.refresh_failed and self.search_due == null));
+    }
+
+    fn restoreInteraction(self: *Palette, refreshing: bool) void {
+        self.refreshing = refreshing;
+        if (!refreshing) self.updateCommandButtons();
     }
 
     pub fn flushSearch(self: *Palette) void {
@@ -326,6 +345,7 @@ pub const Palette = struct {
         // Import can release the previous library before publishing the new one.
         self.resetting_search = true;
         defer self.resetting_search = false;
+        self.updateCommandButtons();
         _ = win.SetWindowTextW(self.search, windows.wide(""));
         if (self.selected_id) |id| allocator.free(id);
         self.selected_id = null;
@@ -349,6 +369,7 @@ pub const Palette = struct {
     }
 
     fn reactionCommand(self: Palette, message: win.UINT) void {
+        if (!self.commandsAvailable()) return;
         const kind = win.SendMessageW(self.reaction_kind, win.CB_GETCURSEL, 0, 0);
         const count = win.SendMessageW(self.reaction_count, win.CB_GETCURSEL, 0, 0);
         const interval = win.SendMessageW(self.reaction_interval, win.CB_GETCURSEL, 0, 0);
@@ -366,8 +387,9 @@ pub const Palette = struct {
         self.items_refreshing = true;
         defer {
             self.items_refreshing = false;
-            self.refreshing = refreshing;
+            self.restoreInteraction(refreshing);
         }
+        if (!refreshing) self.updateCommandButtons();
         while (self.items_pending) {
             self.items_pending = false;
             self.refreshItemsPass();
@@ -477,8 +499,6 @@ pub const Palette = struct {
         const selected = self.selectedIndex();
         if (self.items_pending) return;
         const item = if (selected) |index| self.rows[index].item else null;
-        _ = win.EnableWindow(self.insert_button, @intFromBool(item != null and !self.refresh_failed and self.search_due == null));
-        if (self.items_pending) return;
         windows.setText(self.preview, if (item) |value| value.text else "");
         if (self.items_pending) return;
         if (self.selected_id) |id| allocator.free(id);
@@ -488,15 +508,16 @@ pub const Palette = struct {
     fn selectionChanged(self: *Palette) void {
         if (self.refreshing) return;
         self.refreshing = true;
+        self.updateCommandButtons();
         self.showSelection();
-        self.refreshing = false;
+        self.restoreInteraction(false);
         if (self.items_pending) self.refreshItems();
     }
 
     fn insert(self: *Palette) void {
-        if (self.refreshing or self.settleSearchForAction() or self.refresh_failed) return;
+        if (!self.commandsAvailable() or self.settleSearchForAction() or self.refresh_failed) return;
         const index = self.selectedIndex() orelse return;
-        if (!self.refreshing and !self.refresh_failed and !self.settleSearchForAction())
+        if (self.commandsAvailable() and !self.refresh_failed and !self.settleSearchForAction())
             _ = win.SendMessageW(self.host, wm_insert, index, 0);
     }
 

@@ -520,8 +520,17 @@ const App = struct {
     }
 
     fn canEdit(self: *const App) bool {
-        return !self.quitting and !self.modal and !self.updatingViews() and !self.worker.active and
+        return self.operationIdle() and !self.updatingViews();
+    }
+
+    fn operationIdle(self: *const App) bool {
+        return !self.quitting and !self.modal and !self.worker.active and
             !self.queue.busy() and self.reaction == null and self.preparation == null;
+    }
+
+    fn paletteOperationsAllowed(self: *const App) bool {
+        // The palette itself owns its transient refresh/search guard.
+        return self.operationIdle() and !self.manager.refreshing and !self.manager.isEditing();
     }
 
     fn updatingViews(self: *const App) bool {
@@ -703,9 +712,10 @@ const App = struct {
         self.modal = true;
         defer {
             self.modal = false;
-            self.manager.updateActions();
+            self.updateReactionButtons();
             self.finishQuit();
         }
+        self.updateReactionButtons();
         self.runDialog(command) catch |failure| self.saveFailure(self.dialogParent(), failure);
     }
 
@@ -941,6 +951,7 @@ const App = struct {
     }
 
     fn stop(self: *App) void {
+        defer self.syncOperationButtons();
         const stop_quick_start = self.preparation == null and self.reaction == null and
             (self.quickReactionStarting() or self.reactionQueued());
         if (self.input_cancellation) |pending| pending.signal.cancel();
@@ -1013,6 +1024,7 @@ const App = struct {
 
     fn requestUsing(self: *App, mode: transport.Mode, target: usize, expected: []const u8, fields: []const transport.Field, comptime exchange: @TypeOf(transport.Client.request)) !transport.Reply {
         if (self.worker.active) return error.WorkerBusy;
+        defer self.syncOperationButtons();
         const generation = self.queue.generation;
         const started = win.GetTickCount64();
         const exchanged = exchange(&self.worker, allocator, self.executable, mode, target, expected, fields, pump);
@@ -1503,7 +1515,8 @@ const App = struct {
     }
 
     fn insertFromPalette(self: *App, index: usize) void {
-        if (self.modal or self.palette.refreshing or self.palette.refresh_failed) return;
+        if (self.updating_reaction_buttons or !self.paletteOperationsAllowed() or
+            self.palette.refreshing or self.palette.resetting_search or self.palette.refresh_failed or self.palette.search_due != null) return;
         const context = self.paletteContext();
         self.deliverPaletteItem(index, context) catch |failure| {
             if (self.paletteContextCurrent(context) and (self.foreground(windows.number(context.target)) or
@@ -1634,10 +1647,16 @@ const App = struct {
         while (true) {
             const active = self.reactionButtonsActive();
             const can_edit = self.canEdit();
-            self.palette.reactionButtons(active);
+            const palette_allowed = self.paletteOperationsAllowed();
+            self.palette.operationButtons(palette_allowed, active);
             self.manager.updateActions();
-            if (active == self.reactionButtonsActive() and can_edit == self.canEdit()) return;
+            if (active == self.reactionButtonsActive() and can_edit == self.canEdit() and
+                palette_allowed == self.paletteOperationsAllowed()) return;
         }
+    }
+
+    fn syncOperationButtons(self: *App) void {
+        if (self.palette.operations_allowed != self.paletteOperationsAllowed()) self.updateReactionButtons();
     }
 
     fn scheduleReactionAdvance(self: *App, generation: u64, wait_ms: u32) bool {
@@ -1847,7 +1866,7 @@ const App = struct {
     }
 
     fn paletteReaction(self: *App, options: view.ReactionOptions, save: bool) void {
-        if (!self.canEdit() or self.manager.isEditing()) return;
+        if (self.updating_reaction_buttons or !self.canEdit() or self.manager.isEditing()) return;
         if (save) {
             self.saveReactionDefaults(options) catch return self.report("標準設定を保存できませんでした。");
             return self.report("リアクションの標準設定を保存しました。");
@@ -2248,6 +2267,105 @@ test "a page acknowledgement requires the expected video and reports the rejecti
         try testing.expect(!app.pageReplySucceeded(.{ .alloc = testing.allocator, .payload = frame }, expected, .ok));
         try testing.expectEqual(state, app.diagnosticSnapshot(0).state);
     }
+}
+
+test "palette operation buttons follow the worker wait, search publication and stop" {
+    const Probe = struct {
+        const inspect = win.WM_APP + 155;
+        var observed_waits: usize = 0;
+        var observed_draws: usize = 0;
+        var forwarded: usize = 0;
+        var blocked = true;
+
+        fn buttons(p: *const view.Palette, insert: bool, options: bool) bool {
+            return (win.IsWindowEnabled(p.insert_button) != 0) == insert and
+                (win.IsWindowEnabled(p.start_button) != 0) == options and
+                (win.IsWindowEnabled(p.save_defaults) != 0) == options;
+        }
+
+        fn click(p: *const view.Palette) void {
+            for ([_]win.HWND{ p.insert_button, p.start_button, p.save_defaults }) |button| {
+                _ = win.SendMessageW(p.window, win.WM_COMMAND, @intCast(win.GetDlgCtrlID(button)), @bitCast(@intFromPtr(button)));
+            }
+        }
+
+        fn host(hwnd: win.HWND, message: win.UINT, w: win.WPARAM, l: win.LPARAM, _: usize, _: usize) callconv(.winapi) win.LRESULT {
+            if (message == inspect) {
+                const p = &current.?.palette;
+                observed_waits += 1;
+                blocked = blocked and buttons(p, false, false);
+                windows.setText(p.search, "absent");
+                windows.setText(p.search, "");
+                blocked = blocked and buttons(p, false, false);
+                click(p);
+                return 0;
+            }
+            if (message == view.wm_insert or message == view.wm_start_reaction or message == view.wm_save_defaults) {
+                forwarded += 1;
+                return 0;
+            }
+            return win.DefSubclassProc(hwnd, message, w, l);
+        }
+
+        fn list(hwnd: win.HWND, message: win.UINT, w: win.WPARAM, l: win.LPARAM, _: usize, _: usize) callconv(.winapi) win.LRESULT {
+            if (message == win.LB_ADDSTRING) {
+                const p = &current.?.palette;
+                observed_draws += 1;
+                blocked = blocked and buttons(p, false, false);
+                click(p);
+            }
+            return win.DefSubclassProc(hwnd, message, w, l);
+        }
+
+        fn exchange(client: *transport.Client, alloc: std.mem.Allocator, _: [:0]const u16, _: transport.Mode, fail: usize, _: []const u8, _: []const transport.Field, wait: transport.Pump) !transport.Reply {
+            client.active = true;
+            defer client.active = false;
+            const signal = win.CreateEventW(null, 1, 1, null) orelse return error.CreateTestEvent;
+            defer _ = win.CloseHandle(signal);
+            if (win.PostMessageW(current.?.window, inspect, 0, 0) == 0) return error.PostTestMessage;
+            try wait(signal, 0);
+            if (fail != 0) return error.ReadWorkerReply;
+            return .{ .alloc = alloc, .payload = try alloc.dupe(u8, "State=ok\n") };
+        }
+    };
+    var app: App = .{ .executable = windows.wide("fixture"), .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null };
+    const previous = current;
+    current = &app;
+    defer current = previous;
+    app.window = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 10, 10, null, null, win.GetModuleHandleW(null), null) orelse return error.CreateTestWindow;
+    defer _ = win.DestroyWindow(app.window);
+    defer app.queue.deinit(allocator);
+    try app.palette.open(app.window);
+    defer app.palette.close();
+    try std.testing.expect(win.SetWindowSubclass(app.window, Probe.host, 87, 0) != 0);
+    defer _ = win.RemoveWindowSubclass(app.window, Probe.host, 87);
+    try std.testing.expect(win.SetWindowSubclass(app.palette.list, Probe.list, 87, 0) != 0);
+    defer _ = win.RemoveWindowSubclass(app.palette.list, Probe.list, 87);
+    const data: storage.Data = .{ .shared_items = &.{.{ .id = "fixture", .name = "one", .text = "text", .slot = 0 }} };
+    app.palette.resetReaction(data.preferences);
+    app.palette.refresh(data);
+    try std.testing.expect(Probe.buttons(&app.palette, true, true));
+    windows.setText(app.palette.search, "absent");
+    try std.testing.expect(Probe.buttons(&app.palette, false, true));
+    windows.setText(app.palette.search, "");
+    const reply = try app.requestUsing(.browser_context, 0, "", &.{}, Probe.exchange);
+    defer reply.deinit();
+    try std.testing.expect(Probe.buttons(&app.palette, true, true));
+    try std.testing.expectError(error.ReadWorkerReply, app.requestUsing(.browser_context, 1, "", &.{}, Probe.exchange));
+    try std.testing.expect(Probe.buttons(&app.palette, true, true));
+    try app.queue.enqueue(allocator, .{ .action = .chat_focus, .window = 1 }, 0, null);
+    app.syncOperationButtons();
+    try std.testing.expect(Probe.buttons(&app.palette, false, false));
+    app.stop();
+    try std.testing.expect(Probe.buttons(&app.palette, true, true));
+    defer app.reaction_progress.close();
+    defer if (app.reaction_result) |result| result.deinit();
+    app.reaction = .{ .target = 1, .video = "Fixture0001".*, .page = @splat(0), .kind = 1, .count = 5, .interval = 200 };
+    app.updateReactionButtons();
+    try std.testing.expect(Probe.buttons(&app.palette, false, false) and win.IsWindowEnabled(app.palette.stop_button) != 0);
+    app.stop();
+    try std.testing.expect(Probe.buttons(&app.palette, true, true) and win.IsWindowEnabled(app.palette.stop_button) == 0);
+    try std.testing.expect(Probe.observed_waits == 2 and Probe.observed_draws >= 4 and Probe.blocked and Probe.forwarded == 0);
 }
 
 test "desktop records the communication cause and an unconfirmed worker exit together" {
@@ -3460,7 +3578,10 @@ fn messageHandler(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam:
         },
         management.wm_back => app.show(.{ .previous_target = if (wparam == 0) .keep_options else .load_defaults }),
         management.wm_support => app.contextMenu(),
-        management.wm_edit_allowed => return @intFromBool(app.canEdit()),
+        management.wm_edit_allowed => {
+            app.syncOperationButtons();
+            return @intFromBool(app.canEdit());
+        },
         management.wm_resolve_channel => if (lparam != 0) app.resolveChannel(@ptrFromInt(@as(usize, @bitCast(lparam)))),
         else => return win.DefWindowProcW(hwnd, message, wparam, lparam),
     }
@@ -3468,7 +3589,9 @@ fn messageHandler(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam:
 }
 
 fn dispatch(message: *win.MSG) void {
+    defer if (current) |app| app.syncOperationButtons();
     if (current) |app| {
+        app.syncOperationButtons();
         if (app.manager.filterMessage(message)) return;
         if (app.palette.filterMessage(message)) return;
     }
@@ -3477,6 +3600,7 @@ fn dispatch(message: *win.MSG) void {
 }
 
 fn pump(signal: win.HANDLE, milliseconds: u32) !void {
+    if (current) |app| app.syncOperationButtons();
     if (win.MsgWaitForMultipleObjectsEx(1, &signal, milliseconds, win.QS_ALLINPUT, win.MWMO_INPUTAVAILABLE) == win.WAIT_FAILED)
         return error.WorkerWaitFailed;
     var message: win.MSG = undefined;
