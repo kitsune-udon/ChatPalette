@@ -20,7 +20,10 @@ const save_items_id = 203;
 const key_status_id = 204;
 const item_status_id = 205;
 
+extern "user32" fn EnumThreadWindows(win.DWORD, *const fn (win.HWND, win.LPARAM) callconv(.winapi) win.BOOL, win.LPARAM) callconv(.winapi) win.BOOL;
+
 var shortcut_editor: win.HWND = null;
+var help_window: win.HWND = null;
 
 pub fn shortcutEditorAwayFrom(foreground: win.HWND) win.HWND {
     const editor = shortcut_editor orelse return null;
@@ -230,7 +233,7 @@ const Dialog = struct {
 
     fn openHelpShortcuts(self: *Dialog) void {
         const routes = self.help_shortcuts orelse return;
-        if (self.finishing or self.close_requested) return;
+        if (self.finishing or self.close_requested or win.IsWindowVisible(self.window) == 0 or win.IsWindowEnabled(self.window) == 0) return;
         self.finishing = true;
         defer self.finishing = false;
         routes.open(routes.context, self.window);
@@ -284,6 +287,11 @@ const Dialog = struct {
             return;
         }
         self.close_requested = true;
+        // A sent close can run inside GetMessageW. Wake the modal loop before hiding the dialog.
+        if (self.help_shortcuts == null) _ = win.PostMessageW(self.window, win.WM_NULL, 0, 0);
+        if (self.help_shortcuts != null and win.GetForegroundWindow() == self.window) {
+            self.restoreParentFocus(win.GetWindow(self.window, win.GW_OWNER));
+        }
         _ = win.ShowWindow(self.window, win.SW_HIDE);
     }
 
@@ -499,7 +507,26 @@ const Dialog = struct {
 
     fn parentHasSuccessor(self: *const Dialog, parent: win.HWND) bool {
         const popup = win.GetWindow(parent, win.GW_ENABLEDPOPUP);
-        return popup != null and popup != parent and popup != self.window and win.IsWindowVisible(popup) != 0;
+        if (popup == null or popup == parent) return false;
+        if (popup != help_window) return popup != self.window and win.IsWindowVisible(popup) != 0;
+
+        // A visible modeless help window does not hold the parent's modal lock.
+        const Search = struct {
+            parent: win.HWND,
+            dialog: win.HWND,
+            found: bool = false,
+
+            fn check(candidate: win.HWND, context: win.LPARAM) callconv(.winapi) win.BOOL {
+                const search: *@This() = @ptrFromInt(@as(usize, @bitCast(context)));
+                search.found = candidate != search.dialog and candidate != help_window and
+                    win.GetWindow(candidate, win.GW_OWNER) == search.parent and
+                    win.IsWindowVisible(candidate) != 0 and win.IsWindowEnabled(candidate) != 0;
+                return @intFromBool(!search.found);
+            }
+        };
+        var search: Search = .{ .parent = parent, .dialog = self.window };
+        _ = EnumThreadWindows(win.GetCurrentThreadId(), Search.check, @bitCast(@intFromPtr(&search)));
+        return search.found;
     }
 
     fn releaseParent(self: *Dialog) bool {
@@ -514,35 +541,70 @@ const Dialog = struct {
             self.disabled_parent = parent;
             return false;
         }
-        if (!owned or win.IsWindowVisible(parent) == 0) return true;
+        if (owned and self.help_shortcuts == null) self.restoreParentFocus(parent);
+        return true;
+    }
+
+    fn restoreParentFocus(self: *Dialog, parent: win.HWND) void {
+        if (parent == null or win.IsWindowVisible(parent) == 0 or win.IsWindowEnabled(parent) == 0) return;
         const current = win.GetForegroundWindow();
-        if (current != self.window and current != parent) return true;
+        if (current != self.window and current != parent) return;
         _ = win.SetForegroundWindow(parent);
-        const focus = self.original_focus;
-        if (win.GetForegroundWindow() == parent and focus != null and win.IsChild(parent, focus) != 0 and
-            win.IsWindowVisible(focus) != 0 and win.IsWindowEnabled(focus) != 0) _ = win.SetFocus(focus);
+        const original = self.original_focus;
+        if (win.GetForegroundWindow() == parent and original != null and win.IsChild(parent, original) != 0 and
+            win.IsWindowVisible(original) != 0 and win.IsWindowEnabled(original) != 0) _ = win.SetFocus(original);
+    }
+
+    fn prepare(self: *Dialog, parent: win.HWND) void {
+        self.font.applyChildren(self.window);
+        windows.fitWindow(self.window, parent);
+        self.resize();
+    }
+
+    fn disableParent(self: *Dialog, parent: win.HWND) void {
+        if (parent != null and win.IsWindowEnabled(parent) != 0) {
+            self.disabled_parent = parent;
+            _ = win.EnableWindow(parent, 0);
+        }
+    }
+
+    fn show(self: *Dialog) !bool {
+        if (self.close_requested) return false;
+        _ = win.ShowWindow(self.window, win.SW_SHOW);
+        if (self.close_requested) return false;
+        if (win.IsWindowVisible(self.window) == 0) return error.ShowSupportWindow;
+        return true;
+    }
+
+    fn focus(self: *Dialog) void {
+        _ = win.SetForegroundWindow(self.window);
+        if (win.GetForegroundWindow() == self.window) _ = win.SetFocus(if (self.document != null) self.document else self.edits[0]);
+    }
+
+    fn filterMessage(self: *Dialog, message: *win.MSG) bool {
+        if (self.window == null or win.IsWindowVisible(self.window) == 0 or win.IsWindowEnabled(self.window) == 0 or
+            (message.hwnd != self.window and win.IsChild(self.window, message.hwnd) == 0)) return false;
+        if (message.message == win.WM_KEYDOWN and message.wParam == win.VK_ESCAPE) {
+            self.requestClose();
+            return true;
+        }
+        const tab = message.message == win.WM_KEYDOWN and message.wParam == win.VK_TAB;
+        if (win.IsDialogMessageW(self.window, message) == 0) return false;
+        if (tab and self.viewport.revealFocus(self.window)) self.resize();
         return true;
     }
 
     fn run(self: *Dialog, parent: win.HWND) !void {
-        self.font.applyChildren(self.window);
-        windows.fitWindow(self.window, parent);
-        self.resize();
-        if (parent != null and win.IsWindowEnabled(parent) != 0) {
-            self.disabled_parent = parent;
-            self.original_focus = win.GetFocus();
-            _ = win.EnableWindow(parent, 0);
-        }
+        self.prepare(parent);
+        self.original_focus = win.GetFocus();
+        self.disableParent(parent);
         defer _ = self.releaseParent();
-        _ = win.ShowWindow(self.window, win.SW_SHOW);
-        if (self.close_requested) return;
-        if (win.IsWindowVisible(self.window) == 0) return error.ShowSupportWindow;
+        if (!try self.show()) return;
         if (self.editor != null) shortcut_editor = self.window;
         defer if (shortcut_editor == self.window) {
             shortcut_editor = null;
         };
-        _ = win.SetForegroundWindow(self.window);
-        _ = win.SetFocus(if (self.document != null) self.document else self.edits[0]);
+        self.focus();
         var message: win.MSG = undefined;
         while (win.IsWindowVisible(self.window) != 0) {
             const received = win.GetMessageW(&message, null, 0, 0);
@@ -553,17 +615,7 @@ const Dialog = struct {
             }
             if (self.scrollShortcutsWithWheel(message)) continue;
             if (self.capture(message)) continue;
-            if (message.message == win.WM_KEYDOWN and message.wParam == win.VK_ESCAPE and
-                (message.hwnd == self.window or win.IsChild(self.window, message.hwnd) != 0))
-            {
-                self.requestClose();
-                continue;
-            }
-            const tab = message.message == win.WM_KEYDOWN and message.wParam == win.VK_TAB;
-            if (win.IsDialogMessageW(self.window, &message) != 0) {
-                if (tab and self.viewport.revealFocus(self.window)) self.resize();
-                continue;
-            }
+            if (self.filterMessage(&message)) continue;
             _ = win.TranslateMessage(&message);
             _ = win.DispatchMessageW(&message);
         }
@@ -617,6 +669,11 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
     const pointer: usize = @bitCast(win.GetWindowLongPtrW(hwnd, win.GWLP_USERDATA));
     if (pointer == 0) return win.DefWindowProcW(hwnd, message, wparam, lparam);
     const dialog: *Dialog = @ptrFromInt(pointer);
+    if (message == win.WM_NCDESTROY and dialog.help_shortcuts != null) {
+        if (help_window == hwnd) help_window = null;
+        if (dialog.window == hwnd) dialog.window = null;
+        return win.DefWindowProcW(hwnd, message, wparam, lparam);
+    }
     if (message == win.WM_CLOSE) {
         dialog.requestClose();
         return 0;
@@ -740,13 +797,50 @@ pub fn diagnosticDocument(parent: win.HWND, source: DiagnosticSource, version: [
     try dialog.run(parent);
 }
 
-pub fn helpDocument(parent: win.HWND, shortcut_route: HelpShortcuts) !void {
-    var dialog: Dialog = .{ .help_shortcuts = shortcut_route };
-    defer dialog.close();
-    try dialog.openDocument(parent, "使い方", false);
-    try dialog.paintDocument(help);
-    try dialog.run(parent);
-}
+pub const Help = struct {
+    dialog: Dialog = .{},
+    opening: bool = false,
+
+    pub fn show(self: *Help, parent: win.HWND, shortcut_route: HelpShortcuts) !void {
+        if (self.opening or self.dialog.finishing) return;
+        self.opening = true;
+        defer self.opening = false;
+        if (self.dialog.window != null and !self.dialog.close_requested and win.IsWindowVisible(self.dialog.window) != 0) {
+            windows.recallOwnedWindow(self.dialog.window);
+            return;
+        }
+        self.close();
+        self.dialog.help_shortcuts = shortcut_route;
+        errdefer self.close();
+        try self.dialog.openDocument(parent, "使い方", false);
+        help_window = self.dialog.window;
+        try self.dialog.paintDocument(help);
+        self.dialog.prepare(parent);
+        if (win.GetForegroundWindow() == parent) self.dialog.original_focus = win.GetFocus();
+        if (try self.dialog.show()) self.dialog.focus();
+    }
+
+    pub fn close(self: *Help) void {
+        self.dialog.close();
+        self.dialog = .{};
+    }
+
+    pub fn filterMessage(self: *Help, message: *win.MSG) bool {
+        return self.dialog.filterMessage(message);
+    }
+
+    pub fn suspendOwnerForShortcuts(self: *Help, source: win.HWND) bool {
+        if (self.opening or source != self.dialog.window or !self.dialog.finishing or self.dialog.close_requested) return false;
+        if (!self.dialog.releaseParent()) return false;
+        self.dialog.disableParent(win.GetWindow(source, win.GW_OWNER));
+        return self.dialog.window == source;
+    }
+
+    pub fn resumeOwnerAfterShortcuts(self: *Help) void {
+        const title = if (self.dialog.releaseParent()) "使い方" else "親画面を有効にできませんでした。「閉じる」で再試行";
+        windows.setText(self.dialog.window, title);
+    }
+};
 
 const help =
     "弾幕を使う\r\nYouTubeのチャット・コメント欄を選んでパレットを開き、弾幕を選びます。弾幕は入力のみです。\r\n\r\n" ++
@@ -851,6 +945,81 @@ test "support retries a disabled owner without changing the displayed document o
         try t.expect(dialog.releaseParent());
         try t.expectEqual(@as(usize, 3), probe.enable_attempts);
     }
+}
+
+test "closing a modal support window dispatches the next parent command outside the modal loop" {
+    const testing = std.testing;
+    const Probe = struct {
+        const ready_message = win.WM_APP + 91;
+        const next_command = win.WM_APP + 92;
+        host: win.HWND,
+        dialog: win.HWND,
+        ready: std.atomic.Value(bool) = .init(false),
+        running: bool = false,
+        nested: usize = 0,
+        outside: usize = 0,
+        sent: bool = false,
+        posted: bool = false,
+
+        fn onHost(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const self: *@This() = @ptrFromInt(context);
+            switch (message) {
+                ready_message => self.ready.store(self.running, .release),
+                next_command => if (self.running) {
+                    self.nested += 1;
+                } else {
+                    self.outside += 1;
+                },
+                else => return win.DefSubclassProc(hwnd, message, wparam, lparam),
+            }
+            return 0;
+        }
+
+        fn otherThread(self: *@This()) void {
+            const deadline = win.GetTickCount64() + 3000;
+            while (!self.ready.load(.acquire) and win.GetTickCount64() < deadline) std.Thread.sleep(2 * std.time.ns_per_ms);
+            // Let the dialog thread return to GetMessage with an empty posted queue.
+            std.Thread.sleep(60 * std.time.ns_per_ms);
+            var result: win.DWORD_PTR = 0;
+            self.sent = win.SendMessageTimeoutW(self.dialog, win.WM_CLOSE, 0, 0, win.SMTO_ABORTIFHUNG, 3000, &result) != 0;
+            if (!self.sent) _ = win.PostMessageW(self.dialog, win.WM_CLOSE, 0, 0);
+            self.posted = win.PostMessageW(self.host, next_command, 0, 0) != 0;
+        }
+
+        fn observe() !struct { nested: usize, outside: usize } {
+            const host = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 80, 50, null, null, win.GetModuleHandleW(null), null) orelse return error.TestOwnerUnavailable;
+            defer _ = win.DestroyWindow(host);
+            var dialog: Dialog = .{};
+            defer dialog.close();
+            try dialog.openDocument(host, "Close order test", false);
+            try dialog.paintDocument("Synthetic diagnostic text");
+            var test_probe: @This() = .{ .host = host, .dialog = dialog.window };
+            if (win.SetWindowSubclass(host, onHost, 1, @intFromPtr(&test_probe)) == 0) return error.TestOwnerSubclassUnavailable;
+            defer _ = win.RemoveWindowSubclass(host, onHost, 1);
+            if (win.PostMessageW(host, ready_message, 0, 0) == 0) return error.TestReadyMessageUnavailable;
+            const thread = try std.Thread.spawn(.{}, otherThread, .{&test_probe});
+            test_probe.running = true;
+            const run_result = dialog.run(host);
+            test_probe.running = false;
+            thread.join();
+            try run_result;
+            try testing.expect(test_probe.ready.load(.acquire) and test_probe.sent and test_probe.posted);
+            try testing.expect(win.IsWindowVisible(dialog.window) == 0 and win.IsWindowEnabled(host) != 0);
+            var message: win.MSG = undefined;
+            while (win.PeekMessageW(&message, host, next_command, next_command, win.PM_REMOVE) != 0) _ = win.DispatchMessageW(&message);
+            try testing.expectEqual(@as(usize, 1), test_probe.nested + test_probe.outside);
+            return .{ .nested = test_probe.nested, .outside = test_probe.outside };
+        }
+    };
+    var nested: usize = 0;
+    var outside: usize = 0;
+    for (0..4) |_| {
+        const result = try Probe.observe();
+        nested += result.nested;
+        outside += result.outside;
+    }
+    std.debug.print("CLOSE_ORDER nested={d} outside={d}\n", .{ nested, outside });
+    try testing.expectEqual(@as(usize, 0), nested);
 }
 
 test "the key editor honors semantic changes, including invalid unsaved drafts" {

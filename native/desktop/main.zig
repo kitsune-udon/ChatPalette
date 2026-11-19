@@ -250,6 +250,7 @@ const App = struct {
     window: win.HWND = null,
     palette: view.Palette = .{},
     manager: management.Management = .{},
+    help: support.Help = .{},
     history: storage.LibraryHistory,
     prefs_arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(allocator),
     tray: bool = false,
@@ -328,6 +329,7 @@ const App = struct {
         self.reaction_progress.close();
         self.status_tip.close();
         if (self.reaction_result) |result| result.deinit();
+        self.help.close();
         self.palette.close();
         self.manager.close();
         if (self.window != null) _ = win.DestroyWindow(self.window);
@@ -406,7 +408,8 @@ const App = struct {
             menu_quit => self.quit(false),
             menu_restart => self.requestRestart(),
             menu_manage => self.openManagement(false),
-            menu_keys, menu_help, menu_diag, menu_import, menu_export, menu_reaction_result => self.dialogCommand(command),
+            menu_help => self.showHelp(),
+            menu_keys, menu_diag, menu_import, menu_export, menu_reaction_result => self.dialogCommand(command, null),
             menu_capture => self.startPreparation(.reaction_capture),
             menu_check => self.startPreparation(.reaction_check),
             else => {},
@@ -757,7 +760,13 @@ const App = struct {
         return self.window;
     }
 
-    fn dialogCommand(self: *App, command: win.BOOL) void {
+    fn showHelp(self: *App) void {
+        if (!self.canEdit() or self.manager.isEditing()) return;
+        const parent = self.dialogParent();
+        self.help.show(parent, .{ .context = self, .open = openShortcutsFromHelp }) catch |failure| self.saveFailure(parent, failure);
+    }
+
+    fn dialogCommand(self: *App, command: win.BOOL, shortcut_help: win.HWND) void {
         if (!self.canEdit() or self.manager.isEditing()) return;
         self.modal = true;
         defer {
@@ -766,6 +775,13 @@ const App = struct {
             self.finishQuit();
         }
         self.updateReactionButtons();
+        if (shortcut_help != null) {
+            if (self.quitting or !self.help.suspendOwnerForShortcuts(shortcut_help)) return;
+            defer self.help.resumeOwnerAfterShortcuts();
+            if (self.quitting) return;
+            self.openShortcuts(shortcut_help) catch |failure| self.saveFailure(shortcut_help, failure);
+            return;
+        }
         self.runDialog(command) catch |failure| self.saveFailure(self.dialogParent(), failure);
     }
 
@@ -815,15 +831,13 @@ const App = struct {
 
     fn openShortcutsFromHelp(context: *anyopaque, help: win.HWND) void {
         const self: *App = @ptrCast(@alignCast(context));
-        if (self.quitting) return;
-        self.openShortcuts(help) catch |failure| self.saveFailure(help, failure);
+        self.dialogCommand(menu_keys, help);
     }
 
     fn runDialog(self: *App, command: win.BOOL) !void {
         const parent = self.dialogParent();
         switch (command) {
             menu_keys => try self.openShortcuts(parent),
-            menu_help => try support.helpDocument(parent, .{ .context = self, .open = openShortcutsFromHelp }),
             menu_reaction_result => {
                 self.reaction_progress.hide();
                 const result = self.reaction_result orelse return support.document(parent, "リアクションの実行結果", "まだ実行していません。", false);
@@ -2425,6 +2439,115 @@ test "palette operation buttons follow the worker wait, search publication and s
     try std.testing.expect(Probe.observed_waits == 2 and Probe.observed_draws >= 4 and Probe.blocked and Probe.forwarded == 0);
 }
 
+test "modeless help releases its original palette after shortcut editing" {
+    const Probe = struct {
+        app: *App,
+        help: win.HWND,
+        button: win.HWND,
+        from_help: bool = true,
+        opens: usize = 0,
+        attempted_close: bool = false,
+        locked: bool = false,
+
+        var active: ?*@This() = null;
+        extern "user32" fn SetTimer(win.HWND, win.UINT_PTR, win.UINT, *const fn (win.HWND, win.UINT, win.UINT_PTR, win.DWORD) callconv(.winapi) void) callconv(.winapi) win.UINT_PTR;
+
+        fn closeEditor(_: win.HWND, _: win.UINT, timer: win.UINT_PTR, _: win.DWORD) callconv(.winapi) void {
+            const self = active orelse return;
+            if (self.attempted_close) {
+                _ = win.KillTimer(null, timer);
+                win.PostQuitMessage(1);
+                return;
+            }
+            self.attempted_close = true;
+            const parent = self.app.palette.window;
+            const editor = support.shortcutEditorAwayFrom(parent) orelse {
+                _ = win.KillTimer(null, timer);
+                win.PostQuitMessage(1);
+                return;
+            };
+            self.opens += 1;
+            self.locked = self.app.modal and win.IsWindowEnabled(parent) == 0 and
+                win.GetWindow(editor, win.GW_OWNER) == (if (self.from_help) self.help else parent);
+            if (self.from_help) {
+                // The owner's nested callbacks cannot start another editor or close help.
+                _ = win.SendMessageW(self.help, win.WM_COMMAND, 5, @bitCast(windows.number(self.button)));
+                _ = win.SendMessageW(self.help, win.WM_CLOSE, 0, 0);
+                self.locked = self.locked and win.IsWindowEnabled(self.help) == 0 and win.IsWindowVisible(self.help) != 0;
+            }
+            _ = win.SendMessageW(editor, win.WM_CLOSE, 0, 0);
+        }
+    };
+    const t = std.testing;
+    var directory = t.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(t.allocator, ".");
+    defer t.allocator.free(root);
+    const path = try std.fs.path.join(t.allocator, &.{ root, "settings.db" });
+    defer t.allocator.free(path);
+    var db = try storage.Store.open(t.allocator, path);
+    defer db.close();
+    var app: App = .{
+        .executable = windows.wide("modeless-help-fixture.exe"),
+        .db = &db,
+        .snapshot = try db.load(t.allocator),
+        .history = storage.LibraryHistory.init(t.allocator),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    current = &app;
+    defer current = null;
+    const module = win.GetModuleHandleW(null);
+    app.window = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 1, 1, null, null, module, null) orelse
+        return error.CreateModelessHelpHost;
+    try app.palette.open(app.window);
+    const parent = app.palette.window;
+    _ = win.ShowWindow(parent, win.SW_SHOWNOACTIVATE);
+    app.menuCommand(menu_help);
+    const help_window = app.help.dialog.window orelse return error.ShowModelessHelp;
+    const button = win.GetDlgItem(help_window, 5) orelse return error.MissingHelpShortcutButton;
+    const document_control = win.GetDlgItem(help_window, 100) orelse return error.MissingHelpDocument;
+    try t.expect(win.GetWindow(help_window, win.GW_OWNER) == parent and win.IsWindowEnabled(parent) != 0 and app.canEdit());
+
+    var probe: Probe = .{ .app = &app, .help = help_window, .button = button };
+    Probe.active = &probe;
+    defer Probe.active = null;
+    for ([_]bool{ true, false }) |from_help| {
+        probe.from_help = from_help;
+        probe.attempted_close = false;
+        probe.locked = false;
+        // The editor is created synchronously before its nested queue first services this timer.
+        const timer = Probe.SetTimer(null, 0, 10, Probe.closeEditor);
+        try t.expect(timer != 0);
+        defer _ = win.KillTimer(null, timer);
+        if (from_help)
+            _ = win.SendMessageW(help_window, win.WM_COMMAND, 5, @bitCast(windows.number(button)))
+        else
+            app.menuCommand(menu_keys);
+        var quit_message: win.MSG = undefined;
+        try t.expect(win.PeekMessageW(&quit_message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) == 0);
+        try t.expect(probe.locked and win.IsWindowEnabled(parent) != 0 and app.canEdit());
+        try t.expect(win.IsWindowEnabled(help_window) != 0 and win.IsWindowVisible(help_window) != 0);
+        try t.expectEqual(document_control, win.GetDlgItem(help_window, 100));
+    }
+    try t.expectEqual(@as(usize, 2), probe.opens);
+
+    const other = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), win.WS_OVERLAPPEDWINDOW, 0, 0, 1, 1, null, null, module, null) orelse
+        return error.CreateAlternateHelpWindow;
+    defer _ = win.DestroyWindow(other);
+    _ = win.ShowWindow(other, win.SW_SHOW);
+    _ = win.SetForegroundWindow(other);
+    const foreground = win.GetForegroundWindow();
+    _ = win.SendMessageW(help_window, win.WM_CLOSE, 0, 0);
+    if (foreground == other) try t.expectEqual(other, win.GetForegroundWindow());
+    try t.expect(win.IsWindowVisible(help_window) == 0 and win.IsWindowEnabled(parent) != 0);
+    app.menuCommand(menu_help);
+    const reopened = app.help.dialog.window orelse return error.ReopenModelessHelp;
+    try t.expect(win.GetWindow(reopened, win.GW_OWNER) == parent and win.IsWindowVisible(reopened) != 0);
+    app.help.close();
+    try t.expect(win.IsWindow(reopened) == 0 and win.IsWindowEnabled(parent) != 0);
+}
+
 test "management channel lookup distinguishes current failures and drops obsolete notifications" {
     const Probe = struct {
         const Case = enum { no_target, no_result, network, metadata, automation, transport_error, timeout, changed_page, retargeted, stopped };
@@ -3780,6 +3903,7 @@ fn dispatch(message: *win.MSG) void {
         app.syncOperationButtons();
         if (app.manager.filterMessage(message)) return;
         if (app.palette.filterMessage(message)) return;
+        if (app.help.filterMessage(message)) return;
     }
     _ = win.TranslateMessage(message);
     _ = win.DispatchMessageW(message);
