@@ -99,6 +99,7 @@ const Editor = struct {
     status: win.HWND = null,
     save: win.HWND = null,
     cancel: win.HWND = null,
+    parent: win.HWND = null,
     parent_was_enabled: bool = false,
     viewport: Viewport = .{},
     laying_out: bool = false,
@@ -192,6 +193,7 @@ pub const Management = struct {
     saving_editor: bool = false,
     confirming: bool = false,
     scope: win.HWND = null,
+    scope_choices: @import("profile_choices.zig") = .{},
     profile_add: win.HWND = null,
     profile_menu: win.HWND = null,
     list: win.HWND = null,
@@ -249,6 +251,7 @@ pub const Management = struct {
     pub fn close(self: *Management) void {
         self.closeDialog();
         if (self.window != null) _ = win.DestroyWindow(self.window);
+        self.scope_choices.clear();
         if (self.published_list) |previous| previous.release();
         self.font.deinit();
         self.resetSelection();
@@ -367,7 +370,11 @@ pub const Management = struct {
         windows.setText(self.channel, text);
         const scope_was_failed = self.scope_update_failed;
         self.scope_update_failed = false;
+        self.scope_choices.clear();
         fillScopes(self.scope, data.profiles, "共通の弾幕") catch {
+            self.scope_update_failed = true;
+        };
+        if (!self.scope_update_failed) self.scope_choices.publish(data.profiles) catch {
             self.scope_update_failed = true;
         };
         _ = win.EnableWindow(self.scope, @intFromBool(!self.scope_update_failed));
@@ -469,7 +476,8 @@ pub const Management = struct {
 
     fn selectScope(self: *Management) !void {
         const i = currentChoice(self.scope) orelse return error.ProfileMissing;
-        try setIdentity(&self.editing, try scopeAt(self.snapshot.data, i));
+        const id = self.scope_choices.resolve(self.snapshot.data, i) orelse return error.ProfileMissing;
+        try setIdentity(&self.editing, id);
         try setIdentity(&self.selection, "");
         const current_channel = if (self.snapshot.data.findProfile(self.editingId())) |profile|
             (if (profile.channel.len == 0) "チャンネル未連携" else profile.channel)
@@ -536,7 +544,12 @@ pub const Management = struct {
 
     fn command(self: *Management, id: u16, notification: u16) !void {
         if (id == @intFromEnum(Id.scope) and notification == win.CBN_SELCHANGE) {
-            if (!self.isEditing() and self.editAllowed() and !self.scope_update_failed) try self.selectScope() else self.refresh();
+            if (!self.isEditing() and self.editAllowed() and !self.scope_update_failed) {
+                self.selectScope() catch |failure| {
+                    self.refresh();
+                    return failure;
+                };
+            } else self.refresh();
             return;
         }
         if (notification != win.BN_CLICKED) return;
@@ -688,8 +701,8 @@ pub const Management = struct {
             .link_profile => 386,
             else => 268,
         };
-        dialog.window = win.CreateWindowExW(ex_style, editor_class, title, styles, win.CW_USEDEFAULT, win.CW_USEDEFAULT, self.dpi.pixels(500), self.dpi.pixels(height), self.window, null, win.GetModuleHandleW(null), self) orelse return error.CreateEditorWindow;
-        dialog.parent_was_enabled = win.IsWindowEnabled(self.window) != 0;
+        dialog.parent = self.window;
+        dialog.window = win.CreateWindowExW(ex_style, editor_class, title, styles, win.CW_USEDEFAULT, win.CW_USEDEFAULT, self.dpi.pixels(500), self.dpi.pixels(height), dialog.parent, null, win.GetModuleHandleW(null), self) orelse return error.CreateEditorWindow;
         self.dialog = dialog;
         self.editor_generation +%= 1;
         // The local arena no longer owns the content after publishing the editor.
@@ -697,9 +710,10 @@ pub const Management = struct {
         errdefer self.closeDialog();
         try self.editorControls();
         self.font.applyChildren(self.dialog.window);
-        windows.fitWindow(self.dialog.window, self.window);
+        windows.fitWindow(self.dialog.window, self.dialog.parent);
         self.resizeEditor();
-        if (self.dialog.parent_was_enabled) _ = win.EnableWindow(self.window, 0);
+        self.dialog.parent_was_enabled = win.IsWindowEnabled(self.dialog.parent) != 0;
+        if (self.dialog.parent_was_enabled) _ = win.EnableWindow(self.dialog.parent, 0);
         _ = win.ShowWindow(self.dialog.window, win.SW_SHOWNORMAL);
         _ = win.SetForegroundWindow(self.dialog.window);
         _ = win.SetFocus(switch (mode) {
@@ -904,13 +918,14 @@ pub const Management = struct {
     fn closeDialog(self: *Management) void {
         const editor = self.dialog.window orelse return;
         const was_foreground = win.GetForegroundWindow() == editor;
-        if (self.dialog.parent_was_enabled and win.IsWindow(self.window) != 0) _ = win.EnableWindow(self.window, 1);
+        const parent = self.dialog.parent;
+        if (self.dialog.parent_was_enabled and win.IsWindow(parent) != 0) _ = win.EnableWindow(parent, 1);
         self.dialog.window = null;
         _ = win.DestroyWindow(editor);
         self.dialog.arena.deinit();
         self.dialog = .{};
-        if (was_foreground and win.IsWindowVisible(self.window) != 0 and win.IsWindowEnabled(self.window) != 0) {
-            _ = win.SetForegroundWindow(self.window);
+        if (was_foreground and parent == self.window and win.IsWindowVisible(parent) != 0 and win.IsWindowEnabled(parent) != 0) {
+            _ = win.SetForegroundWindow(parent);
             _ = win.SetFocus(self.list);
             if (self.viewport.revealFocus(self.window)) self.resize();
         }

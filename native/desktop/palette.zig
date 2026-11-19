@@ -41,6 +41,7 @@ pub const Palette = struct {
     link_button: win.HWND = null,
     mode: win.HWND = null,
     profile: win.HWND = null,
+    profile_choices: @import("profile_choices.zig") = .{},
     reaction_heading: win.HWND = null,
     reaction_registration: win.HWND = null,
     reaction_kind: win.HWND = null,
@@ -111,6 +112,7 @@ pub const Palette = struct {
     }
 
     pub fn close(self: *Palette) void {
+        self.profile_choices.clear();
         if (self.window != null) _ = win.DestroyWindow(self.window);
         self.font.deinit();
         if (self.selected_id) |id| allocator.free(id);
@@ -154,9 +156,9 @@ pub const Palette = struct {
         self.refreshing = true;
         defer self.refreshing = refreshing;
         self.refresh_failed = false;
+        self.profile_choices.clear();
         self.data = data;
         _ = win.SendMessageW(self.mode, win.CB_SETCURSEL, if (data.preferences.auto_mode) 0 else 1, 0);
-        _ = win.EnableWindow(self.profile, @intFromBool(!data.preferences.auto_mode));
         _ = win.SendMessageW(self.profile, win.CB_RESETCONTENT, 0, 0);
         if (!addText(self.profile, win.CB_ADDSTRING, "配信者未選択")) self.refresh_failed = true;
         const profile_id = self.visibleProfileId();
@@ -165,6 +167,10 @@ pub const Palette = struct {
             if (!addText(self.profile, win.CB_ADDSTRING, profile.name)) self.refresh_failed = true;
             if (std.mem.eql(u8, profile.id, profile_id)) selected = index;
         }
+        if (self.window != null and !self.refresh_failed) self.profile_choices.publish(data.profiles) catch {
+            self.refresh_failed = true;
+        };
+        _ = win.EnableWindow(self.profile, @intFromBool(!data.preferences.auto_mode and !self.refresh_failed));
         _ = win.SendMessageW(self.profile, win.CB_SETCURSEL, selected, 0);
         self.refreshItems();
     }
@@ -457,8 +463,8 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             if (id == @intFromEnum(Id.support) and code == win.BN_CLICKED) _ = win.SendMessageW(palette.host, wm_support, 0, 0);
             if (id == @intFromEnum(Id.auto_mode) and code == win.CBN_SELCHANGE)
                 _ = win.SendMessageW(palette.host, wm_mode, @intCast(@max(0, win.SendMessageW(palette.mode, win.CB_GETCURSEL, 0, 0))), 0);
-            if (id == @intFromEnum(Id.profile) and code == win.CBN_SELCHANGE)
-                _ = win.SendMessageW(palette.host, wm_profile, @intCast(@max(0, win.SendMessageW(palette.profile, win.CB_GETCURSEL, 0, 0))), 0);
+            if (id == @intFromEnum(Id.profile) and code == win.CBN_SELCHANGE and !palette.refreshing)
+                _ = win.SendMessageW(palette.host, wm_profile, @bitCast(win.SendMessageW(palette.profile, win.CB_GETCURSEL, 0, 0)), 0);
             if (id == @intFromEnum(Id.start) and code == win.BN_CLICKED) palette.reactionCommand(wm_start_reaction);
             if (id == @intFromEnum(Id.save_defaults) and code == win.BN_CLICKED) palette.reactionCommand(wm_save_defaults);
             if (id == @intFromEnum(Id.load_defaults) and code == win.BN_CLICKED) palette.resetReaction(palette.data.preferences);

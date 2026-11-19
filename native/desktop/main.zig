@@ -496,7 +496,8 @@ const App = struct {
         self.snapshot.data.preferences = next;
         switch (change) {
             .user_setting => {
-                self.keyboard.tracker.replace(bindings);
+                if (!std.meta.eql(self.keyboard.tracker.bindings, bindings))
+                    self.keyboard.tracker.replace(bindings);
                 self.libraryChanged();
             },
             .automatic_profile => {
@@ -524,9 +525,14 @@ const App = struct {
     }
 
     fn changeProfile(self: *App, index: usize) void {
-        if (!self.canEdit() or index > self.snapshot.data.profiles.len) return self.palette.refresh(self.snapshot.data);
+        if (self.palette.refreshing) return;
+        if (!self.canEdit()) return self.palette.refresh(self.snapshot.data);
+        const id = self.palette.profile_choices.resolve(self.snapshot.data, index) orelse {
+            self.palette.refresh(self.snapshot.data);
+            return self.report("対象が見つかりません。配信者を選び直してください。");
+        };
         var preferences = self.snapshot.data.preferences;
-        preferences.input_profile_id = if (index == 0) "" else self.snapshot.data.profiles[index - 1].id;
+        preferences.input_profile_id = id;
         self.writePreferences(preferences) catch {
             self.palette.refresh(self.snapshot.data);
             self.report("配信者を選択できませんでした。");
@@ -2597,6 +2603,13 @@ test "shortcut save publishes committed keys including swaps and the stop bindin
     var saved = try reopened.load(heap);
     defer saved.deinit();
     try testing.expect(storage.Data.eql(.{ .preferences = changed }, saved.data));
+
+    const pressed = app.keyboard.tracker.key('Q', false, shortcuts.ctrl | shortcuts.shift, 42, false, false);
+    try testing.expect(pressed.consume and pressed.event == null);
+    app.paletteReaction(.{ .kind = 2, .count = 10, .interval = 25 }, true);
+    const released = app.keyboard.tracker.key('Q', true, 0, 42, false, false);
+    try testing.expect(released.consume);
+    try testing.expectEqual(@as(?shortcuts.Event, .{ .action = .palette, .window = 42 }), released.event);
 }
 
 test "saved library edits and imports report view failures and recover without replaying the save" {
