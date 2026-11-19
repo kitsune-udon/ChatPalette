@@ -219,6 +219,11 @@ pub const Management = struct {
     restoring_parent: bool = false,
 
     pub fn open(self: *Management, host: win.HWND, db: *storage.Store, snapshot: *storage.Snapshot, history: *storage.LibraryHistory) !void {
+        try self.create(host, db, snapshot, history);
+        self.refresh();
+    }
+
+    pub fn create(self: *Management, host: win.HWND, db: *storage.Store, snapshot: *storage.Snapshot, history: *storage.LibraryHistory) !void {
         self.host = host;
         self.dpi = windows.Dpi.system();
         self.db = db;
@@ -258,7 +263,6 @@ pub const Management = struct {
         self.load_defaults = try control(self.window, "BUTTON", "標準設定を読み込んで戻る", win.WS_TABSTOP, .load_defaults);
         self.font.applyChildren(self.window);
         self.resize();
-        self.refresh();
     }
 
     pub fn close(self: *Management) void {
@@ -1886,6 +1890,48 @@ test "native owner-data ListView searches support the legacy text flags" {
     try testing.expectEqual(@as(i32, -1), empty_result);
     try testing.expectEqual(@as(win.LRESULT, 0), win.SendMessageW(view.list, win.LVM_GETITEMCOUNT, 0, 0));
     try testing.expectEqual(@as(?usize, null), view.selectedIndex());
+}
+
+test "management creates its controls before publishing the first selected row once" {
+    const t = std.testing;
+    const Counter = struct {
+        fn count(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const calls: *usize = @ptrFromInt(context);
+            if (message == win.LVM_SETITEMCOUNT) calls.* += 1;
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+    var directory = t.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(t.allocator, ".");
+    defer t.allocator.free(root);
+    const path = try std.fs.path.join(t.allocator, &.{ root, "settings.db" });
+    defer t.allocator.free(path);
+    var store = try storage.Store.open(t.allocator, path);
+    defer store.close();
+    try store.save(.{ .shared_items = &.{.{ .id = "first", .name = "最初", .text = "本文", .slot = 0 }} });
+    var snapshot = try store.load(t.allocator);
+    defer snapshot.deinit();
+    var history = storage.LibraryHistory.init(t.allocator);
+    defer history.deinit();
+    const host_class = wide("ChatPalette.TestInitialManagementPublication");
+    try register(host_class, testHost);
+    const host = win.CreateWindowExW(0, host_class, wide("test"), 0, 0, 0, 0, 0, null, null, win.GetModuleHandleW(null), null) orelse return error.TestHost;
+    defer _ = win.DestroyWindow(host);
+    var view: Management = .{};
+    defer view.close();
+    try view.create(host, &store, &snapshot, &history);
+    try t.expect(!view.refreshing and view.published_list == null);
+    try t.expectEqual(@as(win.LRESULT, 0), win.SendMessageW(view.list, win.LVM_GETITEMCOUNT, 0, 0));
+    try view.selectForEditing("", "first");
+    var calls: usize = 0;
+    try t.expect(win.SetWindowSubclass(view.list, Counter.count, 1, @intFromPtr(&calls)) != 0);
+    defer _ = win.RemoveWindowSubclass(view.list, Counter.count, 1);
+    view.show();
+    try t.expectEqual(@as(usize, 1), calls);
+    try t.expectEqual(@as(?usize, 0), view.selectedIndex());
+    const edit = win.GetDlgItem(view.window, @intFromEnum(Id.edit)) orelse return error.TestManagementEditMissing;
+    try t.expectEqual(true, win.IsWindowEnabled(edit) != 0);
 }
 
 test "management stores list changes, restores selection by ID, and keeps the input profile separate" {

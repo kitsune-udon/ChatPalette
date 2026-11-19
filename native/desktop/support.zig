@@ -24,6 +24,7 @@ extern "user32" fn EnumThreadWindows(win.DWORD, *const fn (win.HWND, win.LPARAM)
 
 var shortcut_editor: win.HWND = null;
 const modeless_document_property = windows.wide("ChatPalette.ModelessDocument");
+pub const help_restore_notice = "元の画面を有効にできませんでした。通知領域のメニューから「使い方」を開いて再試行してください。";
 
 fn isModelessDocument(window: win.HWND) bool {
     return win.GetPropW(window, modeless_document_property) != null;
@@ -142,6 +143,7 @@ const Dialog = struct {
     window: win.HWND = null,
     modeless: bool = false,
     disabled_parent: win.HWND = null,
+    defer_parent_restore: ?*win.HWND = null,
     original_focus: win.HWND = null,
     close_requested: bool = false,
     dpi: windows.Dpi = .{},
@@ -297,7 +299,7 @@ const Dialog = struct {
             if ((self.itemsDirty() or !sameKeys(editor.baseline.keys, pending.keys)) and
                 !self.askDiscard("未保存の変更を破棄して閉じますか？")) return;
         }
-        if (!self.releaseParent()) {
+        if (!self.releaseOrDeferParent()) {
             windows.setText(self.window, "親画面を有効にできませんでした。「閉じる」で再試行");
             return;
         }
@@ -523,9 +525,10 @@ const Dialog = struct {
     fn parentHasSuccessor(self: *const Dialog, parent: win.HWND) bool {
         const popup = win.GetWindow(parent, win.GW_ENABLEDPOPUP);
         if (popup == null or popup == parent) return false;
-        if (!isModelessDocument(popup)) return popup != self.window and win.IsWindowVisible(popup) != 0;
+        if (!isModelessDocument(popup) and (popup != self.window or self.defer_parent_restore == null))
+            return popup != self.window and win.IsWindowVisible(popup) != 0;
 
-        // A visible modeless document does not hold the parent's modal lock.
+        // The closing shortcut editor and modeless documents cannot own a successor's lock.
         const Search = struct {
             parent: win.HWND,
             dialog: win.HWND,
@@ -557,6 +560,14 @@ const Dialog = struct {
             return false;
         }
         if (owned and !self.modeless) self.restoreParentFocus(parent);
+        return true;
+    }
+
+    fn releaseOrDeferParent(self: *Dialog) bool {
+        if (self.releaseParent()) return true;
+        const pending = self.defer_parent_restore orelse return false;
+        pending.* = self.disabled_parent;
+        self.disabled_parent = null;
         return true;
     }
 
@@ -613,7 +624,7 @@ const Dialog = struct {
         self.prepare(parent);
         self.original_focus = win.GetFocus();
         self.disableParent(parent);
-        defer _ = self.releaseParent();
+        defer _ = self.releaseOrDeferParent();
         if (!try self.show(true)) return;
         if (self.editor != null) shortcut_editor = self.window;
         defer if (shortcut_editor == self.window) {
@@ -761,14 +772,21 @@ fn control(parent: win.HWND, comptime kind: []const u8, text: []const u8, id: us
 }
 
 pub fn shortcuts(parent: win.HWND, snapshot: *const storage.Snapshot, context: *anyopaque, save: ShortcutSaver, save_items: ShortcutItemSaver) !void {
+    try shortcutDialog(parent, snapshot, context, save, save_items, null);
+}
+
+fn shortcutDialog(parent: win.HWND, snapshot: *const storage.Snapshot, context: *anyopaque, save: ShortcutSaver, save_items: ShortcutItemSaver, defer_parent_restore: ?*win.HWND) !void {
     const current_keys = snapshot.data.preferences.shortcut_keys;
-    var dialog: Dialog = .{ .editor = .{
-        .baseline = try ShortcutDraft.copy(current_keys),
-        .snapshot = snapshot,
-        .context = context,
-        .save = save,
-        .save_items = save_items,
-    } };
+    var dialog: Dialog = .{
+        .defer_parent_restore = defer_parent_restore,
+        .editor = .{
+            .baseline = try ShortcutDraft.copy(current_keys),
+            .snapshot = snapshot,
+            .context = context,
+            .save = save,
+            .save_items = save_items,
+        },
+    };
     defer dialog.close();
     try dialog.open(parent, "ショートカットを管理", 560, 748);
     dialog.instructions = try control(dialog.window, "STATIC", "欄を選んでCtrl＋AltまたはCtrl＋Shiftを押しながらキーを入力します。", 0, 0);
@@ -807,6 +825,7 @@ pub const Document = struct {
 
     dialog: Dialog = .{},
     opening: bool = false,
+    shortcut_parent_restore: win.HWND = null,
 
     pub fn show(self: *Document, parent: win.HWND, content: Content, activate: bool) !void {
         if (self.opening or self.dialog.finishing) return;
@@ -814,7 +833,10 @@ pub const Document = struct {
         defer self.opening = false;
         if (self.dialog.window != null and !self.dialog.close_requested) {
             switch (content) {
-                .help => {},
+                .help => if (self.shortcut_parent_restore != null or self.dialog.disabled_parent != null) {
+                    self.retryShortcutParent();
+                    if (!self.resumeOwnerAfterShortcuts()) return error.HelpParentRestoreUnavailable;
+                },
                 .diagnostic => try self.dialog.updateDiagnostic(),
                 .reaction => |value| try self.dialog.updateReactionDocument(value),
             }
@@ -854,6 +876,7 @@ pub const Document = struct {
     pub fn close(self: *Document) void {
         self.dialog.close();
         self.dialog = .{};
+        self.shortcut_parent_restore = null;
     }
 
     pub fn filterMessage(self: *Document, message: *win.MSG) bool {
@@ -863,14 +886,32 @@ pub const Document = struct {
     pub fn suspendOwnerForShortcuts(self: *Document, source: win.HWND) bool {
         if (self.dialog.help_shortcuts == null or self.opening or source != self.dialog.window or
             !self.dialog.finishing or self.dialog.close_requested) return false;
+        if (self.shortcut_parent_restore != null) return false;
         if (!self.dialog.releaseParent()) return false;
         self.dialog.disableParent(win.GetWindow(source, win.GW_OWNER));
         return self.dialog.window == source;
     }
 
-    pub fn resumeOwnerAfterShortcuts(self: *Document) void {
-        const title = if (self.dialog.releaseParent()) "使い方" else "親画面を有効にできませんでした。「閉じる」で再試行";
-        windows.setText(self.dialog.window, title);
+    pub fn openShortcuts(self: *Document, source: win.HWND, snapshot: *const storage.Snapshot, context: *anyopaque, save: ShortcutSaver, save_items: ShortcutItemSaver) !void {
+        if (source != self.dialog.window or self.dialog.close_requested) return;
+        try shortcutDialog(source, snapshot, context, save, save_items, &self.shortcut_parent_restore);
+    }
+
+    pub fn resumeOwnerAfterShortcuts(self: *Document) bool {
+        const owner_restored = self.dialog.releaseParent();
+        const restored = owner_restored and self.shortcut_parent_restore == null;
+        if (self.dialog.window != null) windows.setText(self.dialog.window, if (restored) "使い方" else help_restore_notice);
+        return restored;
+    }
+
+    fn retryShortcutParent(self: *Document) void {
+        const parent = self.shortcut_parent_restore orelse return;
+        self.shortcut_parent_restore = null;
+        if (self.dialog.window != parent or !isModelessDocument(parent) or self.dialog.parentHasSuccessor(parent)) return;
+        if (win.IsWindowEnabled(parent) != 0) return;
+        _ = win.EnableWindow(parent, 1);
+        if (self.dialog.window == parent and isModelessDocument(parent) and win.IsWindowEnabled(parent) == 0 and
+            !self.dialog.parentHasSuccessor(parent)) self.shortcut_parent_restore = parent;
     }
 };
 
@@ -1035,8 +1076,17 @@ test "closing a modal support window dispatches the next parent command outside 
             test_probe.running = false;
             thread.join();
             try run_result;
-            try testing.expect(test_probe.ready.load(.acquire) and test_probe.sent and test_probe.posted);
-            try testing.expect(win.IsWindowVisible(dialog.window) == 0 and win.IsWindowEnabled(host) != 0);
+            const ready = test_probe.ready.load(.acquire);
+            if (!ready or !test_probe.sent or !test_probe.posted) {
+                std.debug.print("CLOSE_ORDER ready={} sent={} posted={}\n", .{ ready, test_probe.sent, test_probe.posted });
+                return error.ModalTestCommandsNotDelivered;
+            }
+            if (win.IsWindowVisible(dialog.window) != 0 or win.IsWindowEnabled(host) == 0) {
+                std.debug.print("CLOSE_ORDER dialog_visible={d} parent_enabled={d}\n", .{
+                    win.IsWindowVisible(dialog.window), win.IsWindowEnabled(host),
+                });
+                return error.ModalTestParentNotRestored;
+            }
             var message: win.MSG = undefined;
             while (win.PeekMessageW(&message, host, next_command, next_command, win.PM_REMOVE) != 0) _ = win.DispatchMessageW(&message);
             try testing.expectEqual(@as(usize, 1), test_probe.nested + test_probe.outside);

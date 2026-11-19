@@ -48,7 +48,7 @@ fn measure(
             .management_first => {
                 manager.close();
                 timer.reset();
-                try manager.open(panel.window, connection, snapshot, history);
+                try manager.create(panel.window, connection, snapshot, history);
                 try arrange(manager.window);
                 elapsed = samples.milliseconds(&timer);
             },

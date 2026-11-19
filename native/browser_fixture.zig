@@ -698,14 +698,14 @@ const Runner = struct {
         const document = try driver.text(self.alloc, self.app, sdk.FindWindowExW(dialog, null, driver.wide("Edit"), null));
         try self.record(label, .{ .text = document, .pid = self.app.pid, .hwnd = driver.number(dialog) });
         try self.returnFromOwnedUi();
-        try self.closeOwnedDialog(dialog, dialog_class);
+        try self.closeOwnedDialog(dialog, dialog_class, .hide);
         return document;
     }
 
-    fn closeOwnedDialog(self: *Runner, dialog: sdk.HWND, class: []const u16) !void {
+    fn closeOwnedDialog(self: *Runner, dialog: sdk.HWND, class: []const u16, closure: enum { hide, destroy }) !void {
         try self.app.post(dialog, class, sdk.WM_CLOSE, 0, 0);
         const until = sdk.GetTickCount64() + 2000;
-        while (self.app.owned(dialog, class)) {
+        while (self.app.owned(dialog, class) and (closure == .destroy or sdk.IsWindowVisible(dialog) != 0)) {
             if (sdk.GetTickCount64() >= until) return error.FixtureDialogDidNotClose;
             sdk.Sleep(20);
         }
@@ -1006,7 +1006,7 @@ fn pageKeysDuringShortcutSettings(self: *Runner) !void {
     for ([_]i16{ 'F', 'W', 'R' }) |key| try self.chord(key);
     const blocked = try self.waitState(.{ .event = "Control" }, "page keys while shortcut settings stay open", 3000);
     try require(self.app.owned(dialog, dialog_class) and sdk.IsWindowVisible(dialog) != 0 and !try self.editAllowed());
-    try self.closeOwnedDialog(dialog, dialog_class);
+    try self.closeOwnedDialog(dialog, dialog_class, .destroy);
     try self.waitUntilEditable();
     const closed = try self.observe("page keys did not target the browser after settings closed", false);
     for ([_]State{ blocked, closed }) |observed| {
@@ -1037,7 +1037,7 @@ fn pageKeysDuringLibraryEdit(self: *Runner) !void {
     for ([_]i16{ 'F', 'W', 'R' }) |key| try self.chord(key);
     const blocked = try self.waitState(.{ .event = "Control" }, "page keys while the library editor stays open", 3000);
     try require(self.app.owned(editor, library_editor_class) and sdk.IsWindowVisible(editor) != 0);
-    try self.closeOwnedDialog(editor, library_editor_class);
+    try self.closeOwnedDialog(editor, library_editor_class, .destroy);
     try self.app.post(manager, manager_class, sdk.WM_CLOSE, 0, 0);
     const until = sdk.GetTickCount64() + 2000;
     while (sdk.IsWindowVisible(manager) != 0) {
@@ -1780,6 +1780,80 @@ fn register(self: *Runner) !void {
     try require(equal(saved, try registrationPayload(self.alloc, path)));
     try require((try self.observe("no reaction from the failed capture", false)).reactions.len == 0);
     try self.action("(document.getElementById('fixture-heart').setAttribute('aria-label', 'Heart'), true)");
+    try diagnosisWhileRegistering(self);
+}
+
+fn diagnosisWhileRegistering(self: *Runner) !void {
+    try self.reset(.input, "KEEP_CHAT");
+    try self.action("window.fixture.resetReactions() && window.fixture.showReactions(false)");
+    try self.menu(4);
+    _ = try self.waitProgress("登録を待っています", "registration is pending before opening diagnostics", 5000);
+    try self.app.post(self.host, host_class, sdk.WM_COMMAND, diagnostics_command, 0);
+    const dialog = try self.app.waitWindow(dialog_class, true, 3000);
+    errdefer self.app.post(dialog, dialog_class, sdk.WM_CLOSE, 0, 0) catch {};
+    try require(equal(try driver.text(self.alloc, self.app, dialog), "診断情報"));
+    try self.front();
+    try require(!try self.editAllowed());
+    const edit = sdk.GetDlgItem(dialog, 100);
+    const waiting = try driver.text(self.alloc, self.app, edit);
+    try require(std.mem.indexOf(u8, waiting, "(waiting)") != null);
+    try self.record("visible diagnostics while registration waits", .{ .text = waiting, .pid = self.app.pid, .hwnd = driver.number(dialog) });
+
+    const sequence = sdk.GetClipboardSequenceNumber();
+    try self.app.post(dialog, dialog_class, sdk.WM_COMMAND, 3, 0);
+    const copy_until = sdk.GetTickCount64() + 2000;
+    while (sdk.GetClipboardSequenceNumber() == sequence or sdk.OpenClipboard(null) == 0) {
+        if (sdk.GetTickCount64() >= copy_until) return error.FixtureDiagnosticCopyUnavailable;
+        sdk.Sleep(20);
+    }
+    {
+        defer _ = sdk.CloseClipboard();
+        const data = sdk.GetClipboardData(sdk.CF_UNICODETEXT) orelse return error.FixtureClipboardTextMissing;
+        const locked = sdk.GlobalLock(data) orelse return error.FixtureClipboardTextUnavailable;
+        defer _ = sdk.GlobalUnlock(data);
+        const units: [*:0]const u16 = @ptrCast(@alignCast(locked));
+        const copied = try std.unicode.utf16LeToUtf8Alloc(self.alloc, std.mem.span(units));
+        try require(equal(copied, waiting));
+    }
+    try self.front();
+    try require(!try self.editAllowed());
+
+    try self.app.activate(dialog, dialog_class);
+    const stop_until = sdk.GetTickCount64() + 4000;
+    while (!try self.editAllowed()) {
+        if (sdk.GetTickCount64() >= stop_until) return error.FixtureRegistrationIgnoredForegroundChange;
+        sdk.Sleep(25);
+    }
+    try self.app.foreground(dialog, dialog_class);
+    const overlay = self.progress() orelse return error.FixtureProgressMissing;
+    const stopped = try self.progressText(overlay);
+    try require(std.mem.indexOf(u8, stopped, "操作先が変わったため中止しました") != null);
+    try self.app.post(dialog, dialog_class, sdk.WM_COMMAND, 4, 0);
+    const refresh_until = sdk.GetTickCount64() + 2000;
+    while (true) {
+        const updated = try driver.text(self.alloc, self.app, edit);
+        if (std.mem.indexOf(u8, updated, "(finished)") != null) {
+            try self.record("diagnostic refresh after foreground interruption", .{ .text = updated, .pid = self.app.pid, .hwnd = driver.number(dialog) });
+            break;
+        }
+        if (sdk.GetTickCount64() >= refresh_until) return error.FixtureDiagnosticDidNotRefresh;
+        sdk.Sleep(20);
+    }
+    const chord_keys = [_]i16{ sdk.VK_LCONTROL, sdk.VK_LMENU, 'Q', -'Q', -sdk.VK_LMENU, -sdk.VK_LCONTROL };
+    try self.keyboard.send(self.app, dialog, dialog_class, &chord_keys);
+    const palette = try self.app.waitWindow(palette_class, true, 3000);
+    try self.app.foreground(palette, palette_class);
+    try require(sdk.IsWindowVisible(dialog) != 0);
+    var child: sdk.HWND = null;
+    while (sdk.FindWindowExW(palette, child, driver.wide("Static"), null)) |next| {
+        child = next;
+        if (std.mem.startsWith(u8, try driver.text(self.alloc, self.app, child), "設定済み")) break;
+    } else return error.FixtureDiagnosticLostOriginalBrowser;
+    try self.closeOwnedDialog(dialog, dialog_class, .hide);
+    try self.closePalette(palette);
+    const state = try self.observe("registration interruption sent no page operation", false);
+    try require(state.noDelivery() and state.reactions.len == 0);
+    try self.action("window.fixture.showReactions(true)");
 }
 
 fn registrationPayload(alloc: std.mem.Allocator, path: []const u8) ![]u8 {

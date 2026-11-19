@@ -54,6 +54,7 @@ pub const reaction_intervals = storage.Preferences.reaction_intervals;
 pub const Palette = struct {
     const max_rows = 500;
     const Row = struct { item: storage.Item, profile_id: []const u8 };
+    const ListPosition = struct { top: usize = 0, id: ?[]u8 = null };
     const ItemRows = struct {
         rows: [max_rows]Row = undefined,
         count: usize = 0,
@@ -126,6 +127,10 @@ pub const Palette = struct {
     count: usize = 0,
     items_revision: u64 = 0,
     selected_id: ?[]u8 = null,
+    row_ids_arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(allocator),
+    row_ids: []const []const u8 = &.{},
+    saved_refresh_pending: bool = false,
+    was_presented: bool = false,
     sort_order: SortOrder = .saved,
     search_due: ?u64 = null,
     operations_allowed: bool = true,
@@ -199,15 +204,22 @@ pub const Palette = struct {
         self.font.deinit();
         if (self.selected_id) |id| allocator.free(id);
         self.selected_id = null;
+        self.row_ids_arena.deinit();
+        self.row_ids_arena = std.heap.ArenaAllocator.init(allocator);
+        self.row_ids = &.{};
+        self.saved_refresh_pending = false;
+        self.was_presented = false;
         self.window = null;
         self.viewport = .{};
     }
 
     pub fn show(self: *Palette) void {
+        if (self.saved_refresh_pending) self.refresh(self.data);
         if (win.IsIconic(self.window) != 0) _ = win.ShowWindow(self.window, win.SW_RESTORE);
         if (win.IsZoomed(self.window) == 0) windows.fitWindow(self.window, null);
         const state: c_int = if (win.IsZoomed(self.window) != 0) win.SW_SHOW else win.SW_SHOWNORMAL;
         _ = win.ShowWindow(self.window, state);
+        self.was_presented = true;
         _ = win.SetForegroundWindow(self.window);
         _ = win.SetFocus(self.search);
         if (self.viewport.revealFocus(self.window)) self.resize();
@@ -238,10 +250,26 @@ pub const Palette = struct {
         windows.setText(self.reaction_registration, value);
     }
 
+    pub fn deferHiddenRefresh(self: *Palette, data: storage.Data) void {
+        self.saved_refresh_pending = true;
+        self.cancelSearch();
+        self.data = data;
+        // Old native labels can stay hidden, but their row values borrow the old snapshot.
+        self.count = 0;
+        self.items_revision +%= 1;
+        if (self.items_refreshing) self.items_pending = true;
+        self.refresh_failed = false;
+    }
+
+    fn commandsSuspended(self: *const Palette) bool {
+        return self.saved_refresh_pending or (self.was_presented and win.IsWindowVisible(self.window) == 0);
+    }
+
     pub fn refresh(self: *Palette, data: storage.Data) void {
         const refreshing = self.refreshing;
         self.refreshing = true;
         defer self.restoreInteraction(refreshing);
+        self.saved_refresh_pending = false;
         self.scope_refresh_failed = false;
         self.data = data;
         if (!refreshing) self.updateCommandButtons();
@@ -379,7 +407,7 @@ pub const Palette = struct {
     }
 
     pub fn selectedRow(self: *Palette) ?Row {
-        if (self.refreshing) return null;
+        if (self.refreshing or self.commandsSuspended()) return null;
         self.flushSearch();
         if (self.refresh_failed) return null;
         const index = self.selectedIndex() orelse return null;
@@ -387,6 +415,7 @@ pub const Palette = struct {
     }
 
     fn selectedIndex(self: *const Palette) ?usize {
+        if (self.saved_refresh_pending) return null;
         const revision = self.items_revision;
         const count = win.SendMessageW(self.list, win.LB_GETCOUNT, 0, 0);
         const index = win.SendMessageW(self.list, win.LB_GETCURSEL, 0, 0);
@@ -406,7 +435,7 @@ pub const Palette = struct {
     }
 
     pub fn refreshItems(self: *Palette) void {
-        if (self.list == null) return;
+        if (self.list == null or self.saved_refresh_pending) return;
         self.items_pending = true;
         if (self.items_refreshing) return;
         const refreshing = self.refreshing;
@@ -417,9 +446,11 @@ pub const Palette = struct {
             self.restoreInteraction(refreshing);
         }
         if (!refreshing) self.updateCommandButtons();
-        while (self.items_pending) {
+        const position = self.captureListPosition();
+        defer if (position.id) |id| allocator.free(id);
+        while (self.items_pending and !self.saved_refresh_pending) {
             self.items_pending = false;
-            self.refreshItemsPass();
+            self.refreshItemsPass(position);
         }
     }
 
@@ -434,7 +465,25 @@ pub const Palette = struct {
         } else self.refreshItems();
     }
 
-    fn refreshItemsPass(self: *Palette) void {
+    fn captureListPosition(self: *const Palette) ListPosition {
+        const current = win.SendMessageW(self.list, win.LB_GETTOPINDEX, 0, 0);
+        if (current < 0) return .{};
+        const top: usize = @intCast(current);
+        const count = win.SendMessageW(self.list, win.LB_GETCOUNT, 0, 0);
+        if (count < 0 or @as(usize, @intCast(count)) != self.row_ids.len) return .{};
+        const id = if (top < self.row_ids.len) allocator.dupe(u8, self.row_ids[top]) catch null else null;
+        return .{ .top = top, .id = id };
+    }
+
+    fn restoreListPosition(self: *Palette, position: ListPosition) void {
+        const fallback = @min(position.top, self.count - 1);
+        const top = if (position.id) |id| for (self.row_ids, 0..) |current, index| {
+            if (std.mem.eql(u8, current, id)) break index;
+        } else fallback else fallback;
+        _ = win.SendMessageW(self.list, win.LB_SETTOPINDEX, top, 0);
+    }
+
+    fn refreshItemsPass(self: *Palette, position: ListPosition) void {
         self.cancelSearch();
         const raw_query = windows.text(self.search, allocator) catch return self.failItemRefresh();
         defer allocator.free(raw_query);
@@ -449,6 +498,12 @@ pub const Palette = struct {
             const context: SortContext = .{ .order = self.sort_order, .preferences = &self.data.preferences, .profile_name = profile_name };
             std.mem.sort(Row, next.rows[0..next.count], context, SortContext.lessThan);
         }
+        var row_ids_arena = std.heap.ArenaAllocator.init(allocator);
+        defer row_ids_arena.deinit();
+        const row_memory = row_ids_arena.allocator();
+        const ids = row_memory.alloc([]const u8, next.count) catch return self.failItemRefresh();
+        for (next.rows[0..next.count], ids) |row, *id|
+            id.* = row_memory.dupe(u8, row.item.id) catch return self.failItemRefresh();
         _ = win.SendMessageW(self.list, win.WM_SETREDRAW, 0, 0);
         defer {
             _ = win.SendMessageW(self.list, win.WM_SETREDRAW, 1, 0);
@@ -462,6 +517,8 @@ pub const Palette = struct {
             if (self.items_pending) return;
         }
         // Keep the published identities until the corresponding native rows are complete.
+        std.mem.swap(std.heap.ArenaAllocator, &self.row_ids_arena, &row_ids_arena);
+        self.row_ids = ids;
         @memcpy(self.rows[0..next.count], next.rows[0..next.count]);
         self.count = next.count;
         self.items_revision +%= 1;
@@ -476,10 +533,11 @@ pub const Palette = struct {
             "弾幕を追加・編集できます。");
         if (self.items_pending) return;
         if (self.count > 0) {
-            const index = if (self.selected_id) |id| for (self.rows[0..self.count], 0..) |row, n| {
+            const retained = if (self.selected_id) |id| for (self.rows[0..self.count], 0..) |row, n| {
                 if (std.mem.eql(u8, row.item.id, id)) break n;
-            } else 0 else 0;
-            _ = win.SendMessageW(self.list, win.LB_SETCURSEL, index, 0);
+            } else null else null;
+            _ = win.SendMessageW(self.list, win.LB_SETCURSEL, retained orelse 0, 0);
+            if (!self.items_pending and retained != null) self.restoreListPosition(position);
         }
         self.showSelection();
     }
@@ -663,7 +721,12 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
         win.WM_KEYDOWN => if (wparam == win.VK_ESCAPE) {
             _ = win.SendMessageW(hwnd, win.WM_CLOSE, 0, 0);
         },
-        win.WM_SHOWWINDOW => if (wparam == 0) palette.cancelSearch(),
+        win.WM_SHOWWINDOW => if (wparam == 0) {
+            palette.cancelSearch();
+        } else {
+            palette.was_presented = true;
+            if (palette.saved_refresh_pending) palette.refresh(palette.data);
+        },
         win.WM_SIZE => if (!palette.viewport.updating and wparam != win.SIZE_MINIMIZED) {
             const revision = palette.viewport.scroll_revision;
             palette.resize();
@@ -678,6 +741,7 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             viewport.minimumTrack(hwnd, palette.dpi, limits);
         },
         win.WM_COMMAND => {
+            if (palette.commandsSuspended()) return 0;
             const id = windows.low(wparam);
             const code = windows.high(wparam);
             if (id == @intFromEnum(Id.search) and code == win.EN_CHANGE and !palette.resetting_search) palette.queueSearch();
@@ -830,6 +894,77 @@ test "short palette can scroll to every operation and clears its offsets when en
     try std.testing.expectEqual(@as(i32, 0), palette.viewport.y);
     const style: u32 = @bitCast(win.GetWindowLongW(palette.window, win.GWL_STYLE));
     try std.testing.expectEqual(@as(u32, 0), style & (win.WS_HSCROLL | win.WS_VSCROLL));
+}
+
+test "palette defers hidden saves and restores the visible list position" {
+    const Probe = struct {
+        resets: usize = 0,
+        commands: usize = 0,
+
+        fn observe(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const self: *@This() = @ptrFromInt(context);
+            switch (message) {
+                win.LB_RESETCONTENT => self.resets += 1,
+                wm_insert, wm_manage, wm_profile => self.commands += 1,
+                else => {},
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+    const t = std.testing;
+    const host = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 1, 1, null, null, win.GetModuleHandleW(null), null) orelse
+        return error.CreatePaletteRefreshHost;
+    defer _ = win.DestroyWindow(host);
+    var palette: Palette = .{};
+    defer palette.close();
+    try palette.open(host);
+    var probe: Probe = .{};
+    try t.expect(win.SetWindowSubclass(host, Probe.observe, 97, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(host, Probe.observe, 97);
+    try t.expect(win.SetWindowSubclass(palette.list, Probe.observe, 97, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(palette.list, Probe.observe, 97);
+
+    var items: [60]storage.Item = undefined;
+    var identifiers: [60][16]u8 = undefined;
+    for (&items, &identifiers, 0..) |*item, *id, index| {
+        const identity = try std.fmt.bufPrint(id, "fixture-{d}", .{index});
+        item.* = .{ .id = identity, .name = identity, .text = "before", .slot = 0 };
+    }
+    var previous = try storage.Snapshot.clone(t.allocator, .{ .shared_items = &items });
+    var previous_alive = true;
+    defer if (previous_alive) previous.deinit();
+    palette.refresh(previous.data);
+    _ = win.ShowWindow(palette.window, win.SW_SHOWNOACTIVATE);
+    _ = win.SendMessageW(palette.list, win.LB_SETCURSEL, 40, 0);
+    palette.selectionChanged();
+    _ = win.SendMessageW(palette.list, win.LB_SETTOPINDEX, 12, 0);
+    try t.expectEqual(@as(win.LRESULT, 12), win.SendMessageW(palette.list, win.LB_GETTOPINDEX, 0, 0));
+
+    _ = win.ShowWindow(palette.window, win.SW_HIDE);
+    previous.deinit();
+    previous_alive = false;
+    var latest = items;
+    std.mem.swap(storage.Item, &latest[12], &latest[20]);
+    latest[40].text = "saved while hidden";
+    palette.deferHiddenRefresh(.{ .shared_items = &latest });
+    _ = win.SendMessageW(palette.window, win.WM_COMMAND, @intFromEnum(Id.insert), @bitCast(@intFromPtr(palette.insert_button)));
+    _ = win.SendMessageW(palette.window, win.WM_COMMAND, @intFromEnum(Id.manage), @bitCast(@intFromPtr(palette.manage_button)));
+    _ = win.SendMessageW(palette.window, win.WM_COMMAND, (@as(usize, win.CBN_SELCHANGE) << 16) | @intFromEnum(Id.profile), @bitCast(@intFromPtr(palette.profile)));
+    try t.expectEqual(@as(usize, 0), probe.commands);
+    try t.expectEqual(@as(usize, 1), probe.resets);
+    try t.expect(palette.selectedRow() == null);
+
+    palette.show();
+    try t.expectEqual(@as(usize, 2), probe.resets);
+    try t.expectEqualStrings("fixture-40", (palette.selectedRow() orelse return error.LostPaletteSelection).item.id);
+    try t.expectEqualStrings("saved while hidden", palette.rows[40].item.text);
+    try t.expectEqual(@as(win.LRESULT, 20), win.SendMessageW(palette.list, win.LB_GETTOPINDEX, 0, 0));
+
+    latest[20].id = "replacement-id";
+    palette.refresh(.{ .shared_items = &latest });
+    try t.expectEqual(@as(usize, 3), probe.resets);
+    try t.expectEqual(@as(win.LRESULT, 20), win.SendMessageW(palette.list, win.LB_GETTOPINDEX, 0, 0));
+    try t.expectEqualStrings("fixture-40", (palette.selectedRow() orelse return error.LostPaletteSelection).item.id);
 }
 
 test "palette searches beyond the visible 500 rows and retains the selected ID after reorder" {

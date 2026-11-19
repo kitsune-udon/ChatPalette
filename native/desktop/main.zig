@@ -489,7 +489,7 @@ const App = struct {
 
     fn ensureManagement(self: *App) bool {
         if (self.manager.window == null) {
-            self.manager.open(self.window, self.db, &self.snapshot, &self.history) catch {
+            self.manager.create(self.window, self.db, &self.snapshot, &self.history) catch {
                 self.manager.close();
                 self.report("管理画面を開けませんでした。");
                 return false;
@@ -499,6 +499,7 @@ const App = struct {
     }
 
     fn openManagement(self: *App, from_palette: bool) void {
+        const first_display = self.manager.window == null;
         if (!self.canEdit() or !self.ensureManagement()) return;
         if (from_palette) {
             const lost_automatic_target = self.snapshot.data.preferences.auto_mode and input.browser(self.target) == null;
@@ -514,6 +515,9 @@ const App = struct {
                 self.palette.detected_profile = false;
                 self.refreshTray();
             }
+        } else if (first_display and self.snapshot.data.shared_items.len != 0) {
+            self.manager.selectForEditing("", self.snapshot.data.shared_items[0].id) catch
+                return self.report("編集する弾幕を選択できませんでした。");
         }
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
         self.manager.show();
@@ -632,6 +636,11 @@ const App = struct {
     }
 
     fn refreshSavedPalette(self: *App) void {
+        if (win.IsWindowVisible(self.palette.window) == 0) {
+            self.palette.deferHiddenRefresh(self.snapshot.data);
+            self.refreshTray();
+            return;
+        }
         self.refreshPalette();
         if (management.savedViewWarning(false, self.palette.refresh_failed)) |notice| self.report(notice);
     }
@@ -662,16 +671,14 @@ const App = struct {
                     self.keyboard.tracker.replace(bindings);
                 self.libraryChanged();
             },
-            .automatic_profile => {
-                self.palette.detected_profile = true;
-                self.refreshSavedPalette();
-            },
+            .automatic_profile => self.palette.detected_profile = true,
         }
         previous.deinit();
     }
 
     fn changeMode(self: *App, automatic: bool) void {
         if (!self.canEdit()) return self.refreshPalette();
+        if (automatic == self.snapshot.data.preferences.auto_mode) return;
         var preferences = self.snapshot.data.preferences;
         preferences.auto_mode = automatic;
         self.palette.detected_profile = false;
@@ -725,20 +732,23 @@ const App = struct {
         if (!self.foreground(foreground_window)) return;
         if (input.browser(context.target) == null) return self.report("unavailable");
         const response = self.request(.resolve, windows.number(context.target), "", &.{}) catch |failure| {
-            if (self.paletteContextCurrent(context) and self.foreground(foreground_window))
-                self.report(self.cleanupNotice(failure) orelse self.resolveFailureNotice());
+            if (!self.paletteContextCurrent(context) or !self.foreground(foreground_window)) return;
+            self.report(self.cleanupNotice(failure) orelse if (failure == error.WorkerTimeout)
+                "配信者を確認する補助プロセスの応答が時間内に届きませんでした。"
+            else
+                "補助プロセスと通信できず、配信者情報を確認できませんでした。");
             return;
         };
         defer response.deinit();
         if (!self.paletteContextCurrent(context) or !self.foreground(foreground_window)) return;
         const channel = response.field("Channel");
         if (!response.is("ok") or channel.len == 0) return self.report(self.resolveFailureNotice());
-        if ((self.selectDetectedProfile(channel) catch return self.report("自動選択を保存できませんでした。")) == null)
+        if ((self.selectDetectedProfile(channel, .deferred) catch return self.report("自動選択を保存できませんでした。")) == null)
             return self.report("配信者が未連携です。管理からチャンネルを連携できます。");
         self.palette.status("");
     }
 
-    fn selectDetectedProfile(self: *App, channel: []const u8) !?storage.Profile {
+    fn selectDetectedProfile(self: *App, channel: []const u8, update: enum { immediate, deferred }) !?storage.Profile {
         const profile = if (channel.len == 0) null else for (self.snapshot.data.profiles) |entry| {
             if (std.mem.eql(u8, entry.channel, channel)) break entry;
         } else null;
@@ -748,12 +758,15 @@ const App = struct {
                 preferences.input_profile_id = entry.id;
                 // The automatic selection changes no item, manual assignment, binding or mode.
                 try self.commitPreferences(preferences, .automatic_profile);
+                if (update == .immediate) self.refreshSavedPalette();
                 return entry;
             }
         }
         if (self.palette.detected_profile != (profile != null)) {
             self.palette.detected_profile = profile != null;
-            if (win.IsWindowVisible(self.palette.window) != 0) self.refreshPalette() else self.refreshTray();
+            if (update == .immediate) {
+                if (win.IsWindowVisible(self.palette.window) != 0) self.refreshPalette() else self.refreshTray();
+            }
         }
         return profile;
     }
@@ -771,8 +784,8 @@ const App = struct {
         switch (command) {
             menu_help => {
                 if (!activate) return;
-                self.help.show(parent, .{ .help = .{ .context = self, .open = openShortcutsFromHelp } }, true) catch
-                    self.notify("使い方を表示できませんでした。");
+                self.help.show(parent, .{ .help = .{ .context = self, .open = openShortcutsFromHelp } }, true) catch |failure|
+                    self.notify(if (failure == error.HelpParentRestoreUnavailable) support.help_restore_notice else "使い方を表示できませんでした。");
             },
             menu_diag => self.diagnostic_view.show(parent, .{ .diagnostic = .{
                 .source = .{ .context = self, .read = readDiagnosticSnapshot },
@@ -802,9 +815,10 @@ const App = struct {
         self.updateReactionButtons();
         if (shortcut_help != null) {
             if (self.quitting or !self.help.suspendOwnerForShortcuts(shortcut_help)) return;
-            defer self.help.resumeOwnerAfterShortcuts();
+            defer if (!self.help.resumeOwnerAfterShortcuts()) self.notify(support.help_restore_notice);
             if (self.quitting) return;
-            self.openShortcuts(shortcut_help) catch |failure| self.saveFailure(shortcut_help, failure);
+            self.help.openShortcuts(shortcut_help, &self.snapshot, self, saveShortcutDraft, saveShortcutItemsDraft) catch |failure|
+                self.saveFailure(shortcut_help, failure);
             return;
         }
         self.runDialog(command) catch |failure| self.saveFailure(self.dialogParent(), failure);
@@ -1544,7 +1558,7 @@ const App = struct {
                 }
                 if (!self.pageReplySucceeded(reply, video, .ok)) return false;
                 const channel = reply.field("Channel");
-                if ((self.selectDetectedProfile(channel) catch {
+                if ((self.selectDetectedProfile(channel, .immediate) catch {
                     self.report("自動選択を保存できませんでした。");
                     return false;
                 }) == null) {
@@ -1658,7 +1672,7 @@ const App = struct {
         const video = operations.videoId(context.field("Video")) orelse return error.VideoUnavailable;
         const page_token = operations.pageToken(context.field("PageToken")) orelse return error.TargetChanged;
         if (auto_profile) {
-            _ = (self.selectDetectedProfile(context.field("Channel")) catch return error.ProfileSelectionNotSaved) orelse
+            _ = (self.selectDetectedProfile(context.field("Channel"), .immediate) catch return error.ProfileSelectionNotSaved) orelse
                 return error.ProfileChanged;
             if (!self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
             if (!std.mem.eql(u8, context.field("Channel"), plan.channel)) return error.ProfileChanged;
@@ -2602,13 +2616,7 @@ test "modeless diagnostics and reaction details leave waiting and palette owners
 
     app.quit(false);
     try expectModeless(app.quitting, "normal app quit did not begin with documents visible", .{});
-    // PostQuitMessage is delivered after the posted queue has been serviced.
-    var message: win.MSG = undefined;
-    const received = while (win.PeekMessageW(&message, null, 0, 0, win.PM_REMOVE) != 0) {
-        if (message.message == win.WM_QUIT) break true;
-        dispatch(&message);
-    } else false;
-    try expectModeless(received, "normal app quit did not deliver WM_QUIT", .{});
+    try t.expectEqual(@as(?win.WPARAM, 0), testTakeQuitMessage());
     app.deinit();
     live = false;
     try expectModeless(win.IsWindow(diagnostics_window) == 0 and win.IsWindow(result_window) == 0 and
@@ -2624,9 +2632,28 @@ test "modeless help releases its original palette after shortcut editing" {
         opens: usize = 0,
         attempted_close: bool = false,
         locked: bool = false,
+        fail_help: bool = false,
+        fail_owner: bool = false,
+        help_enable_attempts: usize = 0,
+        owner_enable_attempts: usize = 0,
+        editor: win.HWND = null,
 
         var active: ?*@This() = null;
         extern "user32" fn SetTimer(win.HWND, win.UINT_PTR, win.UINT, *const fn (win.HWND, win.UINT, win.UINT_PTR, win.DWORD) callconv(.winapi) void) callconv(.winapi) win.UINT_PTR;
+
+        fn observeEnable(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const self: *@This() = @ptrFromInt(context);
+            if (message == win.WM_ENABLE and wparam != 0) {
+                if (hwnd == self.help) {
+                    self.help_enable_attempts += 1;
+                    if (self.fail_help) _ = win.EnableWindow(hwnd, 0);
+                } else if (hwnd == self.app.palette.window) {
+                    self.owner_enable_attempts += 1;
+                    if (self.fail_owner) _ = win.EnableWindow(hwnd, 0);
+                }
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
 
         fn closeEditor(_: win.HWND, _: win.UINT, timer: win.UINT_PTR, _: win.DWORD) callconv(.winapi) void {
             const self = active orelse return;
@@ -2643,6 +2670,7 @@ test "modeless help releases its original palette after shortcut editing" {
                 return;
             };
             self.opens += 1;
+            self.editor = editor;
             self.locked = self.app.modal and win.IsWindowEnabled(parent) == 0 and
                 win.GetWindow(editor, win.GW_OWNER) == (if (self.from_help) self.help else parent);
             if (self.from_help) {
@@ -2651,7 +2679,12 @@ test "modeless help releases its original palette after shortcut editing" {
                 _ = win.SendMessageW(self.help, win.WM_CLOSE, 0, 0);
                 self.locked = self.locked and win.IsWindowEnabled(self.help) == 0 and win.IsWindowVisible(self.help) != 0;
             }
+            if (self.fail_help and self.fail_owner) {
+                windows.setText(win.GetDlgItem(editor, 100), "^+F12");
+                _ = win.SendMessageW(editor, win.WM_COMMAND, 1, 0);
+            }
             _ = win.SendMessageW(editor, win.WM_CLOSE, 0, 0);
+            if (win.IsWindowVisible(editor) == 0) _ = win.KillTimer(null, timer);
         }
     };
     const t = std.testing;
@@ -2689,25 +2722,75 @@ test "modeless help releases its original palette after shortcut editing" {
     var probe: Probe = .{ .app = &app, .help = help_window, .button = button };
     Probe.active = &probe;
     defer Probe.active = null;
-    for ([_]bool{ true, false }) |from_help| {
-        probe.from_help = from_help;
+    try t.expect(win.SetWindowSubclass(help_window, Probe.observeEnable, 95, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(help_window, Probe.observeEnable, 95);
+    try t.expect(win.SetWindowSubclass(parent, Probe.observeEnable, 95, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(parent, Probe.observeEnable, 95);
+    for ([_]struct { from_help: bool = true, fail_help: bool = false, fail_owner: bool = false, newer_help_owner: bool = false }{
+        .{},
+        .{ .from_help = false },
+        .{ .fail_help = true },
+        .{ .fail_owner = true },
+        .{ .fail_help = true, .fail_owner = true },
+        .{ .fail_help = true, .newer_help_owner = true },
+    }) |scenario| {
+        probe.from_help = scenario.from_help;
+        probe.fail_help = scenario.fail_help;
+        probe.fail_owner = scenario.fail_owner;
+        probe.help_enable_attempts = 0;
+        probe.owner_enable_attempts = 0;
         probe.attempted_close = false;
         probe.locked = false;
         // The editor is created synchronously before its nested queue first services this timer.
         const timer = Probe.SetTimer(null, 0, 10, Probe.closeEditor);
         try expectModeless(timer != 0, "could not arm timer for shortcut editor", .{});
         defer _ = win.KillTimer(null, timer);
-        if (from_help)
+        if (scenario.from_help)
             _ = win.SendMessageW(help_window, win.WM_COMMAND, 5, @bitCast(windows.number(button)))
         else
             app.menuCommand(menu_keys);
         var quit_message: win.MSG = undefined;
-        try expectModeless(win.PeekMessageW(&quit_message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) == 0, "timer could not close shortcut editor: from_help={} opens={d}", .{ from_help, probe.opens });
-        try expectModeless(probe.locked and win.IsWindowEnabled(parent) != 0 and app.canEdit(), "shortcut editor close: from_help={} locked={} parent_enabled={d} allowed={}", .{ from_help, probe.locked, win.IsWindowEnabled(parent), app.canEdit() });
-        try expectModeless(win.IsWindowEnabled(help_window) != 0 and win.IsWindowVisible(help_window) != 0, "help not enabled and visible after editor close: from_help={} enabled={d} visible={d}", .{ from_help, win.IsWindowEnabled(help_window), win.IsWindowVisible(help_window) });
+        try expectModeless(win.PeekMessageW(&quit_message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) == 0, "timer could not close shortcut editor: from_help={} opens={d}", .{ scenario.from_help, probe.opens });
+        try expectModeless(probe.locked and win.IsWindow(probe.editor) == 0 and app.canEdit() and !app.modal, "shortcut editor did not release its modal ownership", .{});
+        try t.expectEqual(!scenario.fail_owner, win.IsWindowEnabled(parent) != 0);
+        try t.expectEqual(!scenario.fail_help, win.IsWindowEnabled(help_window) != 0);
+        try t.expectEqual(@as(usize, 1), probe.owner_enable_attempts);
+        try t.expectEqual(@as(usize, @intFromBool(scenario.from_help)), probe.help_enable_attempts);
+        try t.expect(win.IsWindowVisible(help_window) != 0);
         try t.expectEqual(document_control, win.GetDlgItem(help_window, 100));
+        if (scenario.fail_help or scenario.fail_owner) {
+            const title = try windows.text(help_window, t.allocator);
+            defer t.allocator.free(title);
+            try t.expectEqualStrings(support.help_restore_notice, title);
+            probe.fail_help = false;
+            probe.fail_owner = false;
+            if (scenario.newer_help_owner) {
+                const successor = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), win.WS_POPUP, 0, 0, 1, 1, help_window, null, module, null) orelse
+                    return error.CreateHelpRestoreSuccessor;
+                _ = win.ShowWindow(successor, win.SW_SHOWNOACTIVATE);
+                app.menuCommand(menu_help);
+                try t.expectEqual(@as(usize, 1), probe.help_enable_attempts);
+                try t.expect(win.IsWindowEnabled(help_window) == 0 and win.IsWindowVisible(successor) != 0);
+                _ = win.DestroyWindow(successor);
+                _ = win.EnableWindow(help_window, 1);
+                std.debug.print("HELP_RESTORE successor_kept_lock=true\n", .{});
+                continue;
+            }
+            app.menuCommand(menu_help);
+            try t.expectEqual(help_window, app.help.dialog.window);
+            try t.expect(win.IsWindowEnabled(parent) != 0 and win.IsWindowEnabled(help_window) != 0);
+            try t.expectEqual(@as(usize, 1) + @intFromBool(scenario.fail_owner), probe.owner_enable_attempts);
+            try t.expectEqual(@as(usize, 1) + @intFromBool(scenario.fail_help), probe.help_enable_attempts);
+            std.debug.print("HELP_RESTORE help_fault={} owner_fault={} editor_closed=true help_attempts={d} owner_attempts={d}\n", .{
+                scenario.fail_help, scenario.fail_owner, probe.help_enable_attempts, probe.owner_enable_attempts,
+            });
+        }
     }
-    try t.expectEqual(@as(usize, 2), probe.opens);
+    try t.expectEqual(@as(usize, 6), probe.opens);
+    var persisted = try db.load(t.allocator);
+    defer persisted.deinit();
+    try t.expectEqualStrings("^+F12", persisted.data.preferences.shortcut_keys[0]);
+    try t.expectEqualStrings("^+F12", app.snapshot.data.preferences.shortcut_keys[0]);
 
     const other = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), win.WS_OVERLAPPEDWINDOW, 0, 0, 1, 1, null, null, module, null) orelse
         return error.CreateAlternateHelpWindow;
@@ -2976,6 +3059,16 @@ test "desktop records the communication cause and an unconfirmed worker exit tog
         try testing.expect(std.mem.indexOf(u8, retained, expected) != null);
 }
 
+fn testTakeQuitMessage() ?win.WPARAM {
+    // The queue delivers PostQuitMessage after pending posted messages have been serviced.
+    var message: win.MSG = undefined;
+    while (win.PeekMessageW(&message, null, 0, 0, win.PM_REMOVE) != 0) {
+        if (message.message == win.WM_QUIT) return message.wParam;
+        dispatch(&message);
+    }
+    return null;
+}
+
 test "the restart menu refuses active work while a same-path launch can drain it" {
     const testing = std.testing;
     var app: App = .{
@@ -2989,7 +3082,6 @@ test "the restart menu refuses active work while a same-path launch can drain it
     const previous = current;
     current = &app;
     defer current = previous;
-    var message: win.MSG = undefined;
     const signal = try keyboard.Cancellation.create();
     defer signal.close();
     app.input_cancellation = .{ .target = 1, .signal = signal };
@@ -3010,17 +3102,17 @@ test "the restart menu refuses active work while a same-path launch can drain it
     try testing.expect(!app.quitting and !app.restarting);
     try testing.expectEqual(@as(usize, 1), app.queue.pending.items.len);
     try testing.expectEqual(generation, app.queue.generation);
-    try testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE));
+    try testing.expectEqual(@as(?win.WPARAM, null), testTakeQuitMessage());
 
     app.worker.active = true;
     _ = messageHandler(null, instance.take_over, 0, 0);
     try testing.expect(app.quitting and !app.restarting);
     try testing.expectEqual(@as(usize, 0), app.queue.pending.items.len);
     try testing.expectEqual(@as(win.DWORD, win.WAIT_OBJECT_0), win.WaitForSingleObject(signal.handle, 0));
-    try testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE));
+    try testing.expectEqual(@as(?win.WPARAM, null), testTakeQuitMessage());
     app.worker.active = false;
     app.finishQuit();
-    try testing.expect(win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) != 0);
+    try testing.expectEqual(@as(?win.WPARAM, 0), testTakeQuitMessage());
 }
 
 test "the idle restart menu requests an exit with restart intent" {
@@ -3037,9 +3129,8 @@ test "the idle restart menu requests an exit with restart intent" {
     defer current = previous;
     _ = messageHandler(null, win.WM_COMMAND, menu_restart, 0);
     try testing.expect(app.quitting and app.restarting);
-    var message: win.MSG = undefined;
-    try testing.expect(win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) != 0);
-    try testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE));
+    try testing.expectEqual(@as(?win.WPARAM, 0), testTakeQuitMessage());
+    try testing.expectEqual(@as(?win.WPARAM, null), testTakeQuitMessage());
 }
 
 test "diagnostics derive phases from pending and live reaction work" {
@@ -3448,17 +3539,22 @@ test "automatic profile selection persists the match before exposing its input a
     };
     defer app.deinit();
     const bindings = try shortcuts.validate(app.snapshot.data.preferences.shortcut_keys);
+    try app.palette.open(null);
     app.keyboard.tracker.replace(bindings);
     const held = bindings[@intFromEnum(shortcuts.Action.shared1)].?;
     const vk = shortcuts.virtualKey(held.key);
     try testing.expect(app.keyboard.tracker.key(vk, false, held.modifiers, 42, true, false).consume);
     try app.queue.enqueue(allocator, .{ .action = .profile1, .window = 42 }, app.library_revision, null);
 
-    try testing.expect((try app.selectDetectedProfile("/channel/missing")) == null);
+    try testing.expect((try app.selectDetectedProfile("/channel/missing", .immediate)) == null);
     try testing.expectEqualStrings("profile-a", app.snapshot.data.preferences.input_profile_id);
-    const selection = (try app.selectDetectedProfile("/channel/b")).?;
+    const displayed = app.palette.items_revision;
+    const selection = (try app.selectDetectedProfile("/channel/b", .deferred)).?;
     try testing.expectEqualStrings("profile-b", selection.id);
     try testing.expectEqualStrings("body B", selection.items[0].text);
+    try testing.expectEqual(displayed, app.palette.items_revision);
+    app.refreshPalette();
+    try testing.expectEqual(displayed + 1, app.palette.items_revision);
     try testing.expectEqualStrings(selection.id, app.palette.visibleProfileId());
     try testing.expectEqual(app.queue.next().?.library, app.library_revision);
     try testing.expectEqual(shortcuts.Action.shared1, app.keyboard.tracker.key(vk, true, 0, 42, true, false).event.?.action);
@@ -3472,7 +3568,7 @@ test "automatic profile selection persists the match before exposing its input a
     changed.reaction_count = 10;
     try other.savePreferences(changed);
 
-    try testing.expectError(error.DatabaseChanged, app.selectDetectedProfile("/channel/a"));
+    try testing.expectError(error.DatabaseChanged, app.selectDetectedProfile("/channel/a", .immediate));
     try testing.expectEqualStrings("profile-b", app.snapshot.data.preferences.input_profile_id);
     var readback = try other.load(heap);
     defer readback.deinit();
@@ -3577,7 +3673,7 @@ test "shortcut save publishes committed keys including swaps and the stop bindin
     try testing.expectEqual(@as(?shortcuts.Event, .{ .action = .palette, .window = 42 }), released.event);
 }
 
-test "saving unchanged reaction defaults succeeds without writing to the database" {
+test "unchanged reaction defaults and detection mode skip database writes" {
     const testing = std.testing;
     const heap = testing.allocator;
     var directory = testing.tmpDir(.{});
@@ -3602,6 +3698,9 @@ test "saving unchanged reaction defaults succeeds without writing to the databas
 
     try db.db.exec("PRAGMA query_only=ON");
     try app.saveReactionDefaults(unchanged);
+    app.palette.detected_profile = true;
+    app.changeMode(prefs.auto_mode);
+    try testing.expect(app.palette.detected_profile);
     try testing.expectError(error.DatabaseReadOnly, app.saveReactionDefaults(changed));
     try testing.expectEqual(unchanged.kind, app.snapshot.data.preferences.reaction_kind);
     try testing.expectEqual(@as(u64, 0), app.input_settings_revision);
@@ -3614,9 +3713,12 @@ test "saving unchanged reaction defaults succeeds without writing to the databas
     try app.saveReactionDefaults(changed);
     try testing.expectEqual(changed.kind, app.snapshot.data.preferences.reaction_kind);
     try testing.expectEqual(@as(u64, 1), app.input_settings_revision);
+    app.changeMode(!prefs.auto_mode);
+    try testing.expectEqual(@as(u64, 2), app.input_settings_revision);
     var saved = try db.load(heap);
     defer saved.deinit();
     try testing.expectEqual(changed.kind, saved.data.preferences.reaction_kind);
+    try testing.expectEqual(!prefs.auto_mode, saved.data.preferences.auto_mode);
 }
 
 test "return from management keeps its window open until the palette can be shown" {
@@ -3758,6 +3860,7 @@ test "saved library edits and imports report view failures and recover without r
     app.window = win.CreateWindowExW(0, class.lpszClassName, windows.wide("test"), 0, 0, 0, 0, 0, null, null, class.hInstance, null) orelse return error.TestHost;
     try app.palette.open(app.window);
     app.palette.refresh(app.snapshot.data);
+    _ = win.ShowWindow(app.palette.window, win.SW_SHOWNOACTIVATE);
     try app.manager.open(app.window, &db, &app.snapshot, &app.history);
     var row = std.mem.zeroes(win.LVITEMW);
     row.stateMask = win.LVIS_SELECTED | win.LVIS_FOCUSED;
