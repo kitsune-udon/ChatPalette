@@ -180,4 +180,5 @@ fn runFixture(alloc: std.mem.Allocator, input_path: []const u8, evidence: std.fs
     const result = observed.result orelse return error.BrowserFixtureDidNotStart;
     if (result.exit_code != 0 or result.timed_out) return error.BrowserFixtureFailed;
     try test_runner.validateBrowserReport(alloc, text orelse return error.BrowserFixtureEvidenceMissing, expected.application);
+    if (result.stderr_bytes != 0) return error.UnexpectedTestStderr;
 }

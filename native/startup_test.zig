@@ -92,7 +92,7 @@ pub fn main() !void {
         std.debug.print("起動試験に失敗しました。{s}\n", .{name});
         std.process.exit(1);
     }
-    std.debug.print("起動試験に合格しました。\n", .{});
+    try std.fs.File.stdout().writeAll("起動試験に合格しました。\n");
 }
 
 fn verify(input: []const u8, output: []const u8, dir: std.fs.Dir, report: *Report) !void {

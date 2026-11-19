@@ -96,10 +96,9 @@ fn dataBench(
     alloc: std.mem.Allocator,
     output: []const u8,
     repeats: usize,
-    raw_counts: []const []const u8,
+    counts: []const usize,
     load_only: bool,
 ) ![]const Sample {
-    const counts = try samples.parseCounts(alloc, raw_counts);
     const operations: []const Operation = if (load_only) &.{.load} else &.{ .edit, .swap, .undo, .reverse, .validate };
     const result = try alloc.alloc(Sample, counts.len * operations.len);
     for (counts, 0..) |count, index| {
@@ -166,15 +165,16 @@ pub fn run(allocator: std.mem.Allocator, mode: []const u8, output: []const u8, r
     } else if (!load_only and !std.mem.eql(u8, mode, "storage")) {
         return error.InvalidArguments;
     }
-    try std.fs.cwd().makeDir(output);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
+    const counts: []const usize = if (startup) &.{} else try samples.parseCounts(alloc, data);
+    try std.fs.cwd().makeDir(output);
     const absolute = try std.fs.cwd().realpathAlloc(alloc, output);
     const summary = if (startup)
         try startupBench(alloc, absolute, repeats, data[0])
     else
-        try dataBench(alloc, absolute, repeats, data, load_only);
+        try dataBench(alloc, absolute, repeats, counts, load_only);
     const report = try std.json.Stringify.valueAlloc(alloc, .{
         .mode = mode,
         .repeats = repeats,

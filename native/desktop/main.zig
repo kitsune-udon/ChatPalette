@@ -235,6 +235,7 @@ const App = struct {
     modal: bool = false,
     last_mode: ?transport.Mode = null,
     last_page: ?diagnostic.PageOperation = null,
+    last_registration: ?diagnostic.RegistrationOperation = null,
     last_state: []const u8 = "未実行",
     last_elapsed: u64 = 0,
     last_worker_failure: ?diagnostic.WorkerFailure = null,
@@ -249,6 +250,8 @@ const App = struct {
         generation: u64,
         due: u64,
         committed: bool = false,
+        browser: diagnostic.Browser = .unselected,
+        started_at: ?u64 = null,
 
         fn retries(mode: transport.Mode, state: []const u8) bool {
             return mode == .reaction_capture and
@@ -717,6 +720,7 @@ const App = struct {
             .browser = diagnostic.Browser.fromName(input.browser(self.target)),
             .operation = self.last_mode,
             .page_operation = self.last_page,
+            .registration_operation = self.last_registration,
             .state = diagnostic.State.fromCode(self.last_state),
             .elapsed_ms = self.last_elapsed,
             .worker_failure = self.last_worker_failure,
@@ -868,6 +872,7 @@ const App = struct {
     fn requestUsing(self: *App, mode: transport.Mode, target: usize, expected: []const u8, fields: []const transport.Field, comptime exchange: @TypeOf(transport.Client.request)) !transport.Reply {
         if (self.worker.active) return error.WorkerBusy;
         if (self.last_page) |*page_operation| page_operation.latest = false;
+        if (self.last_registration) |*registration| registration.latest = false;
         self.last_resolve_failure = null;
         const started = win.GetTickCount64();
         defer {
@@ -1586,7 +1591,15 @@ const App = struct {
         const delay: u32 = if (mode == .reaction_capture) 1000 else 5000;
         self.reaction_generation +%= 1;
         self.reaction_revision +%= 1;
-        self.preparation = .{ .mode = mode, .target = target, .video = context.video, .page = context.page, .generation = self.reaction_generation, .due = win.GetTickCount64() + delay };
+        self.preparation = .{
+            .mode = mode,
+            .target = target,
+            .video = context.video,
+            .page = context.page,
+            .generation = self.reaction_generation,
+            .due = win.GetTickCount64() + delay,
+            .browser = diagnostic.Browser.fromName(input.browser(origin.target)),
+        };
         const pending = self.preparation.?;
         if (self.queue.target == target) {
             _ = self.queue.bindVideo(context.video);
@@ -1623,6 +1636,7 @@ const App = struct {
             return;
         }
         self.cancelReactionTimer();
+        self.preparation.?.started_at = now;
         defer self.finishQuit();
         self.updateReactionProgress(if (pending.mode == .reaction_capture) "ボタンを登録しています。" else "5種類のボタンを確認しています。", .running);
         if (!self.preparationCurrent(pending)) return;
@@ -1649,8 +1663,22 @@ const App = struct {
         self.cancelReactionTimer();
         self.updateReactionButtons();
         // A committed registration still needs its confirmation even if another key is waiting.
-        if (self.reaction_revision == revision and (pending.committed or !self.reactionQueued() or self.queue.target == pending.target))
+        if (self.reaction_revision == revision and (pending.committed or !self.reactionQueued() or self.queue.target == pending.target)) {
+            if (pending.mode == .reaction_capture) {
+                if (self.last_page) |*page_operation| page_operation.latest = false;
+                self.last_registration = .{
+                    .browser = pending.browser,
+                    .state = switch (reason) {
+                        .saved => .registered,
+                        .saved_sync_failed => .sync_failed,
+                        .stopped => .cancelled,
+                        else => diagnostic.State.fromCode(@tagName(reason)),
+                    },
+                    .elapsed_ms = if (pending.started_at) |started| win.GetTickCount64() -| started else 0,
+                };
+            }
             self.publishReactionResult(reason, null, detail);
+        }
         if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
 
@@ -2360,6 +2388,35 @@ test "registration display reads only the selected browser and preserves operati
     try testing.expect(app.worker.active and !app.worker.registrations_current);
     try testing.expectEqual(transport.Mode.reaction_send, app.last_mode.?);
     try testing.expectEqualStrings("menu_closed", app.last_state);
+}
+
+test "registration diagnostics retain the outcome of saving and synchronizing" {
+    const testing = std.testing;
+    var app: App = .{ .executable = undefined, .db = undefined, .snapshot = .init(testing.allocator), .history = undefined, .running_digest = null, .quitting = true };
+    defer app.snapshot.deinit();
+    defer if (app.reaction_result) |result| result.deinit();
+    var out: [1600]u8 = undefined;
+    for ([_]struct { reason: feedback.Reason, state: diagnostic.State, mode: transport.Mode, reply: []const u8, committed: bool }{
+        .{ .reason = .saved, .state = .registered, .mode = .reaction_configure, .reply = "configured", .committed = true },
+        .{ .reason = .save_failed, .state = .save_failed, .mode = .reaction_capture, .reply = "captured", .committed = false },
+        .{ .reason = .saved_sync_failed, .state = .sync_failed, .mode = .reaction_configure, .reply = "unavailable", .committed = true },
+        .{ .reason = .stopped, .state = .cancelled, .mode = .reaction_capture, .reply = "captured", .committed = false },
+    }) |scenario| {
+        app.last_mode = scenario.mode;
+        app.last_state = scenario.reply;
+        app.preparation = .{ .mode = .reaction_capture, .target = 1, .video = "Fixture0001".*, .page = @splat('0'), .generation = 1, .due = 0, .committed = scenario.committed, .browser = .firefox };
+        app.finishPreparation(scenario.reason, "PRIVATE-TOKEN-LABEL");
+        const record = app.last_registration orelse return error.TestRegistrationOutcomeMissing;
+        try testing.expectEqual(scenario.state, record.state);
+        try testing.expect(app.preparation == null and record.latest);
+        const snapshot = app.diagnosticSnapshot(win.GetTickCount64());
+        const text = try snapshot.format(&out, version);
+        try testing.expect(std.mem.indexOf(u8, text, "ブラウザー Firefox\r\n直近の操作 reaction_capture") != null);
+        var expected: [256]u8 = undefined;
+        const outcome = try std.fmt.bufPrint(&expected, "結果 {s}\r\n補助プロセスの要求 {s}\r\n補助プロセスの応答 {s}", .{ @tagName(scenario.state), @tagName(scenario.mode), scenario.reply });
+        try testing.expect(std.mem.indexOf(u8, text, outcome) != null);
+        try testing.expect(std.mem.indexOf(u8, text, "PRIVATE-TOKEN-LABEL") == null);
+    }
 }
 
 test "automatic profile selection persists the match before exposing its input and preserves queued shortcuts" {

@@ -89,7 +89,8 @@ pub fn main() !void {
         std.debug.print("合成ブラウザー試験失敗 {s} {s}\n", .{ report.failure orelse "", report.cleanup_error orelse "" });
         std.process.exit(1);
     }
-    std.debug.print("合成ブラウザー試験 {d}件成功\n", .{report.cases.items.len});
+    var summary: [128]u8 = undefined;
+    try std.fs.File.stdout().writeAll(try std.fmt.bufPrint(&summary, "合成ブラウザー試験 {d}件成功\n", .{report.cases.items.len}));
 }
 
 fn installedBrave(alloc: std.mem.Allocator, explicit: ?[]const u8) ![]const u8 {
@@ -317,6 +318,7 @@ fn verify(alloc: std.mem.Allocator, source: []const u8, brave: []const u8, outpu
     };
     try runner.waitFixture();
     try driver.clearModifiers();
+    var progress: [256]u8 = undefined;
     for (selected) |test_case| {
         try report.cases.append(alloc, .{ .name = test_case.name });
         runner.current = &report.cases.items[report.cases.items.len - 1];
@@ -336,7 +338,7 @@ fn verify(alloc: std.mem.Allocator, source: []const u8, brave: []const u8, outpu
             return error.BrowserFixtureCasesFailed;
         };
         runner.current.passed = true;
-        std.debug.print("PASS {s}\n", .{test_case.name});
+        try std.fs.File.stdout().writeAll(try std.fmt.bufPrint(&progress, "PASS {s}\n", .{test_case.name}));
     }
 }
 

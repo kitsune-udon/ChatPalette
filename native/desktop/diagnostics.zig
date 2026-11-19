@@ -55,6 +55,9 @@ pub const State = enum {
     ready,
     captured,
     configured,
+    registered,
+    save_failed,
+    sync_failed,
     unavailable,
     changed,
     cancelled,
@@ -75,7 +78,7 @@ pub const State = enum {
 
     pub fn fromWorker(code: []const u8) State {
         return switch (fromCode(code)) {
-            .cleared, .enter_sent, .inserted => .unknown,
+            .cleared, .enter_sent, .inserted, .registered, .save_failed, .sync_failed => .unknown,
             else => |state| state,
         };
     }
@@ -105,6 +108,13 @@ pub const PageOperation = struct {
     action: shortcuts.Action,
     browser: Browser,
     stage: PageStage,
+    state: State,
+    elapsed_ms: u64,
+    latest: bool = true,
+};
+
+pub const RegistrationOperation = struct {
+    browser: Browser,
     state: State,
     elapsed_ms: u64,
     latest: bool = true,
@@ -181,6 +191,7 @@ pub const Snapshot = struct {
     browser: Browser,
     operation: ?transport.Mode,
     page_operation: ?PageOperation = null,
+    registration_operation: ?RegistrationOperation = null,
     state: State,
     elapsed_ms: u64,
     worker_failure: ?WorkerFailure = null,
@@ -211,13 +222,27 @@ pub const Snapshot = struct {
                 @tagName(page.action), page.stage.label(), @tagName(page.state), page.browser.label(),
             });
         } else "";
-        return std.fmt.bufPrint(buffer, "ChatPalette {s}\r\nWindows x64\r\n配布物 {s}\r\nブラウザー {s}\r\n直近の操作 {s}\r\n結果 {s}{s}\r\n処理時間 {d} ms{s}{s}{s}{s}{s}{s}\r\nリアクション {s} ({s})\r\n補助プロセス {s}\r\n自動判別 {s}\r\nDB形式 5   JSON形式 2\r\n再起動は現在の展開先の ChatPalette.exe から行います。", .{
+        var registration_buffer: [256]u8 = undefined;
+        const registration_info = if (self.registration_operation) |registration| info: {
+            if (registration.latest) {
+                operation = "reaction_capture";
+                state = @tagName(registration.state);
+                browser = registration.browser;
+                elapsed_ms = registration.elapsed_ms;
+                break :info try std.fmt.bufPrint(&registration_buffer, "\r\n補助プロセスの要求 {s}\r\n補助プロセスの応答 {s}", .{
+                    worker_request, if (self.operation != null) @tagName(self.state) else "未実行",
+                });
+            }
+            break :info try std.fmt.bufPrint(&registration_buffer, "\r\n直近のリアクション登録 {s}", .{@tagName(registration.state)});
+        } else "";
+        return std.fmt.bufPrint(buffer, "ChatPalette {s}\r\nWindows x64\r\n配布物 {s}\r\nブラウザー {s}\r\n直近の操作 {s}\r\n結果 {s}{s}{s}\r\n処理時間 {d} ms{s}{s}{s}{s}{s}{s}\r\nリアクション {s} ({s})\r\n補助プロセス {s}\r\n自動判別 {s}\r\nDB形式 5   JSON形式 2\r\n再起動は現在の展開先の ChatPalette.exe から行います。", .{
             version,
             self.distribution.label(),
             browser.label(),
             operation,
             state,
             stage,
+            registration_info,
             elapsed_ms,
             if (failure.len != 0) "\r\n" else "",
             failure,

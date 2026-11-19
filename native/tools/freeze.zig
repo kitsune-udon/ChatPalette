@@ -189,7 +189,7 @@ const Stage = struct {
         try self.record(name, try self.read(rel));
     }
 
-    fn runStep(self: *Stage, name: []const u8, argv: []const []const u8, cwd: []const u8, timeout_ms: u32) !void {
+    fn runStep(self: *Stage, name: []const u8, argv: []const []const u8, cwd: []const u8, timeout_ms: u32) !process.Result {
         std.debug.print("配布候補の検査 {s}\n", .{name});
         const directory = try self.path(name);
         try std.fs.cwd().makeDir(directory);
@@ -204,10 +204,11 @@ const Stage = struct {
                 try std.fs.path.join(self.alloc, &.{ name, file }),
             );
         }
+        return result;
     }
 
     fn testList(self: *Stage, name: []const u8, exe: LockedExecutable) ![]const []const u8 {
-        try self.runStep(name, &.{exe.path}, self.root, test_timeout_ms);
+        _ = try self.runStep(name, &.{exe.path}, self.root, test_timeout_ms);
         try exe.check();
         const log_path = try std.fs.path.join(self.alloc, &.{ name, "stderr.txt" });
         return unitTestNames(self.alloc, try self.read(log_path));
@@ -251,11 +252,11 @@ pub fn run(
     try release.requireSources(alloc, project, source_manifest);
     try source_check.run(alloc, snapshot_path);
 
-    try stage.runStep("zig-version", &.{ compiler.path, "version" }, stage.root, 10_000);
+    _ = try stage.runStep("zig-version", &.{ compiler.path, "version" }, stage.root, 10_000);
     const version = std.mem.trim(u8, try stage.read("zig-version/stdout.txt"), " \r\n\t");
     if (!std.mem.eql(u8, version, compiler_version)) return error.UnexpectedZigVersion;
     const prefix = try stage.path("built");
-    try stage.runStep("build", &.{
+    _ = try stage.runStep("build", &.{
         compiler.path, "build", "install",     "tools",                 "test-artifacts",     "-Doptimize=ReleaseSafe",
         "--prefix",    prefix,  "--cache-dir", try stage.path("cache"), "--global-cache-dir", try stage.path("global"),
         "--summary",   "all",
@@ -292,7 +293,8 @@ pub fn run(
     }, .{ .whitespace = .indent_2 });
     try files.writeNew(std.fs.cwd(), try stage.path("test-list.json"), test_names);
     try stage.record("test-list.json", test_names);
-    try stage.runStep("startup", &.{ startup_test.path, app.path, try stage.path("startup-result") }, stage.root, test_timeout_ms);
+    const startup_result = try stage.runStep("startup", &.{ startup_test.path, app.path, try stage.path("startup-result") }, stage.root, test_timeout_ms);
+    if (startup_result.stderr_bytes != 0) return error.UnexpectedTestStderr;
     try startup_test.check();
     try app.check();
     const app_sha = files.hex(app.sha);
@@ -302,7 +304,8 @@ pub fn run(
     }), app_sha);
     try stage.record("startup-report.json", startup_report);
 
-    try stage.runStep("worker-lifecycle", &.{ worker_test.path, app.path, try stage.path("worker-result") }, stage.root, 60_000);
+    const worker_result = try stage.runStep("worker-lifecycle", &.{ worker_test.path, app.path, try stage.path("worker-result") }, stage.root, 60_000);
+    if (worker_result.stderr_bytes != 0) return error.UnexpectedTestStderr;
     try worker_test.check();
     try app.check();
     const worker_report = try stage.read("worker-result/result.json");

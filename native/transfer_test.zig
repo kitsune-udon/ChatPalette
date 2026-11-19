@@ -185,7 +185,7 @@ pub fn main() !void {
         std.debug.print("データ移行試験に失敗しました。{s} {s}\n", .{ report.stage, failure });
         std.process.exit(1);
     }
-    std.debug.print("データ移行試験に合格しました。\n", .{});
+    try std.fs.File.stdout().writeAll("データ移行試験に合格しました。\n");
 }
 
 fn verify(scratch: std.mem.Allocator, candidate: []const u8, output: []const u8, root: std.fs.Dir, report: *Report) !void {

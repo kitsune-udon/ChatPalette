@@ -290,6 +290,7 @@ fn checkOutcome(
         .unit => {
             const log = try group_dir.readFileAlloc(alloc, "stderr.txt", evidence_limit);
             report.unit_names = try freeze.unitTestNames(alloc, log);
+            return;
         },
         .browser => try readBrowserReport(alloc, group_dir, work, application.?),
         .ime => try readImeReport(alloc, group_dir, work),
@@ -297,6 +298,7 @@ fn checkOutcome(
         .transfer => try readTransferReport(alloc, group_dir, work, application.?),
         .worker_lifecycle => try readWorkerReport(alloc, group_dir, work, application.?),
     }
+    if (report.result.?.stderr_bytes != 0) return error.UnexpectedTestStderr;
 }
 
 fn runOne(alloc: Allocator, output: []const u8, project: []const u8, entry: Case, image: Image, application: ?Image) !Group {
