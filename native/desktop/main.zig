@@ -1291,6 +1291,7 @@ const App = struct {
     }
 
     fn insertFromPalette(self: *App, index: usize) void {
+        if (self.modal) return;
         const context = self.paletteContext();
         self.deliverPaletteItem(index, context) catch |failure| {
             if (self.paletteContextCurrent(context) and (self.foreground(windows.number(context.target)) or
