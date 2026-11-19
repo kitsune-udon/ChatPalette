@@ -374,8 +374,7 @@ pub const Worker = struct {
 
     fn verify(self: *Worker, window: *uia.Window, video: uia.Video, expected_input: ?*win.Element, require_chat: bool, page: ?*win.Element, prepare: ?[32]u8, reply: *Reply) !void {
         reply.state = "wrong_input";
-        const hwnd: win.sdk.HWND = @ptrFromInt(window.hwnd);
-        if (win.sdk.GetForegroundWindow() != hwnd) return;
+        if (!window.isForeground()) return;
         const focused = try self.client.focusedInput(window) orelse return;
         defer win.release(focused.element);
         if (page) |expected| {
@@ -395,7 +394,7 @@ pub const Worker = struct {
             return;
         }
         if (!try self.client.stillFocused(window, focused.element, true)) return;
-        if (win.sdk.GetForegroundWindow() != hwnd) return;
+        if (!window.isForeground()) return;
         reply.state = "ok";
         reply.detail = focused.kind;
         if (prepare) |token| {
@@ -473,6 +472,13 @@ pub const Worker = struct {
         return true;
     }
 
+    fn requireForeground(window: *const uia.Window, reply: *Reply) bool {
+        // UI Automation can observe old focus while Windows changes the foreground during a COM call.
+        if (window.isForeground()) return true;
+        reply.state = "wrong_window";
+        return false;
+    }
+
     fn moveFocus(self: *Worker, window: *uia.Window, video: uia.Video, page: ?*win.Element, reply: *Reply) !void {
         const target = switch (try pages.findChatIn(&self.client, window, page)) {
             .missing => {
@@ -499,10 +505,12 @@ pub const Worker = struct {
             reply.state = "changed";
             return;
         };
+        if (!requireForeground(window, reply)) return;
         reply.state = "unknown";
         try win.check(win.call("SetFocus", target, .{}));
         reply.state = try pages.waitChatFocus(&self.client, window, target, video);
         if (!eq(u8, reply.state, "focused")) return;
+        if (!requireForeground(window, reply)) return;
         var bytes: [16]u8 = undefined;
         std.crypto.random.bytes(&bytes);
         win.retain(target);
@@ -532,6 +540,7 @@ pub const Worker = struct {
                 return;
             }
         }
+        if (!requireForeground(window, reply)) return;
         reply.state = "unknown";
         if (win.sdk.SetPhysicalCursorPos(point.x, point.y) != win.sdk.FALSE) reply.state = "hovered";
     }
@@ -613,6 +622,7 @@ pub const Worker = struct {
         }
         if (!try self.validContext(window, video, reply)) return;
         if (!try self.reactionPageCurrent(window, page, reply)) return;
+        if (!requireForeground(window, reply)) return;
         if (pattern) |invoke| {
             reply.state = "unknown";
             try invoke.operate();

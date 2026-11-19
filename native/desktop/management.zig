@@ -185,6 +185,7 @@ pub const Management = struct {
     list_update_failed: bool = false,
     scope_update_failed: bool = false,
     refreshing: bool = false,
+    refresh_pending: bool = false,
     laying_out: bool = false,
     viewport: Viewport = .{},
     opening_editor: bool = false,
@@ -330,12 +331,21 @@ pub const Management = struct {
     }
 
     pub fn refresh(self: *Management) void {
-        if (self.list == null or self.refreshing) return;
+        if (self.list == null) return;
+        self.refresh_pending = true;
+        if (self.refreshing) return;
         self.refreshing = true;
         defer {
             self.refreshing = false;
             self.updateActions();
         }
+        while (self.refresh_pending) {
+            self.refresh_pending = false;
+            self.refreshView();
+        }
+    }
+
+    fn refreshView(self: *Management) void {
         const current = self.editingId();
         const data = self.snapshot.data;
         var choice: usize = 0;
@@ -465,11 +475,11 @@ pub const Management = struct {
             (if (profile.channel.len == 0) "チャンネル未連携" else profile.channel)
         else
             "共通の弾幕はすべてのチャンネルで使えます。";
-        windows.setText(self.channel, current_channel);
         self.refreshing = true;
+        windows.setText(self.channel, current_channel);
         self.refreshList();
         self.refreshing = false;
-        self.updateActions();
+        if (self.refresh_pending) self.refresh() else self.updateActions();
     }
 
     fn hide(self: *Management) void {

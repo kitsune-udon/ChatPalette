@@ -512,8 +512,10 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             ok_id => dialog.saveKeys(),
             cancel_id => dialog.requestClose(),
             reset_id => if (dialog.document != null) {
-                _ = win.SendMessageW(dialog.document, win.EM_SETSEL, 0, -1);
-                _ = win.SendMessageW(dialog.document, win.WM_COPY, 0, 0);
+                if (dialog.reset != null and !dialog.finishing) {
+                    _ = win.SendMessageW(dialog.document, win.EM_SETSEL, 0, -1);
+                    _ = win.SendMessageW(dialog.document, win.WM_COPY, 0, 0);
+                }
             } else if (!dialog.finishing) {
                 for (dialog.edits, storage.default_shortcut_keys) |edit, key| windows.setText(edit, key);
                 dialog.updateKeys();

@@ -58,6 +58,7 @@ pub const Palette = struct {
     count: usize = 0,
     selected_id: ?[]u8 = null,
     search_due: ?u64 = null,
+    refreshing: bool = false,
     resetting_search: bool = false,
     refresh_failed: bool = false,
     detected_profile: bool = false,
@@ -149,6 +150,9 @@ pub const Palette = struct {
     }
 
     pub fn refresh(self: *Palette, data: storage.Data) void {
+        const refreshing = self.refreshing;
+        self.refreshing = true;
+        defer self.refreshing = refreshing;
         self.refresh_failed = false;
         self.data = data;
         _ = win.SendMessageW(self.mode, win.CB_SETCURSEL, if (data.preferences.auto_mode) 0 else 1, 0);
@@ -245,6 +249,9 @@ pub const Palette = struct {
 
     pub fn refreshItems(self: *Palette) void {
         if (self.list == null) return;
+        const refreshing = self.refreshing;
+        self.refreshing = true;
+        defer self.refreshing = refreshing;
         self.cancelSearch();
         const raw_query = windows.text(self.search, allocator) catch {
             self.refresh_failed = true;

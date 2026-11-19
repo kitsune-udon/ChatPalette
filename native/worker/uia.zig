@@ -23,6 +23,10 @@ pub const Window = struct {
     walker: *win.Walker,
     address: ?Address = null,
 
+    pub fn isForeground(self: Window) bool {
+        return self.hwnd != 0 and @intFromPtr(sdk.GetForegroundWindow()) == self.hwnd;
+    }
+
     pub fn belongs(self: Window, element: *win.Element) !bool {
         const normalized = try objectOrNull(win.Element, "NormalizeElement", self.walker, .{element});
         if (normalized) |owned| release(owned);
@@ -240,7 +244,7 @@ pub const Client = struct {
 
     pub fn findDocument(self: *Client, window: *Window, lookup: DocumentLookup) !?*win.Element {
         const hwnd: sdk.HWND = @ptrFromInt(window.hwnd);
-        if (sdk.GetForegroundWindow() == hwnd) {
+        if (window.isForeground()) {
             if (try self.focused()) |focused_element| {
                 defer release(focused_element);
                 if (!try window.belongs(focused_element)) return null;
@@ -298,7 +302,7 @@ pub const Client = struct {
         const current = try self.findDocument(window, lookup) orelse return false;
         defer release(current);
         return try self.same(expected, current) and
-            (lookup == .browser_context or sdk.GetForegroundWindow() == @as(sdk.HWND, @ptrFromInt(window.hwnd)));
+            (lookup == .browser_context or window.isForeground());
     }
 
     pub fn inDocument(self: *Client, window: *Window, element: *win.Element, expected: *win.Element) !bool {
@@ -324,9 +328,10 @@ pub const Client = struct {
     }
 
     pub fn foreground(self: *Client, window: *Window) !bool {
+        if (!window.isForeground()) return false;
         const element = (try self.focused()) orelse return false;
         defer release(element);
-        return window.belongs(element);
+        return (try window.belongs(element)) and window.isForeground();
     }
 
     pub fn same(self: *Client, a: *win.Element, b: *win.Element) !bool {

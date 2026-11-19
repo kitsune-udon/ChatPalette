@@ -248,7 +248,7 @@ pub const Snapshot = struct {
             failure,
             if (self.resolve_failure != null) "\r\n配信者の自動判定 " else "",
             if (self.resolve_failure) |reason| reason.message() else "",
-            if (self.stop_failure != null) "\r\n終了操作での補助プロセス終了失敗 " else "",
+            if (self.stop_failure != null) "\r\n補助プロセスの終了失敗 " else "",
             if (self.stop_failure) |value| @errorName(value) else "",
             self.phase.label(),
             @tagName(self.phase),

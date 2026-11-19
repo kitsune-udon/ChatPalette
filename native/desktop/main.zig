@@ -38,6 +38,7 @@ const menu_export = 9;
 const menu_capture = 10;
 const menu_check = 11;
 const menu_reaction_result = 12;
+const worker_exit_notice = "補助プロセスの終了を確認できませんでした。原因は診断情報で確認できます。";
 
 var current: ?*App = null;
 
@@ -429,7 +430,16 @@ const App = struct {
     }
 
     fn canEdit(self: *const App) bool {
-        return !self.quitting and !self.modal and !self.worker.active and !self.queue.busy() and self.reaction == null and self.preparation == null;
+        return !self.quitting and !self.modal and !self.updatingViews() and !self.worker.active and
+            !self.queue.busy() and self.reaction == null and self.preparation == null;
+    }
+
+    fn updatingViews(self: *const App) bool {
+        return self.manager.refreshing or self.palette.refreshing or self.palette.resetting_search;
+    }
+
+    fn shortcutAllowed(self: *const App, action: shortcuts.Action) bool {
+        return !self.modal and !self.updatingViews() and (action == .palette or !self.manager.isEditing());
     }
 
     fn resolveChannel(self: *App, channel: *management.ChannelRequest) void {
@@ -871,15 +881,22 @@ const App = struct {
 
     fn requestUsing(self: *App, mode: transport.Mode, target: usize, expected: []const u8, fields: []const transport.Field, comptime exchange: @TypeOf(transport.Client.request)) !transport.Reply {
         if (self.worker.active) return error.WorkerBusy;
+        const generation = self.queue.generation;
+        const started = win.GetTickCount64();
+        const exchanged = exchange(&self.worker, allocator, self.executable, mode, target, expected, fields, pump);
+        if (self.shortcutSuperseded(generation)) {
+            if (exchanged) |_| {} else |failure| {
+                const cleanup: ?anyerror = self.worker.cleanup_failure orelse if (failure == error.WorkerDidNotExit) failure else null;
+                if (cleanup) |cause| self.last_stop_failure = cause;
+            }
+            return exchanged;
+        }
         if (self.last_page) |*page_operation| page_operation.latest = false;
         if (self.last_registration) |*registration| registration.latest = false;
         self.last_resolve_failure = null;
-        const started = win.GetTickCount64();
-        defer {
-            self.last_mode = mode;
-            self.last_elapsed = win.GetTickCount64() - started;
-        }
-        const reply = exchange(&self.worker, allocator, self.executable, mode, target, expected, fields, pump) catch |failure| {
+        self.last_mode = mode;
+        self.last_elapsed = win.GetTickCount64() - started;
+        const reply = exchanged catch |failure| {
             self.last_state = if (self.worker.request_may_have_arrived) "unknown" else "unavailable";
             self.last_worker_failure = .{
                 .cause = failure,
@@ -904,7 +921,7 @@ const App = struct {
     fn cleanupNotice(self: *const App, cause: anyerror) ?[]const u8 {
         const failure = self.last_worker_failure orelse return null;
         if (failure.cause != cause or failure.cleanup == null) return null;
-        return "補助プロセスの終了を確認できませんでした。原因は診断情報で確認できます。";
+        return worker_exit_notice;
     }
 
     fn resolveFailureNotice(self: *const App) []const u8 {
@@ -926,6 +943,7 @@ const App = struct {
     }
 
     fn requestOnPage(self: *App, mode: transport.Mode, target: usize, video: []const u8, page_proof: []const u8, extra: []const transport.Field) !transport.Reply {
+        const generation = self.queue.generation;
         var fields: [3]transport.Field = undefined;
         fields[0] = .{ .name = "PageToken", .value = page_proof };
         @memcpy(fields[1 .. 1 + extra.len], extra);
@@ -940,10 +958,10 @@ const App = struct {
                 std.mem.eql(u8, page_proof, returned);
             if (!valid) {
                 if (input_sent) {
-                    self.last_state = "unknown";
+                    if (!self.shortcutSuperseded(generation)) self.last_state = "unknown";
                     return error.InputOutcomeUnknown;
                 }
-                self.last_state = "changed";
+                if (!self.shortcutSuperseded(generation)) self.last_state = "changed";
                 return error.PageProofMissing;
             }
         }
@@ -979,7 +997,7 @@ const App = struct {
                 var detail: [256]u8 = undefined;
                 if (!self.quitting and self.quickReactionStarting())
                     _ = self.failReactionStart(self.workerFailureReason(failure), self.workerFailureDetail(failure, &detail));
-            } else {
+            } else if (!self.shortcutSuperseded(command.generation)) {
                 const page_recorded = if (self.last_page) |page_operation| page_operation.latest else false;
                 const state = if (page_recorded) self.last_state else @tagName(self.workerFailureReason(failure));
                 self.report(self.cleanupNotice(failure) orelse state);
@@ -998,12 +1016,18 @@ const App = struct {
     }
 
     fn commandCurrent(self: *App, command: operations.Command) bool {
-        return self.foreground(command.event.window) and self.queue.accepts(command, command.event.window);
+        return self.shortcutAllowed(command.event.action) and self.foreground(command.event.window) and
+            self.queue.accepts(command, command.event.window);
+    }
+
+    fn shortcutSuperseded(self: *const App, generation: u64) bool {
+        return self.queue.generation != generation and self.queue.pending.items.len != 0;
     }
 
     fn checkCommandTarget(self: *App, command: operations.Command) bool {
         if (self.commandCurrent(command)) return true;
-        if (command.event.action == .reaction and !self.quitting and self.queue.active and command.generation == self.queue.generation)
+        if (command.event.action == .reaction and self.shortcutAllowed(.reaction) and !self.quitting and
+            self.queue.active and command.generation == self.queue.generation)
             return self.failReactionStart(.wrong_window, "");
         return false;
     }
@@ -1081,7 +1105,7 @@ const App = struct {
             .reactions_show => .show_reactions,
             else => unreachable,
         };
-        defer {
+        defer if (!self.shortcutSuperseded(command.generation)) {
             self.last_page = .{
                 .action = action,
                 .browser = browser,
@@ -1089,8 +1113,8 @@ const App = struct {
                 .state = diagnostic.State.fromCode(self.last_state),
                 .elapsed_ms = win.GetTickCount64() - started,
             };
-        }
-        errdefer |failure| {
+        };
+        errdefer |failure| if (!self.shortcutSuperseded(command.generation)) {
             if (failure == error.ForegroundChanged) {
                 self.last_state = "cancelled";
             } else if (failure == error.PageProofMissing) {
@@ -1098,7 +1122,7 @@ const App = struct {
             } else if (self.last_worker_failure == null) {
                 self.last_state = "unknown";
             }
-        }
+        };
         const result = switch (action) {
             .chat_focus, .chat_clear => reply: {
                 self.queue.focus.len = 0;
@@ -1130,6 +1154,7 @@ const App = struct {
                 if (!self.pageCommandCurrent(command) or !self.pageReplySucceeded(checked, video, .ok)) return false;
                 stage = .clear_keys;
                 const outcome = try self.commitInput(.chat_clear, target, video, page_token.?, null);
+                if (self.shortcutSuperseded(command.generation)) return false;
                 if (outcome != .cleared) {
                     if (outcome != .unknown) stage = .clear_check;
                     return self.rejectPage(outcome);
@@ -1140,6 +1165,7 @@ const App = struct {
                 if (!std.mem.eql(u8, result.field("Detail"), "chat")) return self.rejectPage(.wrong_input);
                 stage = .enter_key;
                 const outcome = try self.commitInput(.chat_enter, target, video, page_token.?, null);
+                if (self.shortcutSuperseded(command.generation)) return false;
                 if (outcome != .enter_sent) {
                     if (outcome != .unknown) stage = .send_check;
                     return self.rejectPage(outcome);
@@ -1153,6 +1179,7 @@ const App = struct {
     }
 
     fn commitInput(self: *App, mode: transport.Mode, target: usize, video: operations.VideoId, page_token: operations.PageToken, text: ?[]const u8) !diagnostic.State {
+        const generation = self.queue.generation;
         const cancellation = try keyboard.Cancellation.create();
         self.input_cancellation = .{ .signal = cancellation, .target = target };
         defer {
@@ -1170,7 +1197,7 @@ const App = struct {
         const success = mode.inputOutcome().?;
         if (reply.is(success)) {
             if (std.mem.eql(u8, reply.field("Video"), &video)) return diagnostic.State.fromCode(success);
-            self.last_state = "unknown";
+            if (!self.shortcutSuperseded(generation)) self.last_state = "unknown";
             return error.InputOutcomeUnknown;
         }
         return switch (diagnostic.State.fromWorker(reply.field("State"))) {
@@ -1181,6 +1208,7 @@ const App = struct {
 
     fn pageCommandCurrent(self: *App, command: operations.Command) bool {
         if (self.commandCurrent(command)) return true;
+        if (self.shortcutSuperseded(command.generation)) return false;
         if (!self.quitting) return self.rejectPage(.cancelled);
         self.last_state = "cancelled";
         return false;
@@ -1241,6 +1269,7 @@ const App = struct {
         if (!self.commandCurrent(command) or command.library != self.library_revision) return false;
         if (!self.pageReplySucceeded(verification, video, .ok)) return false;
         const outcome = try self.commitInput(.input_insert, target, video, page_token, item.text);
+        if (self.shortcutSuperseded(command.generation)) return false;
         if (outcome != .inserted) return self.rejectPage(outcome);
         self.report("弾幕を入力しました。");
         return true;
@@ -2049,7 +2078,7 @@ test "desktop records the communication cause and an unconfirmed worker exit tog
             "補助プロセスの終了を確認できませんでした。もう一度終了してください。", notice);
     }
     const after_quit = try app.diagnosticSnapshot(win.GetTickCount64()).format(&buffer, version);
-    for ([_][]const u8{ "InvalidWorkerRequestSize", "終了操作での補助プロセス終了失敗 WorkerDidNotExit" }) |expected|
+    for ([_][]const u8{ "InvalidWorkerRequestSize", "補助プロセスの終了失敗 WorkerDidNotExit" }) |expected|
         try testing.expect(std.mem.indexOf(u8, after_quit, expected) != null);
 
     app.worker.process = null;
@@ -2864,6 +2893,7 @@ fn shortcut(event: shortcuts.Event) void {
         if (event.action == .palette) app.manager.show();
         return;
     }
+    if (!app.shortcutAllowed(event.action)) return;
     if (event.action == .palette and (app.reaction != null or app.preparation != null)) {
         _ = win.PostMessageW(app.window, feedback.wm_present, 0, 0);
         return;
