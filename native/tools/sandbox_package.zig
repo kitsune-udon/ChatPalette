@@ -258,7 +258,9 @@ fn rememberChild(report: *Report, observed: process.Observation) void {
     if (report.failure != null) report.failure_stage = .execute;
 }
 
-fn runGuest(alloc: Allocator, input: []const u8, output_path: []const u8, output: std.fs.Dir, pins: sandbox.PackagePins, report: *Report) !void {
+const MappedPaths = struct { input: []const u8, output: []const u8 };
+
+fn runGuest(alloc: Allocator, input: []const u8, mapped: MappedPaths, output: std.fs.Dir, pins: sandbox.PackagePins, report: *Report) !void {
     report.failure_stage = .prepare;
     // Each report and log can contribute one failure. A directory failure prevents those member reads.
     var failures = try CollectionFailures.initCapacity(alloc, 2 + scenario_logs.len);
@@ -276,7 +278,8 @@ fn runGuest(alloc: Allocator, input: []const u8, output_path: []const u8, output
     const temporary = try std.process.getEnvVarOwned(alloc, "TEMP");
     const work_path = try files.newDirectory(alloc, temporary, "ChatPalettePackage-");
     const install_output = try std.fs.path.join(alloc, &.{ work_path, "clean-install" });
-    try sandbox.silenceGuest(alloc, input, output_path, output);
+    // The guest guard checks the configured mappings, before path resolution changes their spelling.
+    try sandbox.silenceGuest(alloc, mapped.input, mapped.output, output);
     if (runStagedHarness(alloc, work_path, install_output, output, pins, archive, harness)) |observed| {
         rememberChild(report, observed);
     } else |err| {
@@ -342,7 +345,7 @@ pub fn guest(
     // A second invocation must not race the logs or publish its failure over the first guest.
     try files.writeNew(evidence, "package-guest.started", "");
     var report: Report = .{};
-    runGuest(alloc, input_path, output_path, evidence, pins, &report) catch |err| {
+    runGuest(alloc, input_path, .{ .input = input, .output = output }, evidence, pins, &report) catch |err| {
         report.failure = @errorName(err);
     };
     try process.saveResult(alloc, output_path, report);
