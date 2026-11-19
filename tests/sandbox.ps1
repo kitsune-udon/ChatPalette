@@ -3,6 +3,7 @@ param([Parameter(Mandatory)][string[]]$Name, [string]$AutoHotkeyPath, [switch]$P
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'support.ps1')
 . (Join-Path $ProjectRoot 'scripts\release-files.ps1')
+Assert-LegacyReleaseProject $ProjectRoot 'chatpalette-tools sandbox'
 $sandboxExe = Join-Path $env:SystemRoot 'System32\WindowsSandbox.exe'
 if (!$PrepareOnly -and !(Test-Path -LiteralPath $sandboxExe -PathType Leaf)) {
     throw 'Windows Sandbox is not installed. Enable Containers-DisposableClientVM and restart Windows if requested. Use -Sandbox -PrepareOnly to prepare without launching.'
@@ -38,21 +39,58 @@ $xml = @"
 Write-Output "Sandbox configuration: $config"
 Write-Output "Sandbox results: $outputRoot"
 if ($PrepareOnly) { return }
-# The Sandbox window is visible for observing tests. Do not activate host test windows.
-$process = Start-Process -FilePath $sandboxExe -ArgumentList ('"' + $config + '"') -WindowStyle Normal -PassThru
-$process.Dispose()
-$resultPath = Join-Path $outputRoot 'result.json'
-$logs = @('stdout.txt','stderr.txt') | ForEach-Object { [pscustomobject]@{Path=(Join-Path $outputRoot $_); Position=0} }
-$timeoutMs = 1000 * (180 + 120 * ($Name.Count + 1))
-$elapsed = [Diagnostics.Stopwatch]::StartNew()
-while (!(Test-Path -LiteralPath $resultPath)) {
-    foreach ($log in $logs) { Write-TestLogUpdate $log }
-    if ($elapsed.ElapsedMilliseconds -ge $timeoutMs) {
-        throw "Sandbox did not report completion. It may still be running; inspect its window and $outputRoot. No success is assumed and no other Sandbox is stopped."
+$created = $false
+$mutex = [Threading.Mutex]::new($true, 'Local\ChatPaletteSandboxRunner', [ref]$created)
+try {
+    if (!$created) { throw 'Another ChatPalette Sandbox runner is active.' }
+    $sandboxCli = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\wsb.exe'
+    if (Test-Path -LiteralPath $sandboxCli -PathType Leaf) {
+        $listPath = Join-Path $runRoot 'session-list.json'
+        $listErrorPath = Join-Path $runRoot 'session-list-stderr.txt'
+        $listProcess = Start-Process -FilePath $sandboxCli -ArgumentList 'list','--raw' -WindowStyle Hidden -PassThru -RedirectStandardOutput $listPath -RedirectStandardError $listErrorPath
+        try {
+            # Keep the process handle open so Windows PowerShell 5.1 can read ExitCode after a fast exit.
+            $null = $listProcess.Handle
+            if (!$listProcess.WaitForExit(10000)) {
+                if (!$listProcess.HasExited) { $listProcess.Kill() }
+                throw "Windows Sandbox session query timed out. See $listErrorPath."
+            }
+            if ($listProcess.ExitCode -ne 0 -or (Get-Item -LiteralPath $listErrorPath).Length -ne 0) {
+                throw "Windows Sandbox session query failed. See $listErrorPath."
+            }
+        } finally {
+            $listProcess.Dispose()
+        }
+        $list = Get-Content -LiteralPath $listPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($list.WindowsSandboxEnvironments -isnot [array]) { throw "Invalid Windows Sandbox session query result. See $listPath." }
+        if ($list.WindowsSandboxEnvironments.Count -ne 0) {
+            throw 'Windows Sandbox is already open. Use wsb list to check the active session before starting the tests.'
+        }
     }
-    Start-Sleep -Milliseconds 500
+    # The server can stay alive without a VM, for example after `wsb list`.
+    $sessions = @(Get-Process -Name WindowsSandbox,WindowsSandboxRemoteSession,WindowsSandboxClient,vmmemWindowsSandbox -ErrorAction SilentlyContinue)
+    if ($sessions.Count) {
+        throw "Windows Sandbox is already open (PID $($sessions.Id -join ', ')). Close that session before starting the tests."
+    }
+    # The Sandbox window is visible for observing tests. Do not activate host test windows.
+    $process = Start-Process -FilePath $sandboxExe -ArgumentList ('"' + $config + '"') -WindowStyle Normal -PassThru
+    $process.Dispose()
+    $resultPath = Join-Path $outputRoot 'result.json'
+    $logs = @('stdout.txt','stderr.txt') | ForEach-Object { [pscustomobject]@{Path=(Join-Path $outputRoot $_); Position=0} }
+    $timeoutMs = 1000 * (180 + 120 * ($Name.Count + 1))
+    $elapsed = [Diagnostics.Stopwatch]::StartNew()
+    while (!(Test-Path -LiteralPath $resultPath)) {
+        foreach ($log in $logs) { Write-TestLogUpdate $log }
+        if ($elapsed.ElapsedMilliseconds -ge $timeoutMs) {
+            throw "Sandbox did not report completion. It may still be running; inspect its window and $outputRoot. No success is assumed and no other Sandbox is stopped."
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+    foreach ($log in $logs) { Write-TestLogUpdate $log -Complete }
+    if ($result.ExitCode -ne 0) { throw "Sandbox tests failed: $($result.Error). Results: $outputRoot" }
+    Write-Output "PASS: Windows Sandbox / $($Name.Count) test groups. Results: $outputRoot"
+} finally {
+    if ($created) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
 }
-$result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-foreach ($log in $logs) { Write-TestLogUpdate $log -Complete }
-if ($result.ExitCode -ne 0) { throw "Sandbox tests failed: $($result.Error). Results: $outputRoot" }
-Write-Output "PASS: Windows Sandbox / $($Name.Count) test groups. Results: $outputRoot"

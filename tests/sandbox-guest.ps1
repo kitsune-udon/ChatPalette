@@ -10,6 +10,7 @@ $stderr = Join-Path $OutputRoot 'stderr.txt'
 try {
     # Run on the guest disk: SQLite and test processes must not depend on mapped-folder semantics.
     if (Test-Path -LiteralPath $WorkRoot) { throw "Work directory already exists: $WorkRoot" }
+    Assert-LegacyReleaseProject (Join-Path $InputRoot 'project') 'chatpalette-tools sandbox'
     $inputManifest = Get-ReleaseManifest (Join-Path $InputRoot 'project')
     Copy-Item -LiteralPath (Join-Path $InputRoot 'project') -Destination $WorkRoot -Recurse
     if ($inputManifest -cne (Get-ReleaseManifest $WorkRoot)) { throw 'Sandbox source differs from the supplied snapshot' }

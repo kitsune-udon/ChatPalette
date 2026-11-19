@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 $project = Split-Path $PSScriptRoot -Parent
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $project 'dist' }
 . (Join-Path $PSScriptRoot 'release-files.ps1')
+Assert-LegacyReleaseProject $project
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $stage = Join-Path $output ('stage-' + [guid]::NewGuid().ToString('N'))
@@ -12,6 +13,7 @@ $temporaryZip = Join-Path $stage 'release.zip'
 try {
     New-Item -ItemType Directory -Path $payload -Force | Out-Null
     Copy-ReleaseFiles $project $payload
+    Assert-LegacyReleaseProject $payload
     $version = Get-ReleaseVersion $payload
     $zipPath = Join-Path $output "ChatPalette-$version.zip"
     if (Test-Path -LiteralPath $zipPath) { throw 'Release archive already exists. Use a new version or output directory.' }

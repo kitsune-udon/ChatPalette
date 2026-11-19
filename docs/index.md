@@ -21,4 +21,5 @@
 | 状態の所有と保存契約を確認する | [設計](developer/architecture.md) |
 | 検証を選び、実行する | [検証ガイド](developer/testing.md) |
 | 実測と未特定の観測を調べる | [検証・計測の記録](developer/complexity-results.md) |
+| Zigへの移行範囲と各段階の完了条件を調べる | [Zig全面移行計画](developer/zig-migration.md) |
 | 版ごとの変更を調べる | [変更履歴](../CHANGELOG.md) |

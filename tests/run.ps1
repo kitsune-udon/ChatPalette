@@ -2,6 +2,9 @@
 param([string]$AutoHotkeyPath, [ValidateSet("All","Headless","Desktop")][string]$Group="All",
     [ValidateNotNullOrEmpty()][string[]]$Name, [switch]$List, [switch]$Sandbox, [switch]$PrepareOnly)
 $ErrorActionPreference = 'Stop'
+if (Test-Path -LiteralPath (Join-Path (Split-Path $PSScriptRoot -Parent) 'build.zig')) {
+    throw 'Run the AutoHotkey comparison tests from the isolated v0.8.0 checkout. Use zig build test and chatpalette-tools test-run for the Zig implementation.'
+}
 if ($PrepareOnly -and !$Sandbox) { throw '-PrepareOnly requires -Sandbox.' }
 $tests = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'test-*.ps1' -File | Sort-Object Name)
 $tests = @($tests | Where-Object {

@@ -6,8 +6,8 @@ YouTubeのチャット・コメントへ、保存した1行の弾幕を呼び出
 
 ## 最初の弾幕を使う
 
-1. AutoHotkey **v2**を用意し、配布物を書き込めるフォルダーへ展開します。
-2. 構成を変えずに`main.ahk`を起動します。
+1. 配布ZIPを、書き込める空のフォルダーへ展開します。
+2. 展開先の `ChatPalette.exe` を起動します。
 3. YouTube動画のチャット・コメント欄をクリックします。
 4. **Ctrl＋Alt＋Q**でパレットを開き、「弾幕を追加・編集」を押します。
 5. 「共通の弾幕」→「追加…」で名前と本文を保存します。例：名前「拍手」、本文「👏👏👏👏👏👏」。
@@ -19,12 +19,12 @@ YouTubeのチャット・コメントへ、保存した1行の弾幕を呼び出
 
 | 項目 | 条件 |
 |---|---|
-| OS | Windows標準SQLite API・JSON関数を利用できること。検証環境はWindows 11 |
-| 実行環境 | AutoHotkey v2、Windows PowerShell 5.1。追加のSQLiteは不要 |
+| OS | Windows 11 x64 |
+| 実行環境 | Windows標準のSQLiteとUI Automationを使用 |
 | ブラウザー | Chrome・Edge・Firefox・Brave・Opera・Vivaldiを判定。UI Automationで対象を識別できること |
 | 保存先 | アプリのフォルダーへ書き込めること |
 
-全ブラウザー・全バージョン、Windows 10各版、32bit・ARMは未検証です。PowerShell 7への切替機能はありません。
+配布ZIPに起動に必要なアプリを同梱しています。ブラウザーで取得できる情報は、版やYouTubeの表示によって変わります。
 
 ## 操作と設定
 
@@ -32,7 +32,6 @@ YouTubeのチャット・コメントへ、保存した1行の弾幕を呼び出
 - [リアクションを準備、実行、停止する](docs/user/reactions.md)
 - [キー・初期値・保存範囲を調べる](docs/user/reference.md)
 - [更新・バックアップ・復元・トラブル対処](docs/user/maintenance.md)
-- [開発・検証・配布](docs/developer/guide.md)／[文書一覧](docs/index.md)
 
 設定は`data/settings.db`へ保存します。対応形式はDB5・JSON2だけです。旧形式の更新・復旧は[保守手順](docs/user/maintenance.md#更新を反映する)を確認してください。個人の`data/`を配布物やGitへ含めません。
 

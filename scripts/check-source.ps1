@@ -1,7 +1,12 @@
 ﻿[CmdletBinding()]
 param([string]$ProjectRoot)
 $ErrorActionPreference='Stop'
-if (!$ProjectRoot) { $ProjectRoot=Split-Path $PSScriptRoot -Parent }
+$scriptProject=Split-Path $PSScriptRoot -Parent
+if (!$ProjectRoot) { $ProjectRoot=$scriptProject }
+if ((Test-Path -LiteralPath (Join-Path $scriptProject 'build.zig')) -or
+    (Test-Path -LiteralPath (Join-Path $ProjectRoot 'build.zig'))) {
+    throw 'Run the PowerShell source check from the isolated v0.8.0 checkout. Use chatpalette-tools source-check for the Zig implementation.'
+}
 . (Join-Path $PSScriptRoot 'release-files.ps1')
 $null=Get-ReleaseVersion $ProjectRoot
 $utf8=[Text.UTF8Encoding]::new($false,$true)

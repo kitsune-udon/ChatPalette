@@ -2,6 +2,8 @@
 /data/
 /tests/.tmp/
 /dist/
+/.zig-cache/
+/zig-out/
 # Local editor and OS files
 /.idea/
 /.vscode/

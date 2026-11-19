@@ -8,6 +8,12 @@
     return $version
 }
 
+function Assert-LegacyReleaseProject([string]$Project, [string]$ZigCommand = 'chatpalette-tools freeze') {
+    if ((Test-Path -LiteralPath (Join-Path $Project 'build.zig')) -or (Get-ReleaseVersion $Project) -cne '0.8.0') {
+        throw "Run this AutoHotkey command from the isolated v0.8.0 checkout. Use $ZigCommand for the Zig implementation."
+    }
+}
+
 function Get-ReleaseFiles([string]$project) {
     # Allowlist only. Never traverse data/, .git/, or test execution directories.
     $files = @(foreach ($name in @('main.ahk','README.md','LICENSE','VERSION','CHANGELOG.md','.gitignore','.gitattributes','.editorconfig')) {

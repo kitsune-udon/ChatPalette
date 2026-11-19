@@ -7,6 +7,11 @@ param(
     [Parameter(Mandatory=$true,ParameterSetName="Inspect")][string]$OutputPath
 )
 $ErrorActionPreference='Stop'
+$project = Split-Path $PSScriptRoot -Parent
+if ((Test-Path -LiteralPath (Join-Path $project 'build.zig')) -or
+    ([IO.File]::ReadAllText((Join-Path $project 'VERSION'))).Trim() -cne '0.8.0') {
+    throw 'Run the PowerShell browser check from the isolated v0.8.0 checkout. Use chatpalette-tools browser for the Zig implementation.'
+}
 if (!$List) {
     $OutputPath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
     if (Test-Path -LiteralPath $OutputPath) { throw 'Report already exists; choose a new path.' }

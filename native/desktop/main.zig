@@ -1,0 +1,2662 @@
+const std = @import("std");
+const windows = @import("win.zig");
+const win = windows.api;
+const input = @import("input.zig");
+const keyboard = @import("../worker/keyboard.zig");
+const shortcuts = @import("shortcuts.zig");
+const operations = @import("operations.zig");
+const feedback = @import("reaction_progress.zig");
+const StatusTip = @import("status_tip.zig").StatusTip;
+const transport = @import("worker_client.zig");
+const instance = @import("instance.zig");
+const storage = @import("../storage/store.zig");
+const view = @import("palette.zig");
+const management = @import("management.zig");
+const support = @import("support.zig");
+const diagnostic = @import("diagnostics.zig");
+const version = @import("app_info").version;
+
+const allocator = std.heap.page_allocator;
+pub const Startup = enum { normal, quiet, smoke };
+const PaletteTarget = enum { active_window, previous_target, shortcut };
+const tray_message = win.WM_APP + 2;
+const drain_message = win.WM_APP + 3;
+const advance_reaction_message = win.WM_APP + 4;
+const timer_reaction_feedback = 3;
+const timer_status_tip = 4;
+const first_reaction_timer_id = timer_status_tip + 1;
+const reaction_summary_capacity = 600;
+const menu_open = 1;
+const menu_quit = 2;
+const menu_restart = 3;
+const menu_manage = 4;
+const menu_keys = 5;
+const menu_help = 6;
+const menu_diag = 7;
+const menu_import = 8;
+const menu_export = 9;
+const menu_capture = 10;
+const menu_check = 11;
+const menu_reaction_result = 12;
+
+var current: ?*App = null;
+
+pub fn run(mode: Startup) !void {
+    try windows.enableSystemDpi();
+    const executable = try windows.currentExecutable(allocator);
+    defer allocator.free(executable);
+    const path = try std.unicode.utf16LeToUtf8Alloc(allocator, executable);
+    defer allocator.free(path);
+    const dir = std.fs.path.dirname(path) orelse return error.ExecutablePath;
+    const instance_id = try std.ascii.allocLowerString(allocator, dir);
+    defer allocator.free(instance_id);
+    const owner = try instance.Instance.acquire(instance_id);
+    defer owner.release();
+    const data_dir = try std.fs.path.join(allocator, &.{ dir, "data" });
+    defer allocator.free(data_dir);
+    try std.fs.cwd().makePath(data_dir);
+    const db_path = try std.fs.path.join(allocator, &.{ data_dir, "settings.db" });
+    defer allocator.free(db_path);
+    const opened = try openSettings(db_path, mode);
+    var db = opened.db;
+    defer db.close();
+    var app = App{
+        .executable = executable,
+        .db = &db,
+        .snapshot = opened.snapshot,
+        .history = storage.LibraryHistory.init(allocator),
+        .running_digest = readExecutableDigest(executable) catch null,
+    };
+    defer app.deinit();
+    current = &app;
+    defer current = null;
+    app.open(&owner.window_name) catch |failure| {
+        if (failure == error.InstallKeyboardHook and mode != .smoke) {
+            const details = hookFailureMessage(allocator, app.keyboard.install_error_code) catch return failure;
+            defer allocator.free(details);
+            messageBox(app.window, details, windows.wide("ショートカットを利用できません"), win.MB_ICONERROR);
+        }
+        return failure;
+    };
+    if (mode == .smoke) return;
+    if (mode == .normal) app.show(.active_window);
+    var message: win.MSG = undefined;
+    while (true) {
+        const result = win.GetMessageW(&message, null, 0, 0);
+        if (result == -1) return error.DesktopMessageLoop;
+        if (result == 0) break;
+        dispatch(&message);
+    }
+    if (app.restarting) try restart(executable);
+}
+
+const Settings = struct { db: storage.Store, snapshot: storage.Snapshot };
+
+fn openSettings(path: []const u8, mode: Startup) !Settings {
+    while (true) {
+        if (readSettings(path)) |settings| return settings else |failure| {
+            if (mode == .smoke) return failure;
+            const choice = win.MessageBoxW(null, windows.wide("設定を読み込めませんでした。再試行で読み直し、無視で元の設定を退避して新規起動します。"), windows.wide("設定の復旧"), win.MB_ABORTRETRYIGNORE | win.MB_ICONERROR | win.MB_DEFBUTTON1);
+            if (choice == win.IDRETRY) continue;
+            if (choice != win.IDIGNORE) return failure;
+            if (win.MessageBoxW(null, windows.wide("DBと付随ファイルを退避し、空の設定で起動しますか？"), windows.wide("初期化の確認"), win.MB_YESNO | win.MB_ICONWARNING | win.MB_DEFBUTTON2) != win.IDYES) continue;
+            var report = storage.backupForReset(allocator, path) catch |cause| {
+                reportBackupFailure(path, cause);
+                return cause;
+            };
+            defer report.deinit();
+            if (report.failure) |cause| {
+                const source = if (report.failure_index) |index| report.files[index].source else path;
+                reportBackupFailure(source, cause);
+                for (report.files) |file| {
+                    if (file.failed_to_restore) |restore| {
+                        const message = try std.fmt.allocPrint(allocator, "{s}\r\n退避先 {s}\r\n{s}", .{ file.source, file.destination, backupFailureReason(restore) });
+                        defer allocator.free(message);
+                        messageBox(null, message, windows.wide("元に戻せなかったファイル"), win.MB_ICONERROR);
+                    }
+                }
+                return cause;
+            }
+        }
+    }
+}
+
+fn backupFailureReason(cause: anyerror) []const u8 {
+    return if (cause == error.FileInUse) "ファイルが使用中です。" else @errorName(cause);
+}
+
+fn reportBackupFailure(source: []const u8, cause: anyerror) void {
+    const reason = backupFailureReason(cause);
+    const title = windows.wide("設定を退避できませんでした");
+    const message = std.fmt.allocPrint(allocator, "{s}\r\n{s}", .{ reason, source }) catch {
+        messageBox(null, reason, title, win.MB_ICONERROR);
+        return;
+    };
+    defer allocator.free(message);
+    messageBox(null, message, title, win.MB_ICONERROR);
+}
+
+fn readSettings(path: []const u8) !Settings {
+    var db = try storage.Store.open(allocator, path);
+    errdefer db.close();
+    const snapshot = try db.load(allocator);
+    return .{ .db = db, .snapshot = snapshot };
+}
+
+fn messageBox(parent: win.HWND, value: []const u8, title: []const u16, flags: win.UINT) void {
+    const buffer = std.unicode.utf8ToUtf16LeAllocZ(allocator, value) catch return;
+    defer allocator.free(buffer);
+    _ = win.MessageBoxW(parent, buffer, @ptrCast(title.ptr), flags);
+}
+
+fn hookFailureMessage(alloc: std.mem.Allocator, code: ?win.DWORD) ![]u8 {
+    const guidance = "ショートカットの入力を監視できませんでした。ChatPaletteを再起動してください。";
+    if (code) |reported| return std.fmt.allocPrint(alloc, "{s}\r\nWindows エラー {d}", .{ guidance, reported });
+    return alloc.dupe(u8, guidance);
+}
+
+fn saveFailureMessage(alloc: std.mem.Allocator, failure: anyerror, codes: storage.FailureCodes) ![]u8 {
+    if (codes.rollback == null and codes.close == null) return alloc.dupe(u8, @errorName(failure));
+    var message = std.Io.Writer.Allocating.init(alloc);
+    errdefer message.deinit();
+    try message.writer.print("{s}\r\nSQLite エラー {d}", .{ @errorName(failure), codes.original });
+    if (codes.rollback) |code| try message.writer.print("\r\nロールバック エラー {d}", .{code});
+    if (codes.close) |code| try message.writer.print("\r\n接続終了 エラー {d}", .{code});
+    try message.writer.writeAll("\r\n設定の変更を取り消す処理でエラーが発生しました。ChatPaletteを再起動して設定を確認してください。");
+    return message.toOwnedSlice();
+}
+
+fn readExecutableDigest(executable: [:0]const u16) ![32]u8 {
+    const path = try std.unicode.utf16LeToUtf8Alloc(allocator, executable);
+    defer allocator.free(path);
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var buffer: [16384]u8 = undefined;
+    while (true) {
+        const n = try file.read(&buffer);
+        if (n == 0) break;
+        hash.update(buffer[0..n]);
+    }
+    return hash.finalResult();
+}
+
+fn restart(executable: [:0]const u16) !void {
+    const full_name = try std.unicode.utf16LeToUtf8Alloc(allocator, executable);
+    defer allocator.free(full_name);
+    const command = try std.fmt.allocPrint(allocator, "\"{s}\"", .{full_name});
+    defer allocator.free(command);
+    const wide = try std.unicode.utf8ToUtf16LeAllocZ(allocator, command);
+    defer allocator.free(wide);
+    var startup = std.mem.zeroes(win.STARTUPINFOW);
+    startup.cb = @sizeOf(win.STARTUPINFOW);
+    var child: win.PROCESS_INFORMATION = undefined;
+    if (win.CreateProcessW(executable, wide, null, null, 0, 0, null, null, &startup, &child) == 0) return error.RestartApplication;
+    _ = win.CloseHandle(child.hThread);
+    _ = win.CloseHandle(child.hProcess);
+}
+
+const App = struct {
+    executable: [:0]const u16,
+    db: *storage.Store,
+    snapshot: storage.Snapshot,
+    running_digest: ?[32]u8,
+    window: win.HWND = null,
+    palette: view.Palette = .{},
+    manager: management.Management = .{},
+    history: storage.LibraryHistory,
+    prefs_arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(allocator),
+    tray: bool = false,
+    keyboard: input.Hook = .{ .context = keyboardContext, .enqueue = shortcut },
+    queue: operations.Queue = .{},
+    worker: transport.Client = .{},
+    input_cancellation: ?struct { target: usize, signal: keyboard.Cancellation } = null,
+    reaction: ?operations.Reaction = null,
+    reaction_clock: ?std.time.Timer = null,
+    preparation: ?Preparation = null,
+    reaction_generation: u64 = 0,
+    reaction_timer: ?ReactionTimer = null,
+    next_reaction_timer_id: win.UINT_PTR = first_reaction_timer_id,
+    reaction_progress: feedback.Overlay = .{},
+    pending_reaction_progress: ?ReactionProgressUpdate = null,
+    rendering_reaction_progress: bool = false,
+    status_tip: StatusTip = .{},
+    reaction_result: ?feedback.Result = null,
+    reaction_hide_at: ?u64 = null,
+    reaction_render_at: u64 = 0,
+    target: win.HWND = null,
+    library_revision: u64 = 0,
+    quitting: bool = false,
+    restarting: bool = false,
+    modal: bool = false,
+    last_mode: ?transport.Mode = null,
+    last_page: ?diagnostic.PageOperation = null,
+    last_state: []const u8 = "未実行",
+    last_elapsed: u64 = 0,
+    last_worker_failure: ?diagnostic.WorkerFailure = null,
+    last_stop_failure: ?anyerror = null,
+
+    const Preparation = struct {
+        mode: transport.Mode,
+        target: usize,
+        video: operations.VideoId,
+        page: operations.PageToken,
+        generation: u64,
+        due: u64,
+        committed: bool = false,
+
+        fn retries(mode: transport.Mode, state: []const u8) bool {
+            return mode == .reaction_capture and
+                (std.mem.eql(u8, state, "unsupported") or std.mem.eql(u8, state, "wrong_window"));
+        }
+    };
+
+    fn open(self: *App, owner: [:0]const u16) !void {
+        var window_class = std.mem.zeroes(win.WNDCLASSW);
+        window_class.hInstance = win.GetModuleHandleW(null);
+        window_class.lpszClassName = instance.class_name;
+        window_class.lpfnWndProc = messageHandler;
+        if (win.RegisterClassW(&window_class) == 0) return error.RegisterDesktopWindow;
+        self.window = win.CreateWindowExW(0, instance.class_name, owner, 0, 0, 0, 0, 0, null, null, window_class.hInstance, null) orelse return error.CreateDesktopWindow;
+        try self.palette.open(self.window);
+        self.palette.refresh(self.snapshot.data);
+        self.palette.resetReaction(self.snapshot.data.preferences);
+        self.palette.reactionButtons(false);
+        try self.keyboard.install(try shortcuts.validate(self.snapshot.data.preferences.shortcut_keys));
+        self.installTray();
+    }
+
+    fn deinit(self: *App) void {
+        self.keyboard.remove();
+        self.removeTray();
+        self.reaction_progress.close();
+        self.status_tip.close();
+        if (self.reaction_result) |result| result.deinit();
+        self.palette.close();
+        self.manager.close();
+        if (self.window != null) _ = win.DestroyWindow(self.window);
+        self.worker.stop() catch |failure| std.debug.print("補助プロセス終了: {s}\n", .{@errorName(failure)});
+        self.queue.deinit(allocator);
+        self.history.deinit();
+        self.snapshot.deinit();
+        self.prefs_arena.deinit();
+    }
+
+    fn installTray(self: *App) void {
+        var icon = std.mem.zeroes(win.NOTIFYICONDATAW);
+        icon.cbSize = @sizeOf(win.NOTIFYICONDATAW);
+        icon.hWnd = self.window;
+        icon.uID = 1;
+        icon.uFlags = win.NIF_ICON | win.NIF_TIP | win.NIF_MESSAGE;
+        icon.uCallbackMessage = tray_message;
+        icon.hIcon = win.LoadIconW(null, @ptrFromInt(32512));
+        const name = windows.wide("ChatPalette");
+        @memcpy(icon.szTip[0..name.len], name);
+        self.tray = win.Shell_NotifyIconW(win.NIM_ADD, &icon) != 0;
+    }
+
+    fn removeTray(self: *App) void {
+        if (!self.tray) return;
+        var icon = std.mem.zeroes(win.NOTIFYICONDATAW);
+        icon.cbSize = @sizeOf(win.NOTIFYICONDATAW);
+        icon.hWnd = self.window;
+        icon.uID = 1;
+        _ = win.Shell_NotifyIconW(win.NIM_DELETE, &icon);
+        self.tray = false;
+    }
+
+    fn contextMenu(self: *App) void {
+        const menu = win.CreatePopupMenu() orelse return;
+        defer _ = win.DestroyMenu(menu);
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_open, windows.wide("ChatPaletteを開く"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_manage, windows.wide("弾幕を追加・編集"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_keys, windows.wide("ショートカットを管理…"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_capture, windows.wide("① ボタンを設定…"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_check, windows.wide("② 送らずに確認"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_reaction_result, windows.wide("リアクションの実行結果"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_help, windows.wide("使い方"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_diag, windows.wide("診断情報"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_import, windows.wide("ユーザーデータをインポート…"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_export, windows.wide("ユーザーデータをエクスポート…"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_restart, windows.wide("アプリを再起動"));
+        _ = win.AppendMenuW(menu, win.MF_STRING, menu_quit, windows.wide("終了"));
+        var at: win.POINT = undefined;
+        if (win.GetCursorPos(&at) == 0) return;
+        const menu_owner = self.dialogParent();
+        _ = win.SetForegroundWindow(menu_owner);
+        const command = win.TrackPopupMenu(menu, win.TPM_RETURNCMD | win.TPM_NONOTIFY | win.TPM_RIGHTBUTTON, at.x, at.y, 0, menu_owner, null);
+        if (command != 0) _ = win.SendMessageW(self.window, win.WM_COMMAND, @intCast(command), 0);
+    }
+
+    fn menuCommand(self: *App, command: u16) void {
+        switch (command) {
+            menu_open => self.show(.active_window),
+            menu_quit => self.quit(false),
+            menu_restart => self.quit(true),
+            menu_manage => self.openManagement(false),
+            menu_keys, menu_help, menu_diag, menu_import, menu_export, menu_reaction_result => self.dialogCommand(command),
+            menu_capture => self.startPreparation(.reaction_capture),
+            menu_check => self.startPreparation(.reaction_check),
+            else => {},
+        }
+    }
+
+    fn show(self: *App, target_source: PaletteTarget) void {
+        if (self.quitting or self.modal) return;
+        if (self.manager.isEditing()) {
+            self.manager.show();
+            return;
+        }
+        if (self.reaction != null or self.preparation != null) return self.reaction_progress.show();
+        if (self.worker.active or (self.queue.active and target_source != .shortcut)) return;
+        if (target_source != .previous_target) {
+            const active_window = win.GetForegroundWindow();
+            if (input.browser(active_window) != null) {
+                self.target = active_window;
+            } else {
+                var owner: win.DWORD = 0;
+                _ = win.GetWindowThreadProcessId(active_window, &owner);
+                if (owner != win.GetCurrentProcessId()) self.target = null;
+            }
+        }
+        self.palette.detected_profile = false;
+        if (self.snapshot.data.preferences.auto_mode and self.target != null)
+            self.detectProfile();
+        if (self.quitting) return self.finishQuit();
+        self.palette.refresh(self.snapshot.data);
+        self.refreshRegistrationStatus();
+        self.status_tip.close();
+        self.palette.show();
+    }
+
+    fn registrationLabel(self: *const App, browser: ?[]const u8, buffer: []u8) []const u8 {
+        const kind = browser orelse return "対象ブラウザー：未選択";
+        const configured = self.db.hasReactionRegistration(kind) catch |failure|
+            return std.fmt.bufPrint(buffer, "設定状態：未確認（{s}）", .{@errorName(failure)}) catch "設定状態：未確認";
+        return if (configured) "設定済み（メニューの認識は未確認）" else "未設定（管理・ヘルプから設定）";
+    }
+
+    fn refreshRegistrationStatus(self: *App) void {
+        var buffer: [192]u8 = undefined;
+        self.palette.registrationStatus(self.registrationLabel(input.browser(self.target), &buffer));
+    }
+
+    fn ensureManagement(self: *App) bool {
+        if (self.manager.window == null) {
+            self.manager.open(self.window, self.db, &self.snapshot, &self.history) catch {
+                self.manager.close();
+                self.report("管理画面を開けませんでした。");
+                return false;
+            };
+        }
+        return true;
+    }
+
+    fn openManagement(self: *App, from_palette: bool) void {
+        if (!self.canEdit() or !self.ensureManagement()) return;
+        if (from_palette) {
+            const row = self.palette.selectedRow();
+            self.manager.selectForEditing(
+                if (row) |value| value.profile_id else self.palette.visibleProfileId(),
+                if (row) |value| value.item.id else "",
+            ) catch return self.report("編集する弾幕を選択できませんでした。");
+        }
+        _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
+        self.manager.show();
+    }
+
+    fn linkFromPalette(self: *App) void {
+        if (!self.canEdit() or !self.ensureManagement()) return;
+        _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
+        self.manager.show();
+        self.manager.linkFromPalette();
+    }
+
+    fn canEdit(self: *const App) bool {
+        return !self.quitting and !self.modal and !self.worker.active and !self.queue.busy() and self.reaction == null and self.preparation == null;
+    }
+
+    fn resolveChannel(self: *App, channel: *management.ChannelRequest) void {
+        const target = self.target;
+        if (!self.canEdit() or input.browser(target) == null) return;
+        var owner: win.DWORD = 0;
+        _ = win.GetWindowThreadProcessId(target, &owner);
+        if (owner == 0) return;
+        defer self.finishQuit();
+        const reply = self.request(.resolve, windows.number(target), "", &.{}) catch return;
+        defer reply.deinit();
+        var current_owner: win.DWORD = 0;
+        _ = win.GetWindowThreadProcessId(target, &current_owner);
+        if (self.quitting or self.target != target or owner != current_owner or !reply.is("ok") or reply.field("Channel").len == 0) return;
+        const author = channel.allocator.dupe(u8, reply.field("Author")) catch return;
+        const key = channel.allocator.dupe(u8, reply.field("Channel")) catch {
+            channel.allocator.free(author);
+            return;
+        };
+        channel.author = author;
+        channel.channel = key;
+        channel.target = windows.number(target);
+        channel.target_pid = owner;
+    }
+
+    fn libraryChanged(self: *App) void {
+        self.library_revision +%= 1;
+        self.refreshSavedPalette();
+    }
+
+    fn refreshSavedPalette(self: *App) void {
+        self.palette.refresh(self.snapshot.data);
+        if (management.savedViewWarning(false, self.palette.refresh_failed)) |notice| self.report(notice);
+    }
+
+    fn writePreferences(self: *App, requested: storage.Preferences) !void {
+        try self.commitPreferences(requested, .user_setting);
+    }
+
+    const PreferenceChange = enum { user_setting, automatic_profile };
+
+    fn commitPreferences(self: *App, requested: storage.Preferences, change: PreferenceChange) !void {
+        const bindings = try storage.validatePreferences(requested);
+        var owned = std.heap.ArenaAllocator.init(allocator);
+        errdefer owned.deinit();
+        const memory = owned.allocator();
+        var next = requested;
+        next.input_profile_id = try memory.dupe(u8, requested.input_profile_id);
+        for (&next.shortcut_keys) |*key| key.* = try memory.dupe(u8, key.*);
+        // The process owns one OS hook. Publishing a validated binding table cannot fail.
+        try self.db.savePreferences(next);
+        var previous = self.prefs_arena;
+        self.prefs_arena = owned;
+        self.snapshot.data.preferences = next;
+        switch (change) {
+            .user_setting => {
+                self.keyboard.tracker.replace(bindings);
+                self.libraryChanged();
+            },
+            .automatic_profile => {
+                self.palette.detected_profile = true;
+                self.refreshSavedPalette();
+            },
+        }
+        previous.deinit();
+    }
+
+    fn changeMode(self: *App, automatic: bool) void {
+        if (!self.canEdit()) return self.palette.refresh(self.snapshot.data);
+        var preferences = self.snapshot.data.preferences;
+        preferences.auto_mode = automatic;
+        self.palette.detected_profile = false;
+        self.writePreferences(preferences) catch {
+            self.palette.refresh(self.snapshot.data);
+            return self.report("自動判別の設定を保存できませんでした。");
+        };
+        if (automatic and self.target != null) {
+            self.detectProfile();
+            if (!self.quitting) self.palette.refresh(self.snapshot.data);
+        }
+        self.finishQuit();
+    }
+
+    fn changeProfile(self: *App, index: usize) void {
+        if (!self.canEdit() or index > self.snapshot.data.profiles.len) return self.palette.refresh(self.snapshot.data);
+        var preferences = self.snapshot.data.preferences;
+        preferences.input_profile_id = if (index == 0) "" else self.snapshot.data.profiles[index - 1].id;
+        self.writePreferences(preferences) catch {
+            self.palette.refresh(self.snapshot.data);
+            self.report("配信者を選択できませんでした。");
+        };
+    }
+
+    fn detectProfile(self: *App) void {
+        const target = self.target;
+        if (input.browser(target) == null) return self.report("unavailable");
+        const response = self.request(.resolve, windows.number(target), "", &.{}) catch |failure|
+            return self.report(self.cleanupNotice(failure) orelse "unavailable");
+        defer response.deinit();
+        if (self.quitting or self.target != target) return;
+        const channel = response.field("Channel");
+        if (!response.is("ok") or channel.len == 0) return self.report("unavailable");
+        const profile = (self.selectDetectedProfile(channel) catch return self.report("自動選択を保存できませんでした。")) orelse
+            return self.report("配信者が未連携です。管理からチャンネルを連携できます。");
+        const label = std.fmt.allocPrint(allocator, "自動選択 {s}", .{profile.name}) catch return;
+        defer allocator.free(label);
+        self.report(label);
+    }
+
+    fn selectDetectedProfile(self: *App, channel: []const u8) !?storage.Profile {
+        const profile = if (channel.len == 0) null else for (self.snapshot.data.profiles) |entry| {
+            if (std.mem.eql(u8, entry.channel, channel)) break entry;
+        } else null;
+        if (profile) |entry| {
+            var preferences = self.snapshot.data.preferences;
+            if (!std.mem.eql(u8, preferences.input_profile_id, entry.id)) {
+                preferences.input_profile_id = entry.id;
+                // The automatic selection changes no item, manual assignment, binding or mode.
+                try self.commitPreferences(preferences, .automatic_profile);
+                return entry;
+            }
+        }
+        if (self.palette.detected_profile != (profile != null)) {
+            self.palette.detected_profile = profile != null;
+            if (win.IsWindowVisible(self.palette.window) != 0) self.palette.refresh(self.snapshot.data);
+        }
+        return profile;
+    }
+
+    fn dialogParent(self: *const App) win.HWND {
+        if (self.manager.window != null and win.IsWindowVisible(self.manager.window) != 0) return self.manager.window;
+        if (self.palette.window != null and win.IsWindowVisible(self.palette.window) != 0) return self.palette.window;
+        return self.window;
+    }
+
+    fn dialogCommand(self: *App, command: win.BOOL) void {
+        if (!self.canEdit() or self.manager.isEditing()) return;
+        self.modal = true;
+        defer {
+            self.modal = false;
+            self.manager.updateActions();
+            self.finishQuit();
+        }
+        self.runDialog(command) catch |failure| self.saveFailure(self.dialogParent(), failure);
+    }
+
+    fn saveFailure(self: *App, parent: win.HWND, failure: anyerror) void {
+        const codes = self.db.failureCodes();
+        const title = windows.wide("操作に失敗しました");
+        const details = saveFailureMessage(allocator, failure, codes) catch
+            return messageBox(parent, @errorName(failure), title, win.MB_ICONERROR);
+        defer allocator.free(details);
+        messageBox(parent, details, title, win.MB_ICONERROR);
+    }
+
+    fn saveShortcutDraft(context: *anyopaque, dialog: win.HWND, keys: [storage.action_count][]const u8) bool {
+        const self: *App = @ptrCast(@alignCast(context));
+        if (self.quitting) return false;
+        var next = self.snapshot.data.preferences;
+        next.shortcut_keys = keys;
+        self.writePreferences(next) catch |failure| {
+            self.saveFailure(dialog, failure);
+            return false;
+        };
+        self.manager.refresh();
+        if (management.savedViewWarning(self.manager.refreshFailed(), self.palette.refresh_failed)) |notice|
+            messageBox(dialog, notice, windows.wide("ショートカットを管理"), win.MB_ICONWARNING);
+        return true;
+    }
+
+    fn saveShortcutItemsDraft(context: *anyopaque, dialog: win.HWND, scope: []const u8, first: []const u8, second: []const u8) bool {
+        const self: *App = @ptrCast(@alignCast(context));
+        if (self.quitting) return false;
+        const changed = self.history.assign(self.db, &self.snapshot, scope, first, second) catch |failure| {
+            self.saveFailure(dialog, failure);
+            return false;
+        };
+        if (changed) {
+            self.manager.refresh();
+            self.libraryChanged();
+            if (management.savedViewWarning(self.manager.refreshFailed(), self.palette.refresh_failed)) |notice|
+                messageBox(dialog, notice, windows.wide("ショートカットを管理"), win.MB_ICONWARNING);
+        }
+        return true;
+    }
+
+    fn runDialog(self: *App, command: win.BOOL) !void {
+        const parent = self.dialogParent();
+        switch (command) {
+            menu_keys => try support.shortcuts(parent, &self.snapshot, self, saveShortcutDraft, saveShortcutItemsDraft),
+            menu_help => try support.document(parent, "使い方", support.help, false),
+            menu_reaction_result => {
+                self.reaction_progress.hide();
+                const result = self.reaction_result orelse return support.document(parent, "リアクションの実行結果", "まだ実行していません。", false);
+                const document = try result.document(allocator);
+                defer allocator.free(document);
+                try support.document(parent, "リアクションの実行結果", document, true);
+            },
+            menu_diag => try self.diagnostics(parent),
+            menu_export => {
+                const path = (try support.selectJson(parent, true)) orelse return;
+                defer allocator.free(path);
+                if (self.quitting) return;
+                try self.db.exportJson(path);
+                self.report("ユーザーデータを保存しました。");
+            },
+            menu_import => try self.importData(parent),
+            else => unreachable,
+        }
+    }
+
+    fn importData(self: *App, parent: win.HWND) !void {
+        const path = (try support.selectJson(parent, false)) orelse return;
+        defer allocator.free(path);
+        if (self.quitting) return;
+        var incoming = try storage.readJson(allocator, path);
+        errdefer incoming.deinit();
+        const bindings = try shortcuts.validate(incoming.data.preferences.shortcut_keys);
+        var item_count = incoming.data.shared_items.len;
+        for (incoming.data.profiles) |profile| item_count += profile.items.len;
+        const confirmation = try std.fmt.allocPrint(allocator, "{s}\r\n弾幕 {d}件、配信者 {d}件、登録 {d}件\r\n\r\nキー設定を含む全データを置き換えます。インポートしますか？", .{
+            std.fs.path.basename(path), item_count, incoming.data.profiles.len, incoming.data.registrations.len,
+        });
+        defer allocator.free(confirmation);
+        const prompt = try std.unicode.utf8ToUtf16LeAllocZ(allocator, confirmation);
+        defer allocator.free(prompt);
+        if (win.MessageBoxW(parent, prompt, windows.wide("ユーザーデータのインポート"), win.MB_YESNO | win.MB_ICONWARNING | win.MB_DEFBUTTON2) != win.IDYES or self.quitting) {
+            incoming.deinit();
+            return;
+        }
+        var nonce: [16]u8 = undefined;
+        std.crypto.random.bytes(&nonce);
+        const backup = try std.fmt.allocPrint(allocator, "{s}.before-import-{x}.json", .{ self.db.path, &nonce });
+        defer allocator.free(backup);
+        const outcome = try self.commitImportedData(incoming, bindings, backup);
+        const details = std.fmt.allocPrint(allocator, "{s}\r\n\r\n取込前のバックアップ\r\n{s}", .{ outcome, backup }) catch return;
+        defer allocator.free(details);
+        messageBox(parent, details, windows.wide("ユーザーデータのインポート"), win.MB_ICONINFORMATION);
+    }
+
+    // On success the app owns the incoming snapshot even if a view fails to refresh.
+    fn commitImportedData(self: *App, incoming: storage.Snapshot, bindings: shortcuts.Bindings, backup: []const u8) ![]const u8 {
+        try self.db.replaceFromBackup(incoming.data, backup);
+        var previous = self.snapshot;
+        self.snapshot = incoming;
+        previous.deinit();
+        self.history.clear();
+        self.worker.registrations_current = false;
+        self.keyboard.tracker.replace(bindings);
+        self.palette.detected_profile = false;
+        self.palette.resetSearch();
+        self.manager.resetSelection();
+        self.libraryChanged();
+        self.palette.resetReaction(self.snapshot.data.preferences);
+        self.refreshRegistrationStatus();
+        self.manager.refresh();
+        const outcome = management.savedViewWarning(self.manager.refreshFailed(), self.palette.refresh_failed) orelse "ユーザーデータを取り込みました。";
+        self.report(outcome);
+        return outcome;
+    }
+
+    fn diagnostics(self: *const App, parent: win.HWND) !void {
+        try support.diagnosticDocument(parent, self.diagnosticSnapshot(win.GetTickCount64()), version);
+    }
+
+    fn diagnosticSnapshot(self: *const App, now: u64) diagnostic.Snapshot {
+        return .{
+            .distribution = self.distributionStatus(),
+            .browser = diagnostic.Browser.fromName(input.browser(self.target)),
+            .operation = self.last_mode,
+            .page_operation = self.last_page,
+            .state = diagnostic.State.fromCode(self.last_state),
+            .elapsed_ms = self.last_elapsed,
+            .worker_failure = self.last_worker_failure,
+            .stop_failure = self.last_stop_failure,
+            .phase = self.diagnosticReactionPhase(now),
+            .worker_running = self.worker.process != null and win.WaitForSingleObject(self.worker.process, 0) == win.WAIT_TIMEOUT,
+            .automatic = self.snapshot.data.preferences.auto_mode,
+        };
+    }
+
+    fn distributionStatus(self: *const App) diagnostic.Distribution {
+        const running = self.running_digest orelse return .running_unknown;
+        const on_disk = readExecutableDigest(self.executable) catch return .disk_unknown;
+        return if (std.mem.eql(u8, &on_disk, &running)) .matching else .modified;
+    }
+
+    fn diagnosticReactionPhase(self: *const App, now: u64) diagnostic.Phase {
+        if (self.reaction) |job| {
+            if (job.stop_requested) return .stopping;
+            if (!job.active_request and job.shortcut == null and job.completed == 0) {
+                if (self.reaction_clock) |clock| {
+                    var reading = clock;
+                    if (reading.read() < job.due_ns) return .waiting;
+                }
+            }
+            return .running;
+        }
+        if (self.preparation) |pending| {
+            if (pending.generation != self.reaction_generation) return .stopping;
+            return if (!self.worker.active and now < pending.due) .waiting else .running;
+        }
+        for (self.queue.pending.items) |command| {
+            if (command.event.action == .reaction) return .queued;
+        }
+        return if (self.reaction_result != null) .finished else .idle;
+    }
+
+    fn quit(self: *App, restarting: bool) void {
+        if (self.manager.isEditing()) {
+            self.manager.show();
+            return self.report("編集中の内容を保存または破棄してから終了してください。");
+        }
+        self.quitting = true;
+        self.restarting = restarting;
+        self.stop();
+        self.finishQuit();
+    }
+
+    fn finishQuit(self: *App) void {
+        if (!self.quitting or self.worker.active or self.queue.active or self.modal) return;
+        self.worker.stop() catch |failure| {
+            const notice = if (self.restarting)
+                "補助プロセスの終了を確認できませんでした。もう一度再起動してください。"
+            else
+                "補助プロセスの終了を確認できませんでした。もう一度終了してください。";
+            self.last_stop_failure = failure;
+            self.quitting = false;
+            self.restarting = false;
+            self.notifyWorkerExit(notice);
+            return;
+        };
+        self.last_stop_failure = null;
+        win.PostQuitMessage(0);
+    }
+
+    fn stop(self: *App) void {
+        if (self.input_cancellation) |pending| pending.signal.cancel();
+        self.queue.cancel();
+        self.reaction_generation +%= 1;
+        if (self.preparation) |pending| {
+            if (pending.committed) {
+                if (!self.quitting) self.updateReactionProgress("登録は保存済みです。ワーカーへの反映を確認しています。", .stopping);
+            } else self.finishPreparation(.stopped, "");
+        }
+        if (self.reaction) |*job| {
+            job.stop();
+            if (job.active_request) {
+                if (!self.quitting) self.showReactionCounts("停止を受け付けました。", job.*, .stopping);
+            } else self.finishReaction(.stopped, "");
+        }
+    }
+
+    fn report(self: *App, state: []const u8) void {
+        const message = if (std.mem.eql(u8, state, "unavailable"))
+            "動画・入力欄を確認できませんでした。"
+        else if (std.mem.eql(u8, state, "changed"))
+            "動画・タブ・ウィンドウが切り替わりました。"
+        else if (std.mem.eql(u8, state, "cancelled"))
+            "操作を中止しました。"
+        else if (std.mem.eql(u8, state, "wrong_input"))
+            "現在の入力欄を操作できません。"
+        else if (std.mem.eql(u8, state, "invalid_text"))
+            "本文に入力できない制御文字が含まれています。弾幕を編集し、制御文字を取り除いてください。"
+        else if (std.mem.eql(u8, state, "chat_missing"))
+            "入力可能なチャット欄が見つかりません。チャットの表示と入力可能な状態を確認してください。"
+        else if (std.mem.eql(u8, state, "chat_ambiguous"))
+            "チャット入力欄が複数あります。操作する欄をクリックし、手動で入力・編集してください。"
+        else if (std.mem.eql(u8, state, "focus_failed"))
+            "チャット欄へのフォーカス移動を確認できませんでした。入力欄をクリックしてください。"
+        else if (std.mem.eql(u8, state, "unknown"))
+            "操作結果を確認できませんでした。画面で確認してください。"
+        else
+            state;
+        self.palette.status(message);
+        if (win.IsWindowVisible(self.palette.window) != 0 or win.IsWindowVisible(self.reaction_progress.window) != 0) return;
+        self.showStatusTip(message);
+    }
+
+    fn notifyWorkerExit(self: *App, message: []const u8) void {
+        self.palette.status(message);
+        if (win.IsWindowVisible(self.palette.window) == 0) self.showStatusTip(message);
+    }
+
+    fn showStatusTip(self: *App, message: []const u8) void {
+        if (self.quitting or self.window == null) return;
+        self.status_tip.show(self.window, message, win.GetTickCount64(), 3500) catch return;
+        if (win.SetTimer(self.window, timer_status_tip, 100, null) == 0) self.status_tip.close();
+    }
+
+    fn expireStatusTip(self: *App) void {
+        self.status_tip.expire(win.GetTickCount64());
+        if (self.status_tip.deadline == null) _ = win.KillTimer(self.window, timer_status_tip);
+    }
+
+    fn request(self: *App, mode: transport.Mode, target: usize, expected: []const u8, fields: []const transport.Field) !transport.Reply {
+        return self.requestUsing(mode, target, expected, fields, transport.Client.request);
+    }
+
+    fn requestUsing(self: *App, mode: transport.Mode, target: usize, expected: []const u8, fields: []const transport.Field, comptime exchange: @TypeOf(transport.Client.request)) !transport.Reply {
+        if (self.worker.active) return error.WorkerBusy;
+        if (self.last_page) |*page_operation| page_operation.latest = false;
+        const started = win.GetTickCount64();
+        defer {
+            self.last_mode = mode;
+            self.last_elapsed = win.GetTickCount64() - started;
+        }
+        const reply = exchange(&self.worker, allocator, self.executable, mode, target, expected, fields, pump) catch |failure| {
+            self.last_state = if (self.worker.request_may_have_arrived) "unknown" else "unavailable";
+            self.last_worker_failure = .{
+                .cause = failure,
+                .cleanup = self.worker.cleanup_failure orelse if (failure == error.WorkerDidNotExit) failure else null,
+                .may_have_arrived = self.worker.request_may_have_arrived,
+            };
+            if (self.cleanupNotice(failure)) |notice| self.notifyWorkerExit(notice);
+            return failure;
+        };
+        self.last_worker_failure = null;
+        self.last_stop_failure = null;
+        const state = reply.field("State");
+        self.last_state = if (mode.inputOutcome()) |outcome|
+            (if (reply.is(outcome)) outcome else @tagName(diagnostic.State.fromWorker(state)))
+        else
+            @tagName(diagnostic.State.fromWorker(state));
+        return reply;
+    }
+
+    fn cleanupNotice(self: *const App, cause: anyerror) ?[]const u8 {
+        const failure = self.last_worker_failure orelse return null;
+        if (failure.cause != cause or failure.cleanup == null) return null;
+        return "補助プロセスの終了を確認できませんでした。原因は診断情報で確認できます。";
+    }
+
+    fn workerFailureDetail(self: *const App, cause: anyerror, buffer: *[256]u8) []const u8 {
+        if (self.last_worker_failure) |failure| {
+            if (failure.cause == cause) return failure.format(buffer) catch @errorName(cause);
+        }
+        return @errorName(cause);
+    }
+
+    fn workerFailureReason(self: *const App, cause: anyerror) feedback.Reason {
+        if (cause == error.PageProofMissing) return .changed;
+        const failure = self.last_worker_failure orelse return .unknown;
+        if (failure.cause == cause and !failure.may_have_arrived) return .unavailable;
+        return .unknown;
+    }
+
+    fn requestOnPage(self: *App, mode: transport.Mode, target: usize, video: []const u8, page_proof: []const u8, extra: []const transport.Field) !transport.Reply {
+        var fields: [3]transport.Field = undefined;
+        fields[0] = .{ .name = "PageToken", .value = page_proof };
+        @memcpy(fields[1 .. 1 + extra.len], extra);
+        const reply = try self.request(mode, target, video, fields[0 .. 1 + extra.len]);
+        errdefer reply.deinit();
+        const input_sent = if (mode.inputOutcome()) |outcome| reply.is(outcome) else false;
+        if (reply.is("ok") or reply.is("focused") or reply.is("hovered") or reply.is("captured") or reply.is("ready") or reply.is("operated") or input_sent) {
+            const returned = reply.field("PageToken");
+            const valid = if (std.mem.eql(u8, page_proof, "bind"))
+                operations.pageToken(returned) != null
+            else
+                std.mem.eql(u8, page_proof, returned);
+            if (!valid) {
+                if (input_sent) {
+                    self.last_state = "unknown";
+                    return error.InputOutcomeUnknown;
+                }
+                self.last_state = "changed";
+                return error.PageProofMissing;
+            }
+        }
+        return reply;
+    }
+
+    fn foreground(self: *App, target: usize) bool {
+        return !self.quitting and target != 0 and windows.number(win.GetForegroundWindow()) == target;
+    }
+
+    fn syncRegistration(self: *App, target: usize, detail: *[256]u8) ?[]const u8 {
+        if (self.worker.registrationsReady()) return null;
+        const json = self.db.loadRegistrationSnapshot(allocator) catch |failure| return @errorName(failure);
+        defer allocator.free(json);
+        const reply = self.request(.reaction_configure, target, "", &.{.{ .name = "Payload", .value = json }}) catch |failure|
+            return self.workerFailureDetail(failure, detail);
+        defer reply.deinit();
+        self.worker.acceptRegistrationReply(reply) catch |failure| {
+            const reason = reply.field("Detail");
+            if (reason.len == 0) return "登録情報の同期に失敗しました。";
+            return std.fmt.bufPrint(detail, "{s}", .{reason}) catch @errorName(failure);
+        };
+        return null;
+    }
+
+    fn drain(self: *App) void {
+        if (self.worker.active or self.reaction != null or self.preparation != null or self.modal or self.quitting) return;
+        const command = self.queue.next() orelse return;
+        const success = self.execute(command) catch |failure| result: {
+            if (command.event.action == .reaction) {
+                var detail: [256]u8 = undefined;
+                if (self.queue.accepts(command, command.event.window)) self.publishReactionResult(.unavailable, null, self.workerFailureDetail(failure, &detail));
+            } else {
+                const page_recorded = if (self.last_page) |page_operation| page_operation.latest else false;
+                const state = if (page_recorded) self.last_state else @tagName(self.workerFailureReason(failure));
+                self.report(self.cleanupNotice(failure) orelse state);
+            }
+            break :result false;
+        };
+        // The timer job owns this command until the last requested operation is acknowledged.
+        if (success and command.event.action == .reaction) return;
+        self.queue.finish(command, success);
+        self.finishQuit();
+        if (!self.quitting and self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
+    }
+
+    fn commandCurrent(self: *App, command: operations.Command) bool {
+        return self.foreground(command.event.window) and self.queue.accepts(command, command.event.window);
+    }
+
+    fn execute(self: *App, command: operations.Command) !bool {
+        const target = command.event.window;
+        if (!self.commandCurrent(command)) return false;
+        const action = command.event.action;
+        if (action == .palette) {
+            self.show(.shortcut);
+            return true;
+        }
+        const browser = input.browser(@ptrFromInt(target)) orelse return false;
+        const scope_page = switch (action) {
+            .chat_focus, .chat_clear, .chat_send, .reactions_show, .profile1, .profile2, .shared1, .shared2, .reaction => true,
+            else => false,
+        };
+        const previous_page = self.queue.page;
+        const context = if (scope_page)
+            try self.requestOnPage(.browser_context, target, "", if (previous_page) |*known| known else "bind", &.{})
+        else
+            try self.request(.browser_context, target, "", &.{});
+        defer context.deinit();
+        if (!self.commandCurrent(command)) return false;
+        if (!context.is("ok")) {
+            if (action == .reaction) {
+                self.publishReactionResult(feedback.Reason.fromReply(context.field("State")), null, context.field("Detail"));
+            } else self.report(context.field("State"));
+            return false;
+        }
+        const video = operations.videoId(context.field("Video")) orelse {
+            if (action == .reaction) self.publishReactionResult(.unavailable, null, context.field("Detail")) else self.report("unavailable");
+            return false;
+        };
+        if (!self.queue.bindVideo(video)) {
+            if (action == .reaction) self.publishReactionResult(.changed, null, context.field("Detail")) else self.report("changed");
+            return false;
+        }
+        const page_token = if (scope_page) operations.pageToken(context.field("PageToken")) orelse return false else null;
+        if (page_token) |token| {
+            if (!self.queue.bindPage(token)) {
+                self.report("changed");
+                return false;
+            }
+        }
+        switch (action) {
+            .chat_focus, .chat_clear, .reactions_show, .chat_send => return self.page(command, video, page_token, diagnostic.Browser.fromName(browser)),
+            .profile1, .profile2, .shared1, .shared2 => return self.slot(command, video, page_token.?),
+            .reaction => {
+                const prefs = self.snapshot.data.preferences;
+                return self.startReaction(.{
+                    .target = target,
+                    .video = video,
+                    .page = page_token.?,
+                    .kind = prefs.reaction_kind,
+                    .count = prefs.reaction_count,
+                    .interval = prefs.reaction_interval_ms,
+                    .shortcut = command,
+                }, 0);
+            },
+            .palette, .stop => unreachable,
+        }
+    }
+
+    fn page(self: *App, command: operations.Command, video: operations.VideoId, page_token: ?operations.PageToken, browser: diagnostic.Browser) !bool {
+        const target = command.event.window;
+        const action = command.event.action;
+        const started = win.GetTickCount64();
+        var stage: diagnostic.PageStage = switch (action) {
+            .chat_focus, .chat_clear => .focus,
+            .chat_send => .send_check,
+            .reactions_show => .show_reactions,
+            else => unreachable,
+        };
+        defer {
+            self.last_page = .{
+                .action = action,
+                .browser = browser,
+                .stage = stage,
+                .state = diagnostic.State.fromCode(self.last_state),
+                .elapsed_ms = win.GetTickCount64() - started,
+            };
+        }
+        errdefer |failure| {
+            if (failure == error.ForegroundChanged) {
+                self.last_state = "cancelled";
+            } else if (failure == error.PageProofMissing) {
+                self.last_state = "changed";
+            } else if (self.last_worker_failure == null) {
+                self.last_state = "unknown";
+            }
+        }
+        const result = switch (action) {
+            .chat_focus, .chat_clear => reply: {
+                self.queue.focus.len = 0;
+                break :reply try self.requestOnPage(.chat_focus, target, &video, &page_token.?, &.{});
+            },
+            .chat_send => try self.verifyShortcutInput(target, video, page_token.?),
+            .reactions_show => try self.requestOnPage(.reactions_show, target, &video, &page_token.?, &.{}),
+            else => unreachable,
+        };
+        defer result.deinit();
+        if (!self.pageCommandCurrent(command)) return false;
+        const expected_state: diagnostic.State = switch (action) {
+            .chat_focus, .chat_clear => .focused,
+            .chat_send => .ok,
+            .reactions_show => .hovered,
+            else => unreachable,
+        };
+        if (!self.pageReplySucceeded(result, video, expected_state)) return false;
+        switch (action) {
+            .chat_focus, .chat_clear => {
+                if (action == .chat_clear) stage = .clear_check;
+                if (!self.queue.focus.save(result.field("Detail"))) return self.rejectPage(if (action == .chat_clear) .wrong_input else .focus_failed);
+                if (action == .chat_focus) {
+                    self.report("チャット欄へ移動しました。");
+                    return true;
+                }
+                const checked = try self.verifyShortcutInput(target, video, page_token.?);
+                defer checked.deinit();
+                if (!self.pageCommandCurrent(command) or !self.pageReplySucceeded(checked, video, .ok)) return false;
+                stage = .clear_keys;
+                const outcome = try self.commitInput(.chat_clear, target, video, page_token.?, null);
+                if (outcome != .cleared) {
+                    if (outcome != .unknown) stage = .clear_check;
+                    return self.rejectPage(outcome);
+                }
+                self.report("クリアキーを送りました（内容は未取得）。");
+            },
+            .chat_send => {
+                if (!std.mem.eql(u8, result.field("Detail"), "chat")) return self.rejectPage(.wrong_input);
+                stage = .enter_key;
+                const outcome = try self.commitInput(.chat_enter, target, video, page_token.?, null);
+                if (outcome != .enter_sent) {
+                    if (outcome != .unknown) stage = .send_check;
+                    return self.rejectPage(outcome);
+                }
+                self.report("チャット欄へEnterキーを送りました（送信受理は未確認）。");
+            },
+            .reactions_show => self.report("表示用UIへマウスを移動しました（表示は未確認）。"),
+            else => unreachable,
+        }
+        return true;
+    }
+
+    fn commitInput(self: *App, mode: transport.Mode, target: usize, video: operations.VideoId, page_token: operations.PageToken, text: ?[]const u8) !diagnostic.State {
+        const cancellation = try keyboard.Cancellation.create();
+        self.input_cancellation = .{ .signal = cancellation, .target = target };
+        defer {
+            self.input_cancellation = null;
+            cancellation.close();
+        }
+        var fields: [2]transport.Field = undefined;
+        fields[0] = .{ .name = "CancelToken", .value = &cancellation.token };
+        var size_buffer: [20]u8 = undefined;
+        const payload = if (text) |value| try keyboard.Payload.create(&cancellation.token, value) else null;
+        defer if (payload) |present| present.close();
+        if (text) |value| fields[1] = .{ .name = "PayloadBytes", .value = try std.fmt.bufPrint(&size_buffer, "{d}", .{value.len}) };
+        const reply = try self.requestOnPage(mode, target, &video, &page_token, fields[0..if (payload != null) 2 else 1]);
+        defer reply.deinit();
+        const success = mode.inputOutcome().?;
+        if (reply.is(success)) {
+            if (std.mem.eql(u8, reply.field("Video"), &video)) return diagnostic.State.fromCode(success);
+            self.last_state = "unknown";
+            return error.InputOutcomeUnknown;
+        }
+        return switch (diagnostic.State.fromWorker(reply.field("State"))) {
+            .changed, .cancelled, .wrong_input, .invalid_text, .unavailable => |state| state,
+            else => .unknown,
+        };
+    }
+
+    fn pageCommandCurrent(self: *App, command: operations.Command) bool {
+        if (self.commandCurrent(command)) return true;
+        if (!self.quitting) return self.rejectPage(.cancelled);
+        self.last_state = "cancelled";
+        return false;
+    }
+
+    fn pageReplySucceeded(self: *App, reply: transport.Reply, video: operations.VideoId, expected_state: diagnostic.State) bool {
+        const state = diagnostic.State.fromWorker(reply.field("State"));
+        if (state != expected_state) return self.rejectPage(if (state == .ok) .wrong_input else state);
+        if (!std.mem.eql(u8, reply.field("Video"), &video)) return self.rejectPage(.changed);
+        return true;
+    }
+
+    fn rejectPage(self: *App, state: diagnostic.State) bool {
+        self.last_state = @tagName(state);
+        self.report(self.last_state);
+        return false;
+    }
+
+    fn slot(self: *App, command: operations.Command, video: operations.VideoId, page_token: operations.PageToken) !bool {
+        const target = command.event.window;
+        const action = command.event.action;
+        const slot_number: u8 = if (action == .profile1 or action == .shared1) 1 else 2;
+        const prefs = self.snapshot.data.preferences;
+        const profile_slot = action == .profile1 or action == .profile2;
+        if (command.library != self.library_revision) return false;
+        const profile_id = if (profile_slot and prefs.auto_mode) detected: {
+            const reply = try self.requestOnPage(.resolve, target, &video, &page_token, &.{});
+            defer reply.deinit();
+            if (!self.commandCurrent(command) or !reply.is("ok") or !std.mem.eql(u8, reply.field("Video"), &video))
+                return false;
+            if (command.library != self.library_revision) return false;
+            const profile = (self.selectDetectedProfile(reply.field("Channel")) catch {
+                self.report("自動選択を保存できませんでした。");
+                return false;
+            }) orelse {
+                self.report("配信者が未連携です。管理からチャンネルを連携できます。");
+                return false;
+            };
+            break :detected profile.id;
+        } else if (profile_slot) prefs.input_profile_id else "";
+        if (command.library != self.library_revision) return false;
+        if (profile_slot and profile_id.len == 0) return false;
+        const items = try self.snapshot.data.itemsFor(profile_id);
+        const item = for (items) |item| {
+            if (item.slot == slot_number) break item;
+        } else {
+            self.report("このキーに弾幕が割り当てられていません。");
+            return false;
+        };
+        const verification = try self.verifyShortcutInput(target, video, page_token);
+        defer verification.deinit();
+        if (!self.commandCurrent(command) or command.library != self.library_revision) return false;
+        if (!self.pageReplySucceeded(verification, video, .ok)) return false;
+        const outcome = try self.commitInput(.input_insert, target, video, page_token, item.text);
+        if (outcome != .inserted) return self.rejectPage(outcome);
+        self.report("弾幕を入力しました。");
+        return true;
+    }
+
+    fn verifyShortcutInput(self: *App, target: usize, video: operations.VideoId, page_token: operations.PageToken) !transport.Reply {
+        var buffer: [64]u8 = undefined;
+        const focus = self.queue.focus.take(&buffer);
+        return if (focus.len == 0)
+            self.requestOnPage(.verify_input, target, &video, &page_token, &.{})
+        else
+            self.requestOnPage(.verify_chat, target, &video, &page_token, &.{.{ .name = "FocusToken", .value = focus }});
+    }
+
+    fn insertFromPalette(self: *App, index: usize) void {
+        self.deliverPaletteItem(index) catch |failure| {
+            if (!self.quitting) {
+                self.palette.refresh(self.snapshot.data);
+                self.report(switch (failure) {
+                    error.ProfileChanged => "配信者が変わりました。弾幕を選び直してください。",
+                    error.ProfileSelectionNotSaved => "自動選択を保存できませんでした。",
+                    error.TargetChanged, error.ForegroundChanged => "changed",
+                    error.VideoUnavailable => "unavailable",
+                    else => self.cleanupNotice(failure) orelse @tagName(self.workerFailureReason(failure)),
+                });
+                self.palette.show();
+            }
+        };
+        self.finishQuit();
+        if (self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
+    }
+
+    fn deliverPaletteItem(self: *App, index: usize) !void {
+        if (self.quitting or self.queue.active or self.worker.active or self.reaction != null or index >= self.palette.count) return;
+        const target = self.target;
+        if (input.browser(target) == null) return self.report("unavailable");
+        const generation = self.queue.generation;
+        const revision = self.library_revision;
+        const row = self.palette.rows[index];
+        const text = try allocator.dupe(u8, row.item.text);
+        defer allocator.free(text);
+        const profile_id = try allocator.dupe(u8, row.profile_id);
+        defer allocator.free(profile_id);
+        const auto_profile = profile_id.len != 0 and self.snapshot.data.preferences.auto_mode;
+        _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
+        _ = win.SetForegroundWindow(target);
+        const hwnd = windows.number(target);
+        if (!self.foreground(hwnd)) return error.ForegroundChanged;
+        if (auto_profile) self.palette.detected_profile = false;
+        const context = try self.requestOnPage(if (auto_profile) .resolve else .browser_context, hwnd, "", "bind", &.{});
+        defer context.deinit();
+        if (!self.foreground(hwnd) or self.queue.generation != generation or self.library_revision != revision) return error.TargetChanged;
+        if (!context.is("ok")) return error.VideoUnavailable;
+        const video = operations.videoId(context.field("Video")) orelse return error.VideoUnavailable;
+        const page_token = operations.pageToken(context.field("PageToken")) orelse return error.TargetChanged;
+        if (auto_profile) {
+            const profile = (self.selectDetectedProfile(context.field("Channel")) catch return error.ProfileSelectionNotSaved) orelse
+                return error.ProfileChanged;
+            if (!std.mem.eql(u8, profile.id, profile_id)) return error.ProfileChanged;
+        } else if (profile_id.len != 0 and !std.mem.eql(u8, self.snapshot.data.preferences.input_profile_id, profile_id)) {
+            return error.ProfileChanged;
+        }
+        const checked = try self.requestOnPage(.verify_input, hwnd, &video, &page_token, &.{});
+        defer checked.deinit();
+        if (!self.foreground(hwnd) or self.queue.generation != generation or self.library_revision != revision) return error.TargetChanged;
+        if (!checked.is("ok") or !std.mem.eql(u8, checked.field("Video"), &video)) {
+            self.report(checked.field("State"));
+            self.palette.show();
+            return;
+        }
+        const outcome = try self.commitInput(.input_insert, hwnd, video, page_token, text);
+        if (outcome != .inserted and !self.quitting) {
+            _ = self.rejectPage(outcome);
+            self.palette.show();
+        }
+    }
+
+    fn startReaction(self: *App, job: operations.Reaction, delay: u32) bool {
+        if (self.reaction != null or self.quitting or job.count == 0) return false;
+        const clock = std.time.Timer.start() catch |failure| {
+            self.publishReactionResult(.unavailable, null, @errorName(failure));
+            return false;
+        };
+        self.openReactionProgress() catch |failure| {
+            self.publishReactionResult(.unavailable, null, @errorName(failure));
+            return false;
+        };
+        const generation = self.reaction_generation +% 1;
+        if (!self.scheduleReactionAdvance(generation, @min(delay, 1000))) {
+            self.publishReactionResult(.unavailable, null, "リアクションのタイマーを開始できませんでした。");
+            return false;
+        }
+        self.reaction_generation = generation;
+        self.reaction = job;
+        self.reaction.?.due_ns = @as(u64, delay) * std.time.ns_per_ms;
+        self.reaction_clock = clock;
+        if (self.queue.target == job.target) {
+            _ = self.queue.bindVideo(job.video);
+            _ = self.queue.bindPage(job.page);
+        }
+        self.palette.reactionButtons(true);
+        if (delay == 0) {
+            self.showReactionCounts("標準設定で実行します。", job, .running);
+        } else self.showReactionCountdown(job, delay);
+        self.reaction_progress.show();
+        return true;
+    }
+
+    fn scheduleReactionAdvance(self: *App, generation: u64, wait_ms: u32) bool {
+        if (wait_ms != 0) return self.setReactionTimer(.send, wait_ms);
+        self.cancelReactionTimer();
+        return win.PostMessageW(self.window, advance_reaction_message, generation, 0) != 0;
+    }
+
+    const ReactionTimer = struct {
+        const Kind = enum { preparation, send };
+        id: win.UINT_PTR,
+        kind: Kind,
+    };
+
+    fn setReactionTimer(self: *App, kind: ReactionTimer.Kind, wait_ms: u32) bool {
+        self.cancelReactionTimer();
+        // KillTimer does not remove a WM_TIMER that is already queued.
+        const id = self.next_reaction_timer_id;
+        self.next_reaction_timer_id = @max(first_reaction_timer_id, id +% 1);
+        if (win.SetTimer(self.window, id, wait_ms, null) == 0) return false;
+        self.reaction_timer = .{ .id = id, .kind = kind };
+        return true;
+    }
+
+    fn cancelReactionTimer(self: *App) void {
+        const timer = self.reaction_timer orelse return;
+        self.reaction_timer = null;
+        _ = win.KillTimer(self.window, timer.id);
+    }
+
+    fn openReactionProgress(self: *App) !void {
+        try self.reaction_progress.open(self.window);
+        self.reaction_hide_at = null;
+        _ = win.KillTimer(self.window, timer_reaction_feedback);
+    }
+
+    const ReactionProgressUpdate = struct {
+        text: [reaction_summary_capacity]u8 = undefined,
+        len: usize,
+        phase: feedback.Phase,
+    };
+
+    fn updateReactionProgress(self: *App, message: []const u8, phase: feedback.Phase) void {
+        var update: ReactionProgressUpdate = .{ .len = message.len, .phase = phase };
+        @memcpy(update.text[0..update.len], message);
+        self.pending_reaction_progress = update;
+        // Win32 control updates are synchronous. A newer, nested update takes precedence.
+        if (self.rendering_reaction_progress) return;
+        self.rendering_reaction_progress = true;
+        defer self.rendering_reaction_progress = false;
+        while (self.pending_reaction_progress) |current_update| {
+            self.pending_reaction_progress = null;
+            const text = current_update.text[0..current_update.len];
+            self.palette.status(text);
+            if (self.pending_reaction_progress != null) continue;
+            self.reaction_progress.update(text, self.keyboard.tracker.bindings, current_update.phase);
+            self.reaction_render_at = win.GetTickCount64();
+        }
+    }
+
+    fn reactionCounts(job: operations.Reaction) feedback.Counts {
+        return .{ .completed = job.completed, .total = job.count, .mean_ms = job.meanStartIntervalMs() };
+    }
+
+    fn showReactionCounts(self: *App, caption: []const u8, job: operations.Reaction, phase: feedback.Phase) void {
+        var counts: [120]u8 = undefined;
+        var message: [360]u8 = undefined;
+        const text = reactionCounts(job).text(&counts) catch unreachable;
+        self.updateReactionProgress(std.fmt.bufPrint(&message, "{s}\r\n{s}", .{ caption, text }) catch unreachable, phase);
+    }
+
+    fn showReactionCountdown(self: *App, job: operations.Reaction, remaining: u64) void {
+        var buffer: [180]u8 = undefined;
+        const text = std.fmt.bufPrint(&buffer, "今回の設定で{d}秒後に実行します。♡のメニューを開いてください。", .{(remaining + 999) / 1000}) catch unreachable;
+        self.showReactionCounts(text, job, .running);
+    }
+
+    fn publishReactionResult(self: *App, reason: feedback.Reason, counts: ?feedback.Counts, detail: []const u8) void {
+        if (self.reaction_result) |result| result.deinit();
+        const result = feedback.Result.init(reason, counts, detail);
+        self.reaction_result = result;
+        if (self.quitting) return;
+        self.reaction_progress.open(self.window) catch {};
+        var summary: [reaction_summary_capacity]u8 = undefined;
+        self.updateReactionProgress(result.summary(&summary), .finished);
+        if (self.quitting or self.reaction != null or self.preparation != null or self.reaction_progress.window == null) return;
+        self.reaction_hide_at = win.GetTickCount64() + 4000;
+        if (win.SetTimer(self.window, timer_reaction_feedback, 4000, null) == 0) {
+            self.reaction_progress.hide();
+            self.reaction_hide_at = null;
+        } else self.reaction_progress.show();
+    }
+
+    fn hideFinishedReaction(self: *App) void {
+        const due = self.reaction_hide_at orelse return;
+        const now = win.GetTickCount64();
+        if (now < due) {
+            _ = win.SetTimer(self.window, timer_reaction_feedback, @intCast(due - now), null);
+            return;
+        }
+        self.reaction_hide_at = null;
+        _ = win.KillTimer(self.window, timer_reaction_feedback);
+        self.reaction_progress.hide();
+    }
+
+    fn reactionContextCurrent(self: *const App, target: win.HWND, generation: u64) bool {
+        return !self.quitting and self.target == target and self.reaction_generation == generation;
+    }
+
+    const ReactionContext = struct { video: operations.VideoId, page: operations.PageToken };
+
+    fn reactionContext(self: *App, target: win.HWND, generation: u64, origin: win.HWND) ?ReactionContext {
+        if (origin == null or win.GetForegroundWindow() != origin or input.browser(target) == null) {
+            self.publishReactionResult(.wrong_window, null, "");
+            return null;
+        }
+        defer {
+            self.finishQuit();
+            if (!self.quitting and self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
+        }
+        const response = self.requestOnPage(.browser_context, windows.number(target), "", "bind", &.{}) catch |failure| {
+            var detail: [256]u8 = undefined;
+            if (self.reactionContextCurrent(target, generation)) self.publishReactionResult(.unavailable, null, self.workerFailureDetail(failure, &detail));
+            return null;
+        };
+        defer response.deinit();
+        if (!self.reactionContextCurrent(target, generation)) return null;
+        if (win.GetForegroundWindow() != origin) {
+            self.publishReactionResult(.wrong_window, null, "");
+            return null;
+        }
+        if (!response.is("ok")) {
+            self.publishReactionResult(feedback.Reason.fromReply(response.field("State")), null, response.field("Detail"));
+            return null;
+        }
+        const video = operations.videoId(response.field("Video")) orelse {
+            self.publishReactionResult(.unavailable, null, "");
+            return null;
+        };
+        const page_proof = operations.pageToken(response.field("PageToken")) orelse unreachable;
+        return .{ .video = video, .page = page_proof };
+    }
+
+    fn paletteReaction(self: *App, options: view.ReactionOptions, save: bool) void {
+        if (!self.canEdit() or self.manager.isEditing()) return;
+        if (save) {
+            var prefs = self.snapshot.data.preferences;
+            prefs.reaction_kind = options.kind;
+            prefs.reaction_count = options.count;
+            prefs.reaction_interval_ms = options.interval;
+            self.writePreferences(prefs) catch return self.report("標準設定を保存できませんでした。");
+            return self.report("リアクションの標準設定を保存しました。");
+        }
+        const target = self.target;
+        const generation = self.reaction_generation;
+        const origin = win.GetForegroundWindow();
+        if (origin != self.palette.window) return self.publishReactionResult(.wrong_window, null, "");
+        const context = self.reactionContext(target, generation, origin) orelse return;
+        const delay = 3000;
+        _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
+        _ = win.SetForegroundWindow(target);
+        if (!self.reactionContextCurrent(target, generation)) return;
+        _ = self.startReaction(.{
+            .target = windows.number(target),
+            .video = context.video,
+            .page = context.page,
+            .kind = options.kind,
+            .count = options.count,
+            .interval = options.interval,
+        }, delay);
+    }
+
+    fn startPreparation(self: *App, mode: transport.Mode) void {
+        if (!self.canEdit() or self.manager.isEditing()) return;
+        const target = self.target;
+        const generation = self.reaction_generation;
+        const context = self.reactionContext(target, generation, win.GetForegroundWindow()) orelse return;
+        _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
+        if (self.manager.window != null) _ = win.ShowWindow(self.manager.window, win.SW_HIDE);
+        _ = win.SetForegroundWindow(target);
+        if (!self.reactionContextCurrent(target, generation)) return;
+        self.openReactionProgress() catch |failure| return self.publishReactionResult(.unavailable, null, @errorName(failure));
+        if (!self.reactionContextCurrent(target, generation)) return;
+        if (!self.setReactionTimer(.preparation, 1000)) {
+            self.publishReactionResult(.unavailable, null, "リアクションの登録・確認のタイマーを開始できませんでした。");
+            return;
+        }
+        const delay: u32 = if (mode == .reaction_capture) 1000 else 5000;
+        self.reaction_generation +%= 1;
+        self.preparation = .{ .mode = mode, .target = windows.number(target), .video = context.video, .page = context.page, .generation = self.reaction_generation, .due = win.GetTickCount64() + delay };
+        if (self.queue.target == windows.number(target)) {
+            _ = self.queue.bindVideo(context.video);
+            _ = self.queue.bindPage(context.page);
+        }
+        self.palette.reactionButtons(true);
+        if (mode == .reaction_capture) {
+            self.updateReactionProgress("登録を待っています。♡のメニューを開き、マウスをメニューに重ねてください。", .running);
+        } else self.showPreparationCountdown(delay);
+        self.reaction_progress.show();
+    }
+
+    fn preparationCurrent(self: *const App, pending: Preparation) bool {
+        return !self.quitting and self.preparation != null and self.reaction_generation == pending.generation;
+    }
+
+    fn schedulePreparation(self: *App, pending: Preparation, wait: u32) bool {
+        if (!self.preparationCurrent(pending)) return false;
+        if (self.setReactionTimer(.preparation, wait)) return true;
+        self.finishPreparation(.unavailable, "リアクションの準備タイマーを再開できませんでした。");
+        return false;
+    }
+
+    fn prepareNow(self: *App) void {
+        if (self.worker.active) return;
+        const pending = self.preparation orelse return;
+        if (!self.foreground(pending.target)) return self.finishPreparation(.wrong_window, "");
+        const now = win.GetTickCount64();
+        if (now < pending.due) {
+            if (pending.mode == .reaction_check) self.showPreparationCountdown(pending.due - now);
+            const wait: u32 = @intCast(@min(pending.due - now, 1000));
+            _ = self.schedulePreparation(pending, wait);
+            return;
+        }
+        self.cancelReactionTimer();
+        defer self.finishQuit();
+        self.updateReactionProgress(if (pending.mode == .reaction_capture) "ボタンを登録しています。" else "5種類のボタンを確認しています。", .running);
+        if (!self.preparationCurrent(pending)) return;
+        const retry = self.captureOrCheck(pending) catch |failure| {
+            var detail: [256]u8 = undefined;
+            if (self.preparationCurrent(pending)) self.finishPreparation(.unavailable, self.workerFailureDetail(failure, &detail));
+            return;
+        };
+        if (!retry or !self.preparationCurrent(pending)) return;
+        self.updateReactionProgress("登録を待っています。♡のメニューを開き、マウスをメニューに重ねてください。", .running);
+        if (self.schedulePreparation(pending, 1000)) self.preparation.?.due = win.GetTickCount64() + 1000;
+    }
+
+    fn showPreparationCountdown(self: *App, remaining: u64) void {
+        var buffer: [180]u8 = undefined;
+        const text = std.fmt.bufPrint(&buffer, "{d}秒後に、送信せずに確認します。♡のメニューを開いてください。", .{(remaining + 999) / 1000}) catch unreachable;
+        self.updateReactionProgress(text, .running);
+    }
+
+    fn finishPreparation(self: *App, reason: feedback.Reason, detail: []const u8) void {
+        self.preparation = null;
+        self.cancelReactionTimer();
+        self.palette.reactionButtons(false);
+        self.publishReactionResult(reason, null, detail);
+        if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
+    }
+
+    fn captureOrCheck(self: *App, pending: Preparation) !bool {
+        if (!self.foreground(pending.target)) {
+            self.finishPreparation(.wrong_window, "");
+            return false;
+        }
+        var sync_detail: [256]u8 = undefined;
+        if (self.syncRegistration(pending.target, &sync_detail)) |detail| {
+            if (self.preparationCurrent(pending)) self.finishPreparation(.sync_failed, detail);
+            return false;
+        }
+        if (!self.preparationCurrent(pending)) return false;
+        if (!self.foreground(pending.target)) {
+            self.finishPreparation(.wrong_window, "");
+            return false;
+        }
+        var x_buffer: [11]u8 = undefined;
+        var y_buffer: [11]u8 = undefined;
+        var capture_fields: [2]transport.Field = undefined;
+        const fields: []const transport.Field = if (pending.mode == .reaction_capture) fields: {
+            var point: win.POINT = undefined;
+            if (win.GetPhysicalCursorPos(&point) == 0) return error.CursorPosition;
+            capture_fields = captureFields(point, &x_buffer, &y_buffer);
+            break :fields &capture_fields;
+        } else &.{};
+        const reply = try self.requestOnPage(pending.mode, pending.target, &pending.video, &pending.page, fields);
+        defer reply.deinit();
+        if (!self.preparationCurrent(pending)) return false;
+        if (Preparation.retries(pending.mode, reply.field("State"))) return true;
+        if (!self.foreground(pending.target)) {
+            self.finishPreparation(.wrong_window, "");
+            return false;
+        }
+        if (pending.mode == .reaction_capture and reply.is("captured")) {
+            self.db.saveRegistration(reply.field("Detail")) catch |failure| {
+                self.finishPreparation(.save_failed, @errorName(failure));
+                return false;
+            };
+            self.preparation.?.committed = true;
+            self.worker.registrations_current = false;
+            self.refreshRegistrationStatus();
+            self.updateReactionProgress("登録を保存しました。ワーカーへ反映しています。", .running);
+            if (self.syncRegistration(pending.target, &sync_detail)) |detail| {
+                self.finishPreparation(.saved_sync_failed, detail);
+                return false;
+            }
+            self.finishPreparation(.saved, "");
+        } else self.finishPreparation(feedback.Reason.fromReply(reply.field("State")), reply.field("Detail"));
+        return false;
+    }
+
+    fn advanceReaction(self: *App) void {
+        if (self.worker.active) return;
+        const job = if (self.reaction) |*job| job else return;
+        if (job.active_request) return;
+        if (!self.reactionTargetCurrent(job)) return self.finishReaction(.wrong_window, "");
+        const generation = self.reaction_generation;
+        const now = self.reaction_clock.?.read();
+        if (!job.begin(now)) {
+            const wait = job.remainingMs(now);
+            if (wait != 0) {
+                if (job.completed == 0 and job.shortcut == null) self.showReactionCountdown(job.*, wait);
+                if (self.reaction_generation != generation or self.reaction == null) return;
+                // A Win32 timer may wake early. Register only the remaining wait.
+                if (!self.scheduleReactionAdvance(generation, @min(wait, 1000)))
+                    self.finishReaction(.unavailable, "リアクションのタイマーを再開できませんでした。");
+            }
+            return;
+        }
+        self.cancelReactionTimer();
+        defer self.finishQuit();
+        const reply = (self.operateReaction(job) catch |failure| {
+            _ = job.acknowledge(false);
+            var detail: [256]u8 = undefined;
+            return self.finishReaction(switch (failure) {
+                error.Stopped => .stopped,
+                error.TargetChanged => .wrong_window,
+                else => self.workerFailureReason(failure),
+            }, self.workerFailureDetail(failure, &detail));
+        }) orelse return;
+        defer reply.deinit();
+        const operated = reply.is("operated");
+        if (job.shortcut) |command| {
+            if (!self.queue.accepts(command, job.target)) job.stop();
+        }
+        if (!job.acknowledge(operated)) {
+            const reason: feedback.Reason = if (!operated)
+                feedback.Reason.fromReply(reply.field("State"))
+            else if (job.stop_requested)
+                .stopped
+            else
+                .completed;
+            return self.finishReaction(reason, reply.field("Detail"));
+        }
+        const observed_at = win.GetTickCount64();
+        if (observed_at - self.reaction_render_at >= 100 or job.remainingMs(self.reaction_clock.?.read()) >= 100)
+            self.showReactionCounts("リアクションを実行中です。", job.*, .running);
+        if (self.reaction_generation != generation or self.reaction == null) return;
+        const wait = job.remainingMs(self.reaction_clock.?.read());
+        if (!self.scheduleReactionAdvance(generation, wait))
+            self.finishReaction(.unavailable, "リアクションのタイマーを再開できませんでした。");
+    }
+
+    fn reactionTargetCurrent(self: *App, job: *const operations.Reaction) bool {
+        if (job.stop_requested or !self.foreground(job.target)) return false;
+        return if (job.shortcut) |command| self.queue.accepts(command, job.target) else true;
+    }
+
+    fn operateReaction(self: *App, job: *operations.Reaction) !?transport.Reply {
+        var sync_detail: [256]u8 = undefined;
+        const synchronization_failure = self.syncRegistration(job.target, &sync_detail);
+        if (job.stop_requested) return error.Stopped;
+        if (!self.reactionTargetCurrent(job)) return error.TargetChanged;
+        if (synchronization_failure) |detail| {
+            _ = job.acknowledge(false);
+            self.finishReaction(.sync_failed, detail);
+            return null;
+        }
+        const kind = if (job.kind == 6) std.crypto.random.intRangeAtMost(u8, 1, 5) else job.kind;
+        const digit = [_]u8{'0' + kind};
+        job.markSendStart(self.reaction_clock.?.read());
+        return try self.requestOnPage(.reaction_send, job.target, &job.video, &job.page, &.{.{ .name = "Reaction", .value = &digit }});
+    }
+
+    fn finishReaction(self: *App, reason: feedback.Reason, detail: []const u8) void {
+        const job = self.reaction orelse return;
+        self.reaction = null;
+        self.reaction_clock = null;
+        self.cancelReactionTimer();
+        self.palette.reactionButtons(false);
+        if (job.shortcut) |command| self.queue.finish(command, job.succeeded());
+        self.publishReactionResult(reason, reactionCounts(job), detail);
+        if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
+    }
+};
+
+fn captureFields(point: win.POINT, x: *[11]u8, y: *[11]u8) [2]transport.Field {
+    return .{
+        .{ .name = "X", .value = std.fmt.bufPrint(x, "{d}", .{point.x}) catch unreachable },
+        .{ .name = "Y", .value = std.fmt.bufPrint(y, "{d}", .{point.y}) catch unreachable },
+    };
+}
+
+test "registration sends signed physical coordinates and only retries registration misses" {
+    var x: [11]u8 = undefined;
+    var y: [11]u8 = undefined;
+    const fields = captureFields(.{ .x = -2147483648, .y = 1200 }, &x, &y);
+    try std.testing.expectEqualStrings("X", fields[0].name);
+    try std.testing.expectEqualStrings("-2147483648", fields[0].value);
+    try std.testing.expectEqualStrings("Y", fields[1].name);
+    try std.testing.expectEqualStrings("1200", fields[1].value);
+    try std.testing.expect(App.Preparation.retries(.reaction_capture, "unsupported"));
+    try std.testing.expect(App.Preparation.retries(.reaction_capture, "wrong_window"));
+    try std.testing.expect(!App.Preparation.retries(.reaction_capture, "changed"));
+    try std.testing.expect(!App.Preparation.retries(.reaction_capture, "captured"));
+    try std.testing.expect(!App.Preparation.retries(.reaction_check, "unsupported"));
+    try std.testing.expect(!App.Preparation.retries(.reaction_check, "wrong_window"));
+}
+
+test "diagnostics publish version and runtime conditions without sharing user data" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    const body = "PRIVATE-DANMAKU-BODY-5C23";
+    const url = "https://www.youtube.com/watch?v=Private0099";
+    const name = "PRIVATE-CHANNEL-NAME-5C23";
+    const settings_path = "C:\\PRIVATE-SETTINGS-5C23\\settings.db";
+    const install_name = "PRIVATE-INSTALL-5C23.exe";
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    try directory.dir.writeFile(.{ .sub_path = install_name, .data = "startup binary bytes" });
+    const path = try directory.dir.realpathAlloc(heap, install_name);
+    defer heap.free(path);
+    const executable = try std.unicode.utf8ToUtf16LeAllocZ(heap, path);
+    defer heap.free(executable);
+    var stored_path = settings_path.*;
+    var db: storage.Store = undefined;
+    db.path = &stored_path;
+
+    const detail = body ++ "\r\n" ++ url ++ "\r\n" ++ name ++ "\r\n" ++ settings_path;
+    var app: App = .{
+        .executable = executable,
+        .db = &db,
+        .snapshot = .{
+            .arena = std.heap.ArenaAllocator.init(heap),
+            .data = .{
+                .profiles = &.{.{ .id = "caster", .name = name, .channel = "/@secret-caster" }},
+                .shared_items = &.{.{ .id = "shared", .name = "合成弾幕", .text = body }},
+            },
+        },
+        .history = undefined,
+        .running_digest = try readExecutableDigest(executable),
+        .last_mode = .reaction_send,
+        .last_state = "menu_closed",
+        .last_elapsed = 1234,
+        .reaction_result = feedback.Result.init(.unknown, null, detail),
+    };
+    defer app.snapshot.deinit();
+    defer if (app.reaction_result) |result| result.deinit();
+
+    var buffer: [1024]u8 = undefined;
+    const published = try app.diagnosticSnapshot(5000).format(&buffer, version);
+    try testing.expect(std.mem.startsWith(u8, published, "ChatPalette " ++ version ++ "\r\n"));
+    for ([_][]const u8{
+        "起動時の配布物と一致",
+        "直近の操作 reaction_send",
+        "結果 menu_closed",
+        "処理時間 1234 ms",
+        "リアクション 終了 (finished)",
+        "再起動は現在の展開先の ChatPalette.exe",
+    }) |expected| try testing.expect(std.mem.indexOf(u8, published, expected) != null);
+    for ([_][]const u8{ body, url, name, settings_path, install_name, path, "/@secret-caster" }) |private| {
+        try testing.expect(std.mem.indexOf(u8, published, private) == null);
+    }
+
+    // Unknown protocol values are summarized rather than copied as text.
+    app.last_state = detail;
+    const sanitized = try app.diagnosticSnapshot(5000).format(&buffer, version);
+    try testing.expect(std.mem.indexOf(u8, sanitized, "結果 unknown") != null);
+    try testing.expect(std.mem.indexOf(u8, sanitized, body) == null);
+    try testing.expectEqual(diagnostic.Browser.unselected, diagnostic.Browser.fromName(url));
+
+    try directory.dir.writeFile(.{ .sub_path = install_name, .data = "replaced binary bytes" });
+    try testing.expectEqual(diagnostic.Distribution.modified, app.diagnosticSnapshot(5000).distribution);
+    app.executable = windows.wide("");
+    try testing.expectEqual(diagnostic.Distribution.disk_unknown, app.diagnosticSnapshot(5000).distribution);
+    app.running_digest = null;
+    try testing.expectEqual(diagnostic.Distribution.running_unknown, app.diagnosticSnapshot(5000).distribution);
+}
+
+test "a page acknowledgement requires the expected video and reports the rejection" {
+    const testing = std.testing;
+    var app: App = .{
+        .executable = windows.wide(""),
+        .db = undefined,
+        .snapshot = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator), .data = .{} },
+        .history = undefined,
+        .running_digest = null,
+        .last_mode = .verify_chat,
+    };
+    defer app.snapshot.deinit();
+    try app.palette.open(null);
+    defer app.palette.close();
+    const expected = operations.videoId("ZigTest0001").?;
+    const accepted: transport.Reply = .{ .alloc = testing.allocator, .payload = "State=ok\nVideo=ZigTest0001\n" };
+    try testing.expect(app.pageReplySucceeded(accepted, expected, .ok));
+    for ([_][]const u8{ "ZigTest0002", "" }) |video| {
+        const frame = try std.fmt.allocPrint(testing.allocator, "State=ok\nVideo={s}\n", .{video});
+        defer testing.allocator.free(frame);
+        try testing.expect(!app.pageReplySucceeded(.{ .alloc = testing.allocator, .payload = frame }, expected, .ok));
+        try testing.expectEqual(diagnostic.State.changed, app.diagnosticSnapshot(0).state);
+        const notice = try windows.text(app.palette.message, testing.allocator);
+        defer testing.allocator.free(notice);
+        try testing.expectEqualStrings("動画・タブ・ウィンドウが切り替わりました。", notice);
+    }
+    for ([_]diagnostic.State{ .wrong_input, .changed, .unavailable, .unknown }) |state| {
+        const frame = try std.fmt.allocPrint(testing.allocator, "State={s}\nVideo=ZigTest0001\n", .{@tagName(state)});
+        defer testing.allocator.free(frame);
+        try testing.expect(!app.pageReplySucceeded(.{ .alloc = testing.allocator, .payload = frame }, expected, .ok));
+        try testing.expectEqual(state, app.diagnosticSnapshot(0).state);
+    }
+}
+
+test "desktop records the communication cause and an unconfirmed worker exit together" {
+    const testing = std.testing;
+    const Probe = struct {
+        fn request(client: *transport.Client, alloc: std.mem.Allocator, executable: [:0]const u16, mode: transport.Mode, hwnd: usize, expected: []const u8, fields: []const transport.Field, dispatch_messages: transport.Pump) !transport.Reply {
+            std.debug.assert(hwnd == 0 and expected.len == 0);
+            return transport.LifecycleProbe.requestWithUnconfirmedExit(client, alloc, .{ .executable = executable }, mode, fields, dispatch_messages);
+        }
+
+        fn recovered(_: *transport.Client, alloc: std.mem.Allocator, _: [:0]const u16, _: transport.Mode, _: usize, _: []const u8, _: []const transport.Field, _: transport.Pump) !transport.Reply {
+            return .{ .alloc = alloc, .payload = try alloc.dupe(u8, "State=ok\n") };
+        }
+    };
+
+    const heap = testing.allocator;
+    const path = try std.fs.selfExePathAlloc(heap);
+    defer heap.free(path);
+    const executable = try std.unicode.utf8ToUtf16LeAllocZ(heap, path);
+    defer heap.free(executable);
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const db_path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(db_path);
+    var db = try storage.Store.open(heap, db_path);
+    defer db.close();
+    var app: App = .{
+        .executable = executable,
+        .db = &db,
+        .snapshot = try db.load(heap),
+        .history = storage.LibraryHistory.init(heap),
+        .running_digest = null,
+        .last_mode = .chat_focus,
+        .last_state = "focused",
+    };
+    defer app.deinit();
+    try app.palette.open(null);
+    try app.manager.open(null, &db, &app.snapshot, &app.history);
+
+    // The new process executes no code. The transport terminates it using the
+    // owned handle, then the injected observer withholds the wait confirmation.
+    var startup = std.mem.zeroes(win.STARTUPINFOW);
+    startup.cb = @sizeOf(win.STARTUPINFOW);
+    var child: win.PROCESS_INFORMATION = undefined;
+    if (win.CreateProcessW(executable, null, null, null, 0, win.CREATE_SUSPENDED | win.CREATE_NO_WINDOW, null, null, &startup, &child) == 0)
+        return error.FailedToCreateSuspendedTestWorker;
+    app.worker.process = child.hProcess;
+    _ = win.CloseHandle(child.hThread);
+    const endpoint = win.CreateEventW(null, 0, 0, null) orelse return error.FailedToCreateTestWorkerEndpoint;
+    app.worker.pipe = endpoint;
+    const signal = win.CreateEventW(null, 0, 0, null) orelse return error.FailedToCreateTestWorkerEndpoint;
+    app.worker.signal = signal;
+
+    const oversized = [_]u8{'x'} ** 32768;
+    const fields = &.{transport.Field{ .name = "Payload", .value = &oversized }};
+    try testing.expectError(error.InvalidWorkerRequestSize, app.requestUsing(.verify_input, 0, "", fields, Probe.request));
+    try testing.expectEqual(@as(u64, 1), app.worker.sequence);
+    try testing.expectEqual(child.hProcess, app.worker.process);
+    try testing.expectEqual(win.WAIT_OBJECT_0, win.WaitForSingleObject(app.worker.process, 0));
+    try testing.expect(app.worker.pipe == null and app.worker.signal == null);
+    try testing.expect(app.canEdit());
+    try testing.expect(win.IsWindowEnabled(app.palette.window) != 0 and win.IsWindowEnabled(app.manager.window) != 0);
+
+    var buffer: [1024]u8 = undefined;
+    const observed = try app.diagnosticSnapshot(win.GetTickCount64()).format(&buffer, version);
+    for ([_][]const u8{ "直近の操作 verify_input", "結果 unavailable", "InvalidWorkerRequestSize", "WorkerDidNotExit" }) |expected|
+        try testing.expect(std.mem.indexOf(u8, observed, expected) != null);
+    try testing.expectEqual(feedback.Reason.unavailable, app.workerFailureReason(error.InvalidWorkerRequestSize));
+    try testing.expect(app.cleanupNotice(error.InvalidWorkerRequestSize) != null);
+    try testing.expect(app.cleanupNotice(error.WorkerBusy) == null);
+    app.worker.active = true;
+    try testing.expectError(error.WorkerBusy, app.request(.reaction_check, 0, "", &.{}));
+    app.worker.active = false;
+    try testing.expectEqual(transport.Mode.verify_input, app.last_mode.?);
+    try testing.expectEqual(error.InvalidWorkerRequestSize, app.last_worker_failure.?.cause);
+
+    try app.worker.stop();
+    try testing.expect(app.worker.process == null);
+
+    // A query-only handle is valid, but the OS denies waiting on it. Do not
+    // stop the test process or let a failed restart schedule another instance.
+    const query_only = win.OpenProcess(win.PROCESS_QUERY_LIMITED_INFORMATION, 0, win.GetCurrentProcessId()) orelse
+        return error.FailedToOpenQueryOnlyProcessHandle;
+    defer _ = win.CloseHandle(query_only);
+    try testing.expectEqual(win.WAIT_FAILED, win.WaitForSingleObject(query_only, 0));
+    app.worker.process = query_only;
+    defer if (app.worker.process == query_only) {
+        app.worker.process = null;
+    };
+    for ([_]bool{ false, true }) |restarting| {
+        app.quit(restarting);
+        try testing.expect(!app.quitting and !app.restarting and app.canEdit());
+        try testing.expectEqual(query_only, app.worker.process);
+        const notice = try windows.text(app.palette.message, heap);
+        defer heap.free(notice);
+        try testing.expectEqualStrings(if (restarting)
+            "補助プロセスの終了を確認できませんでした。もう一度再起動してください。"
+        else
+            "補助プロセスの終了を確認できませんでした。もう一度終了してください。", notice);
+    }
+    const after_quit = try app.diagnosticSnapshot(win.GetTickCount64()).format(&buffer, version);
+    for ([_][]const u8{ "InvalidWorkerRequestSize", "終了操作での補助プロセス終了失敗 WorkerDidNotExit" }) |expected|
+        try testing.expect(std.mem.indexOf(u8, after_quit, expected) != null);
+
+    app.worker.process = null;
+    app.last_page = .{ .action = .chat_clear, .browser = .brave, .stage = .clear_keys, .state = .cleared, .elapsed_ms = 42 };
+    const reply = try app.requestUsing(.browser_context, 0, "", &.{}, Probe.recovered);
+    defer reply.deinit();
+    try testing.expectEqual(transport.Mode.browser_context, app.last_mode.?);
+    try testing.expectEqualStrings("ok", app.last_state);
+    try testing.expect(app.last_worker_failure == null and app.last_stop_failure == null);
+    const retained = try app.diagnosticSnapshot(win.GetTickCount64()).format(&buffer, version);
+    for ([_][]const u8{ "直近の操作 browser_context\r\n結果 ok", "直近のページ操作 chat_clear", "ページ操作の処理段階 クリアキー送信", "ページ操作の結果 cleared", "ページ操作のブラウザー Brave" }) |expected|
+        try testing.expect(std.mem.indexOf(u8, retained, expected) != null);
+}
+
+test "diagnostics derive phases from pending and live reaction work" {
+    const testing = std.testing;
+    var app: App = .{
+        .executable = undefined,
+        .db = undefined,
+        .snapshot = undefined,
+        .history = undefined,
+        .running_digest = null,
+    };
+    defer app.queue.deinit(testing.allocator);
+    try testing.expectEqual(diagnostic.Phase.idle, app.diagnosticReactionPhase(1000));
+    try app.queue.enqueue(testing.allocator, .{ .action = .reaction, .window = 1 }, 0, null);
+    try testing.expectEqual(diagnostic.Phase.queued, app.diagnosticReactionPhase(1000));
+
+    app.reaction_clock = try std.time.Timer.start();
+    app.reaction = .{ .target = 1, .video = "Fixture0001".*, .page = @splat(0), .kind = 1, .count = 10, .interval = 200, .due_ns = 3000 * std.time.ns_per_ms };
+    try testing.expectEqual(diagnostic.Phase.waiting, app.diagnosticReactionPhase(1000));
+    app.reaction.?.active_request = true;
+    try testing.expectEqual(diagnostic.Phase.running, app.diagnosticReactionPhase(3000));
+    app.reaction.?.stop_requested = true;
+    try testing.expectEqual(diagnostic.Phase.stopping, app.diagnosticReactionPhase(3000));
+    app.reaction = null;
+    app.queue.cancel();
+
+    app.preparation = .{ .mode = .reaction_capture, .target = 1, .video = "Fixture0001".*, .page = @splat(0), .generation = 0, .due = 5000 };
+    try testing.expectEqual(diagnostic.Phase.waiting, app.diagnosticReactionPhase(4000));
+    app.worker.active = true;
+    try testing.expectEqual(diagnostic.Phase.running, app.diagnosticReactionPhase(5000));
+    app.reaction_generation += 1;
+    try testing.expectEqual(diagnostic.Phase.stopping, app.diagnosticReactionPhase(5000));
+    app.preparation = null;
+    app.reaction_result = feedback.Result.init(.stopped, null, "");
+    defer app.reaction_result.?.deinit();
+    try testing.expectEqual(diagnostic.Phase.finished, app.diagnosticReactionPhase(5000));
+}
+
+test "stop invalidates a reaction context even before a preparation or send job exists" {
+    var app: App = .{
+        .executable = undefined,
+        .db = undefined,
+        .snapshot = undefined,
+        .history = undefined,
+        .running_digest = null,
+        .target = @ptrFromInt(42),
+    };
+    const old = app.reaction_generation;
+    try std.testing.expect(app.reactionContextCurrent(app.target, old));
+    app.stop();
+    try std.testing.expect(!app.reactionContextCurrent(app.target, old));
+    try std.testing.expect(app.reactionContextCurrent(app.target, app.reaction_generation));
+    try std.testing.expect(!app.reactionContextCurrent(@ptrFromInt(43), app.reaction_generation));
+}
+
+test "a due reaction posts an immediate continuation to the current generation" {
+    const handle = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 16, 16, null, null, win.GetModuleHandleW(null), null) orelse
+        return error.TestReactionWindow;
+    defer _ = win.DestroyWindow(handle);
+    var app: App = .{ .executable = undefined, .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null, .window = handle };
+    try std.testing.expect(app.scheduleReactionAdvance(42, 0));
+    var message: win.MSG = undefined;
+    try std.testing.expect(win.PeekMessageW(&message, handle, advance_reaction_message, advance_reaction_message, win.PM_REMOVE) != 0);
+    try std.testing.expectEqual(@as(win.WPARAM, 42), message.wParam);
+    try std.testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, handle, win.WM_TIMER, win.WM_TIMER, win.PM_REMOVE));
+}
+
+test "queued timers from finished reactions and preparations cannot finish later operations" {
+    const testing = std.testing;
+    const handle = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 16, 16, null, null, win.GetModuleHandleW(null), null) orelse
+        return error.TestReactionWindow;
+    defer _ = win.DestroyWindow(handle);
+    var app: App = .{
+        .executable = undefined,
+        .db = undefined,
+        .snapshot = undefined,
+        .history = undefined,
+        .running_digest = null,
+        .window = handle,
+        .quitting = true,
+    };
+    defer app.cancelReactionTimer();
+    defer if (app.reaction_result) |result| result.deinit();
+    current = &app;
+    defer current = null;
+
+    const job: operations.Reaction = .{ .target = 1, .video = "Fixture0001".*, .page = @splat(0), .kind = 1, .count = 2, .interval = 100 };
+    app.reaction = job;
+    try testing.expect(app.scheduleReactionAdvance(0, 60000));
+    const obsolete_send = app.reaction_timer.?.id;
+    app.finishReaction(.stopped, "");
+    try testing.expect(app.reaction_timer == null);
+
+    app.reaction_generation = 1;
+    app.preparation = .{ .mode = .reaction_check, .target = 1, .video = job.video, .page = job.page, .generation = 1, .due = 0 };
+    try testing.expect(app.setReactionTimer(.preparation, 60000));
+    const obsolete_preparation = app.reaction_timer.?.id;
+    _ = messageHandler(handle, win.WM_TIMER, obsolete_send, 0);
+    try testing.expect(app.preparation != null and app.reaction_result.?.reason == .stopped);
+    _ = messageHandler(handle, win.WM_TIMER, obsolete_preparation, 0);
+    try testing.expect(app.preparation == null and app.reaction_result.?.reason == .wrong_window);
+
+    app.reaction_generation = 2;
+    app.reaction = job;
+    try testing.expect(app.scheduleReactionAdvance(2, 60000));
+    const current_send = app.reaction_timer.?.id;
+    try testing.expect(current_send != obsolete_send and current_send != obsolete_preparation);
+    _ = messageHandler(handle, win.WM_TIMER, obsolete_send, 0);
+    _ = messageHandler(handle, win.WM_TIMER, obsolete_preparation, 0);
+    _ = messageHandler(handle, advance_reaction_message, 0, 0);
+    try testing.expectEqualDeep(job, app.reaction.?);
+    _ = messageHandler(handle, win.WM_TIMER, current_send, 0);
+    try testing.expect(app.reaction == null and app.reaction_timer == null);
+}
+
+test "a stop reentered from progress rendering leaves the terminal controls and retires the clock" {
+    const testing = std.testing;
+    const Reentry = struct {
+        fn stopDuringText(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, id: win.UINT_PTR, data: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            if (message == win.WM_SETTEXT) {
+                _ = win.RemoveWindowSubclass(hwnd, stopDuringText, id);
+                const app: *App = @ptrFromInt(data);
+                app.stop();
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+
+    const module = win.GetModuleHandleW(null);
+    const host = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 40, 40, null, null, module, null) orelse
+        return error.TestReactionWindow;
+    defer _ = win.DestroyWindow(host);
+    const status = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), win.WS_CHILD, 0, 0, 20, 20, host, null, module, null) orelse
+        return error.TestReactionStatusControl;
+    var app: App = .{
+        .executable = undefined,
+        .db = undefined,
+        .snapshot = undefined,
+        .history = undefined,
+        .running_digest = null,
+        .window = host,
+    };
+    defer app.reaction_progress.close();
+    defer if (app.reaction_result) |result| result.deinit();
+    app.palette.message = status;
+    app.reaction_clock = try std.time.Timer.start();
+    app.reaction = .{
+        .target = 1,
+        .video = "Fixture0001".*,
+        .page = @splat(0),
+        .kind = 1,
+        .count = 10,
+        .interval = 200,
+        .completed = 1,
+    };
+    try app.openReactionProgress();
+    try testing.expect(app.scheduleReactionAdvance(app.reaction_generation, 60000));
+    try testing.expect(win.SetWindowSubclass(status, Reentry.stopDuringText, 1, @intFromPtr(&app)) != 0);
+    defer _ = win.RemoveWindowSubclass(status, Reentry.stopDuringText, 1);
+    app.updateReactionProgress("実行中の古い表示", .running);
+
+    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
+    const result = app.reaction_result orelse return error.TestReactionResultMissing;
+    try testing.expectEqual(feedback.Reason.stopped, result.reason);
+    try testing.expectEqual(@as(u32, 1), result.counts.?.completed);
+    const palette_status = try windows.text(status, testing.allocator);
+    defer testing.allocator.free(palette_status);
+    const overlay_status = try windows.text(app.reaction_progress.summary, testing.allocator);
+    defer testing.allocator.free(overlay_status);
+    try testing.expect(std.mem.indexOf(u8, palette_status, "中止しました。") != null);
+    try testing.expectEqualStrings(palette_status, overlay_status);
+    try testing.expect(win.IsWindowEnabled(app.reaction_progress.stop) == 0);
+    try testing.expect(win.GetWindowLongW(app.reaction_progress.stop, win.GWL_STYLE) & win.WS_VISIBLE == 0);
+
+    const pending: App.Preparation = .{
+        .mode = .reaction_check,
+        .target = 1,
+        .video = "Fixture0001".*,
+        .page = @splat(0),
+        .generation = app.reaction_generation,
+        .due = 0,
+    };
+    app.preparation = pending;
+    try testing.expect(app.schedulePreparation(pending, 60000));
+    try testing.expect(win.SetWindowSubclass(status, Reentry.stopDuringText, 1, @intFromPtr(&app)) != 0);
+    app.showPreparationCountdown(3000);
+    try testing.expect(app.preparation == null and app.reaction_timer == null);
+    try testing.expect(!app.schedulePreparation(pending, 1000));
+    try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
+}
+
+test "registration display reads only the selected browser and preserves operation state on read failure" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    var app: App = .{
+        .executable = undefined,
+        .db = &db,
+        .snapshot = undefined,
+        .history = undefined,
+        .running_digest = null,
+        .last_mode = .reaction_send,
+        .last_state = "menu_closed",
+        .worker = .{ .active = true },
+    };
+
+    var buffer: [192]u8 = undefined;
+    try testing.expectEqualStrings("対象ブラウザー：未選択", app.registrationLabel(null, &buffer));
+    try testing.expectEqualStrings("未設定（管理・ヘルプから設定）", app.registrationLabel("brave", &buffer));
+    try db.saveRegistration(
+        \\{"browser":"brave","tokens":[{"name":"one","id":"","class":"","type":50000},{"name":"two","id":"","class":"","type":50000},{"name":"three","id":"","class":"","type":50000},{"name":"four","id":"","class":"","type":50000},{"name":"five","id":"","class":"","type":50000}]}
+    );
+    try testing.expectEqualStrings("未設定（管理・ヘルプから設定）", app.registrationLabel("firefox", &buffer));
+    try testing.expectEqualStrings("設定済み（メニューの認識は未確認）", app.registrationLabel("brave", &buffer));
+
+    const missing = try std.fs.path.join(heap, &.{ root, "missing.db" });
+    defer heap.free(missing);
+    var unreadable = db;
+    unreadable.path = missing;
+    app.db = &unreadable;
+    try testing.expect(std.mem.startsWith(u8, app.registrationLabel("brave", &buffer), "設定状態：未確認"));
+    app.db = &db;
+    try testing.expectEqualStrings("設定済み（メニューの認識は未確認）", app.registrationLabel("brave", &buffer));
+    try testing.expect(app.worker.active and !app.worker.registrations_current);
+    try testing.expectEqual(transport.Mode.reaction_send, app.last_mode.?);
+    try testing.expectEqualStrings("menu_closed", app.last_state);
+}
+
+test "automatic profile selection persists the match before exposing its input and preserves queued shortcuts" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    try db.save(.{
+        .preferences = .{ .input_profile_id = "profile-a" },
+        .profiles = &.{
+            .{ .id = "profile-a", .name = "A", .channel = "/channel/a" },
+            .{ .id = "profile-b", .name = "B", .channel = "/channel/b", .items = &.{
+                .{ .id = "slot-b", .name = "Slot B", .text = "body B", .slot = 1 },
+            } },
+        },
+    });
+    var app: App = .{
+        .executable = undefined,
+        .db = &db,
+        .snapshot = try db.load(heap),
+        .history = storage.LibraryHistory.init(heap),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    const bindings = try shortcuts.validate(app.snapshot.data.preferences.shortcut_keys);
+    app.keyboard.tracker.replace(bindings);
+    const held = bindings[@intFromEnum(shortcuts.Action.shared1)].?;
+    const vk = shortcuts.virtualKey(held.key);
+    try testing.expect(app.keyboard.tracker.key(vk, false, held.modifiers, 42, true, false).consume);
+    try app.queue.enqueue(allocator, .{ .action = .profile1, .window = 42 }, app.library_revision, null);
+
+    try testing.expect((try app.selectDetectedProfile("/channel/missing")) == null);
+    try testing.expectEqualStrings("profile-a", app.snapshot.data.preferences.input_profile_id);
+    const selection = (try app.selectDetectedProfile("/channel/b")).?;
+    try testing.expectEqualStrings("profile-b", selection.id);
+    try testing.expectEqualStrings("body B", selection.items[0].text);
+    try testing.expectEqualStrings(selection.id, app.palette.visibleProfileId());
+    try testing.expectEqual(app.queue.next().?.library, app.library_revision);
+    try testing.expectEqual(shortcuts.Action.shared1, app.keyboard.tracker.key(vk, true, 0, 42, true, false).event.?.action);
+
+    var other = try storage.Store.open(heap, path);
+    defer other.close();
+    var saved = try other.load(heap);
+    defer saved.deinit();
+    try testing.expectEqualStrings("profile-b", saved.data.preferences.input_profile_id);
+    var changed = saved.data.preferences;
+    changed.reaction_count = 10;
+    try other.savePreferences(changed);
+
+    try testing.expectError(error.DatabaseChanged, app.selectDetectedProfile("/channel/a"));
+    try testing.expectEqualStrings("profile-b", app.snapshot.data.preferences.input_profile_id);
+    var readback = try other.load(heap);
+    defer readback.deinit();
+    try testing.expectEqualStrings("profile-b", readback.data.preferences.input_profile_id);
+    try testing.expectEqual(changed.reaction_count, readback.data.preferences.reaction_count);
+}
+
+test "a rejected settings save leaves the active bindings and database shortcut keys intact" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    var app: App = .{
+        .executable = undefined,
+        .db = &db,
+        .snapshot = try db.load(heap),
+        .history = storage.LibraryHistory.init(heap),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    const original = app.snapshot.data.preferences;
+    const active = try shortcuts.validate(original.shortcut_keys);
+    app.keyboard.tracker.replace(active);
+
+    var other = try storage.Store.open(heap, path);
+    defer other.close();
+    var other_change = original;
+    other_change.reaction_count = 10;
+    try other.savePreferences(other_change);
+
+    var requested = original;
+    requested.shortcut_keys[0] = "^+q";
+    try testing.expectError(error.DatabaseChanged, app.writePreferences(requested));
+    try testing.expectEqualDeep(active, app.keyboard.tracker.bindings);
+    try testing.expectEqualStrings(original.shortcut_keys[0], app.snapshot.data.preferences.shortcut_keys[0]);
+    try testing.expectEqual(@as(u64, 0), app.library_revision);
+    var stored = try other.load(heap);
+    defer stored.deinit();
+    try testing.expectEqualStrings(original.shortcut_keys[0], stored.data.preferences.shortcut_keys[0]);
+    try testing.expectEqual(other_change.reaction_count, stored.data.preferences.reaction_count);
+}
+
+test "shortcut save publishes committed keys including swaps and the stop binding" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    var app: App = .{
+        .executable = undefined,
+        .db = &db,
+        .snapshot = try db.load(heap),
+        .history = storage.LibraryHistory.init(heap),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    app.keyboard.tracker.replace(try shortcuts.validate(app.snapshot.data.preferences.shortcut_keys));
+
+    var changed = app.snapshot.data.preferences;
+    const palette = @intFromEnum(shortcuts.Action.palette);
+    const focus = @intFromEnum(shortcuts.Action.chat_focus);
+    const clear = @intFromEnum(shortcuts.Action.chat_clear);
+    const stop = @intFromEnum(shortcuts.Action.stop);
+    changed.shortcut_keys[palette] = "^+q";
+    changed.shortcut_keys[focus] = "^!q";
+    changed.shortcut_keys[stop] = "^+s";
+    try app.writePreferences(changed);
+    try testing.expectEqualDeep(try shortcuts.validate(changed.shortcut_keys), app.keyboard.tracker.bindings);
+
+    var duplicate = changed;
+    duplicate.shortcut_keys[clear] = "!^Q";
+    try testing.expectError(error.DuplicateShortcut, app.writePreferences(duplicate));
+    try testing.expectEqualDeep(try shortcuts.validate(changed.shortcut_keys), app.keyboard.tracker.bindings);
+    try testing.expectEqual(@as(u64, 1), app.library_revision);
+
+    std.mem.swap([]const u8, &changed.shortcut_keys[focus], &changed.shortcut_keys[clear]);
+    try app.writePreferences(changed);
+    try testing.expectEqualDeep(try shortcuts.validate(changed.shortcut_keys), app.keyboard.tracker.bindings);
+    try testing.expectEqual(@as(u64, 2), app.library_revision);
+    var reopened = try storage.Store.open(heap, path);
+    defer reopened.close();
+    var saved = try reopened.load(heap);
+    defer saved.deinit();
+    try testing.expect(storage.Data.eql(.{ .preferences = changed }, saved.data));
+}
+
+test "saved library edits and imports report view failures and recover without replaying the save" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    const Fault = struct {
+        fn rejectRefresh(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: usize, _: usize) callconv(.winapi) win.LRESULT {
+            if (message == win.CB_ADDSTRING) return win.CB_ERRSPACE;
+            if (message == win.LVM_SETITEMCOUNT) return 0;
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    try db.save(.{ .shared_items = &.{.{ .id = "alpha", .name = "Alpha", .text = "first" }} });
+
+    var class = std.mem.zeroes(win.WNDCLASSW);
+    class.hInstance = win.GetModuleHandleW(null);
+    class.lpszClassName = windows.wide("ChatPalette.TestSavedRefresh");
+    class.lpfnWndProc = messageHandler;
+    try testing.expect(win.RegisterClassW(&class) != 0);
+    defer _ = win.UnregisterClassW(class.lpszClassName, class.hInstance);
+    var app: App = .{
+        .executable = undefined,
+        .db = &db,
+        .snapshot = try db.load(heap),
+        .history = storage.LibraryHistory.init(heap),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    current = &app;
+    defer current = null;
+    app.window = win.CreateWindowExW(0, class.lpszClassName, windows.wide("test"), 0, 0, 0, 0, 0, null, null, class.hInstance, null) orelse return error.TestHost;
+    try app.palette.open(app.window);
+    app.palette.refresh(app.snapshot.data);
+    try app.manager.open(app.window, &db, &app.snapshot, &app.history);
+    var row = std.mem.zeroes(win.LVITEMW);
+    row.stateMask = win.LVIS_SELECTED | win.LVIS_FOCUSED;
+    row.state = row.stateMask;
+    try testing.expect(win.SendMessageW(app.manager.list, win.LVM_SETITEMSTATE, 0, @bitCast(@intFromPtr(&row))) != 0);
+    const duplicate = win.FindWindowExW(app.manager.window, null, windows.wide("Button"), windows.wide("複製")) orelse return error.TestDuplicateButton;
+    const duplicate_id: win.WPARAM = @intCast(win.GetDlgCtrlID(duplicate));
+
+    {
+        try testing.expect(win.SetWindowSubclass(app.palette.profile, Fault.rejectRefresh, 1, 0) != 0);
+        defer _ = win.RemoveWindowSubclass(app.palette.profile, Fault.rejectRefresh, 1);
+        _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, duplicate_id, @bitCast(@intFromPtr(duplicate)));
+        const duplicate_notice = try windows.text(app.manager.notice, heap);
+        defer heap.free(duplicate_notice);
+        try testing.expectEqualStrings("保存済みです。パレットを更新できませんでした。パレットを開き直してください。", duplicate_notice);
+        try testing.expect(app.palette.refresh_failed and !app.manager.list_update_failed);
+        try testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(app.manager.list, win.LVM_GETITEMCOUNT, 0, 0));
+        var duplicated = try db.load(heap);
+        defer duplicated.deinit();
+        try testing.expectEqual(@as(usize, 2), duplicated.data.shared_items.len);
+        try testing.expectEqual(@as(usize, 1), app.history.length);
+
+        try testing.expect(win.SetWindowSubclass(app.manager.list, Fault.rejectRefresh, 2, 0) != 0);
+        defer _ = win.RemoveWindowSubclass(app.manager.list, Fault.rejectRefresh, 2);
+        const undo = app.manager.undo_button;
+        _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, @intCast(win.GetDlgCtrlID(undo)), @bitCast(@intFromPtr(undo)));
+        const undo_notice = try windows.text(app.manager.notice, heap);
+        defer heap.free(undo_notice);
+        try testing.expectEqualStrings("保存済みです。管理画面とパレットを更新できませんでした。両方の画面を開き直してください。", undo_notice);
+        try testing.expect(app.palette.refresh_failed and app.manager.list_update_failed);
+        try testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(app.manager.list, win.LVM_GETITEMCOUNT, 0, 0));
+        try testing.expectEqual(@as(usize, 0), app.history.length);
+    }
+    app.manager.refresh();
+    app.palette.refresh(app.snapshot.data);
+    try testing.expect(!app.palette.refresh_failed and !app.manager.list_update_failed);
+    try testing.expectEqual(@as(win.LRESULT, 1), win.SendMessageW(app.manager.list, win.LVM_GETITEMCOUNT, 0, 0));
+    try testing.expectEqual(@as(usize, 1), app.palette.count);
+    var restored = try db.load(heap);
+    defer restored.deinit();
+    try testing.expectEqual(@as(usize, 1), restored.data.shared_items.len);
+    try testing.expectEqualStrings("alpha", restored.data.shared_items[0].id);
+    try testing.expectEqual(@as(u64, 2), app.library_revision);
+
+    {
+        try testing.expect(win.SetWindowSubclass(app.manager.scope, Fault.rejectRefresh, 3, 0) != 0);
+        defer _ = win.RemoveWindowSubclass(app.manager.scope, Fault.rejectRefresh, 3);
+        try testing.expect(win.SendMessageW(app.manager.list, win.LVM_SETITEMSTATE, 0, @bitCast(@intFromPtr(&row))) != 0);
+        _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, duplicate_id, @bitCast(@intFromPtr(duplicate)));
+        const scope_notice = try windows.text(app.manager.notice, heap);
+        defer heap.free(scope_notice);
+        try testing.expectEqualStrings("保存済みです。管理画面を更新できませんでした。管理画面を開き直してください。", scope_notice);
+        try testing.expect(app.manager.refreshFailed() and !app.manager.list_update_failed and !app.palette.refresh_failed);
+        try testing.expect(win.IsWindowEnabled(app.manager.scope) == 0);
+        try testing.expect(win.IsWindowEnabled(duplicate) == 0);
+        try testing.expectEqual(@as(usize, 2), app.palette.count);
+        var saved = try db.load(heap);
+        defer saved.deinit();
+        try testing.expectEqual(@as(usize, 2), saved.data.shared_items.len);
+    }
+    app.manager.refresh();
+    try testing.expect(!app.manager.refreshFailed() and win.IsWindowEnabled(app.manager.scope) != 0);
+    try testing.expectEqual(@as(win.LRESULT, 1), win.SendMessageW(app.manager.scope, win.CB_GETCOUNT, 0, 0));
+    try testing.expectEqual(@as(u64, 3), app.library_revision);
+
+    const backup_path = try std.fs.path.join(heap, &.{ root, "before-import.json" });
+    defer heap.free(backup_path);
+    var before_import = try db.load(heap);
+    defer before_import.deinit();
+    var imported: storage.Data = .{ .shared_items = &.{.{ .id = "imported", .name = "Imported", .text = "replacement" }} };
+    imported.preferences.shortcut_keys[@intFromEnum(shortcuts.Action.palette)] = "^+F12";
+    const bindings = try shortcuts.validate(imported.preferences.shortcut_keys);
+    app.worker.registrations_current = true;
+    {
+        try testing.expect(win.SetWindowSubclass(app.manager.list, Fault.rejectRefresh, 2, 0) != 0);
+        defer _ = win.RemoveWindowSubclass(app.manager.list, Fault.rejectRefresh, 2);
+        const warning = commit: {
+            var incoming = storage.Snapshot.init(heap);
+            errdefer incoming.deinit();
+            incoming.data = imported;
+            break :commit try app.commitImportedData(incoming, bindings, backup_path);
+        };
+        try testing.expectEqualStrings("保存済みです。管理画面を更新できませんでした。管理画面を開き直してください。", warning);
+        try testing.expect(app.manager.list_update_failed and !app.palette.refresh_failed);
+        try testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(app.manager.list, win.LVM_GETITEMCOUNT, 0, 0));
+        try testing.expectEqual(@as(usize, 1), app.palette.count);
+        try testing.expectEqual(@as(usize, 0), app.history.length);
+        try testing.expect(!app.worker.registrations_current);
+        try testing.expectEqualDeep(bindings, app.keyboard.tracker.bindings);
+        var saved = try db.load(heap);
+        defer saved.deinit();
+        try testing.expect(storage.Data.eql(imported, saved.data));
+    }
+    var backup = try storage.readJson(heap, backup_path);
+    defer backup.deinit();
+    try testing.expect(storage.Data.eql(before_import.data, backup.data));
+    app.manager.refresh();
+    try testing.expect(!app.manager.refreshFailed());
+    try testing.expectEqual(@as(win.LRESULT, 1), win.SendMessageW(app.manager.list, win.LVM_GETITEMCOUNT, 0, 0));
+    try testing.expectEqual(@as(u64, 4), app.library_revision);
+}
+
+test "SQLite commit and recovery failures preserve the live shortcuts and expose the failure to the editor" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    const Connection = @FieldType(storage.Store, "db");
+    const SqliteApi = @FieldType(Connection, "api");
+    const Exec = @FieldType(SqliteApi, "sqlite3_exec");
+    const Close = @FieldType(SqliteApi, "sqlite3_close_v2");
+    const Args = @typeInfo(@typeInfo(Exec).pointer.child).@"fn".params;
+    const Fault = struct {
+        const Mode = enum { observe, rollback, rollback_and_close };
+        threadlocal var mode: Mode = undefined;
+        threadlocal var exec_original: Exec = undefined;
+        threadlocal var close_original: Close = undefined;
+        threadlocal var commits: usize = 0;
+        threadlocal var rollbacks: usize = 0;
+        threadlocal var recovery_closes: usize = 0;
+
+        fn exec(
+            db: Args[0].type.?,
+            sql: Args[1].type.?,
+            callback: Args[2].type.?,
+            context: Args[3].type.?,
+            message: Args[4].type.?,
+        ) callconv(.c) c_int {
+            const text = std.mem.span(sql);
+            if (std.mem.eql(u8, text, "COMMIT")) commits += 1;
+            if (std.mem.eql(u8, text, "ROLLBACK")) {
+                rollbacks += 1;
+                if (mode != .observe) return 10; // SQLITE_IOERR
+            }
+            return exec_original(db, sql, callback, context, message);
+        }
+
+        fn close(db: Args[0].type.?) callconv(.c) c_int {
+            recovery_closes += 1;
+            if (mode == .rollback_and_close) return 5; // SQLITE_BUSY
+            return close_original(db);
+        }
+    };
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const default_data: storage.Data = .{};
+    const original_bindings = try shortcuts.validate(default_data.preferences.shortcut_keys);
+    var requested = default_data.preferences;
+    requested.shortcut_keys[@intFromEnum(shortcuts.Action.palette)] = "^+q";
+    requested.shortcut_keys[@intFromEnum(shortcuts.Action.chat_focus)] = "^+f";
+    requested.shortcut_keys[@intFromEnum(shortcuts.Action.stop)] = "^+s";
+    requested.reaction_count = 10;
+
+    for (std.meta.tags(Fault.Mode)) |mode| {
+        const path = try std.fmt.allocPrint(heap, "{s}\\shortcut-{s}.db", .{ root, @tagName(mode) });
+        defer heap.free(path);
+        {
+            var db = try storage.Store.open(heap, path);
+            defer db.close();
+            var app: App = .{
+                .executable = undefined,
+                .db = &db,
+                .snapshot = try db.load(heap),
+                .history = storage.LibraryHistory.init(heap),
+                .running_digest = null,
+            };
+            defer app.deinit();
+            app.keyboard.tracker.replace(original_bindings);
+            try db.db.exec(
+                \\CREATE TABLE verify_key_commit_parent(id INTEGER PRIMARY KEY);
+                \\CREATE TABLE verify_key_commit_child(id INTEGER REFERENCES verify_key_commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
+                \\CREATE TRIGGER reject_test_draft AFTER UPDATE OF key ON shortcut_bindings
+                \\WHEN NEW.action='palette' AND NEW.key='^+q'
+                \\BEGIN INSERT INTO verify_key_commit_child(id) VALUES(1); END;
+            );
+            const exec_original = db.db.api.sqlite3_exec;
+            const close_original = db.db.api.sqlite3_close_v2;
+            defer {
+                db.db.api.sqlite3_exec = exec_original;
+                db.db.api.sqlite3_close_v2 = close_original;
+            }
+            Fault.mode = mode;
+            Fault.exec_original = exec_original;
+            Fault.close_original = close_original;
+            Fault.commits = 0;
+            Fault.rollbacks = 0;
+            Fault.recovery_closes = 0;
+            db.db.api.sqlite3_exec = Fault.exec;
+            db.db.api.sqlite3_close_v2 = Fault.close;
+
+            try testing.expectError(error.ConstraintViolation, app.writePreferences(requested));
+            try testing.expectEqual(@as(usize, 1), Fault.commits);
+            try testing.expectEqual(@as(usize, 1), Fault.rollbacks);
+            try testing.expectEqual(@as(usize, if (mode == .observe) 0 else 1), Fault.recovery_closes);
+            try testing.expectEqualDeep(original_bindings, app.keyboard.tracker.bindings);
+            try testing.expect(storage.Data.eql(default_data, app.snapshot.data));
+            try testing.expectEqual(@as(u64, 0), app.library_revision);
+            const codes = db.failureCodes();
+            try testing.expectEqual(@as(c_int, 19), codes.original & 0xff); // SQLITE_CONSTRAINT
+            try testing.expectEqual(@as(?c_int, if (mode == .observe) null else 10), codes.rollback);
+            try testing.expectEqual(@as(?c_int, if (mode == .rollback_and_close) 5 else null), codes.close);
+
+            const text = try saveFailureMessage(heap, error.ConstraintViolation, codes);
+            defer heap.free(text);
+            try testing.expect(std.mem.startsWith(u8, text, "ConstraintViolation"));
+            if (mode == .observe) {
+                try testing.expectEqualStrings("ConstraintViolation", text);
+            } else {
+                try testing.expect(std.mem.indexOf(u8, text, "ロールバック エラー 10") != null);
+                try testing.expect(std.mem.indexOf(u8, text, "再起動して設定を確認") != null);
+                try testing.expectEqual(mode == .rollback_and_close, std.mem.indexOf(u8, text, "接続終了 エラー 5") != null);
+                try testing.expectError(error.DatabaseClosedAfterRollbackFailure, app.writePreferences(requested));
+                try testing.expectEqualDeep(codes, db.failureCodes());
+            }
+        }
+        var reopened = try storage.Store.open(heap, path);
+        defer reopened.close();
+        var saved = try reopened.load(heap);
+        defer saved.deinit();
+        try testing.expect(storage.Data.eql(default_data, saved.data));
+        try testing.expectEqual(@as(i64, 0), try reopened.db.scalarInt("SELECT COUNT(*) FROM verify_key_commit_child", &.{}));
+    }
+}
+
+test "startup keyboard-hook failure advice includes the native cause" {
+    const heap = std.testing.allocator;
+    const text = try hookFailureMessage(heap, win.ERROR_ACCESS_DENIED);
+    defer heap.free(text);
+    try std.testing.expect(std.mem.indexOf(u8, text, "再起動") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "Windows エラー 5") != null);
+}
+
+fn keyboardContext() input.ShortcutContext {
+    const app = current orelse return .{ .window = 0, .browser = false, .stoppable = false };
+    const target = win.GetForegroundWindow();
+    return .{
+        .window = windows.number(target),
+        .browser = !app.modal and input.browser(target) != null,
+        .stoppable = app.queue.busy() or app.reaction != null or app.preparation != null or app.worker.active,
+        .suspended = app.modal,
+    };
+}
+
+fn shortcut(event: shortcuts.Event) void {
+    const app = current orelse return;
+    if (event.action == .stop) {
+        app.stop();
+        return;
+    }
+    // The hook owns a captured key's release even after its window loses foreground.
+    if (app.modal or !app.foreground(event.window)) return;
+    if (app.manager.isEditing()) {
+        if (event.action == .palette) app.manager.show();
+        return;
+    }
+    if (event.action == .palette and (app.reaction != null or app.preparation != null)) {
+        _ = win.PostMessageW(app.window, feedback.wm_present, 0, 0);
+        return;
+    }
+    const video = if (app.reaction) |job|
+        (if (job.target == event.window) job.video else null)
+    else if (app.preparation) |pending|
+        (if (pending.target == event.window) pending.video else null)
+    else
+        null;
+    const generation = app.queue.generation;
+    app.queue.enqueue(allocator, event, app.library_revision, video) catch {
+        app.queue.cancel();
+        if (app.input_cancellation) |pending| pending.signal.cancel();
+        return;
+    };
+    if (app.input_cancellation) |pending| {
+        if (app.queue.generation != generation or pending.target != event.window) pending.signal.cancel();
+    }
+    _ = win.PostMessageW(app.window, drain_message, 0, 0);
+}
+
+fn messageHandler(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+    const app = current orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
+    switch (message) {
+        win.WM_CLOSE, instance.take_over => app.quit(false),
+        win.WM_COMMAND => {
+            if (lparam != 0 or windows.high(wparam) != 0) return win.DefWindowProcW(hwnd, message, wparam, lparam);
+            app.menuCommand(windows.low(wparam));
+        },
+        tray_message => switch (lparam) {
+            win.WM_LBUTTONDBLCLK => app.show(.active_window),
+            win.WM_RBUTTONUP => app.contextMenu(),
+            else => {},
+        },
+        win.WM_TIMER => switch (wparam) {
+            timer_reaction_feedback => app.hideFinishedReaction(),
+            timer_status_tip => app.expireStatusTip(),
+            else => if (app.reaction_timer) |timer| {
+                if (wparam == timer.id) switch (timer.kind) {
+                    .preparation => app.prepareNow(),
+                    .send => app.advanceReaction(),
+                };
+            },
+        },
+        drain_message => app.drain(),
+        advance_reaction_message => if (wparam == app.reaction_generation) app.advanceReaction(),
+        view.wm_insert => app.insertFromPalette(wparam),
+        view.wm_stop, feedback.wm_stop => app.stop(),
+        feedback.wm_present => if (!app.quitting and (app.reaction != null or app.preparation != null or app.reaction_hide_at != null)) app.reaction_progress.show(),
+        view.wm_manage => app.openManagement(true),
+        view.wm_link => app.linkFromPalette(),
+        view.wm_support => app.contextMenu(),
+        view.wm_mode => app.changeMode(wparam == 0),
+        view.wm_profile => app.changeProfile(wparam),
+        view.wm_start_reaction, view.wm_save_defaults => if (lparam != 0) {
+            const choice: *const view.ReactionOptions = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            app.paletteReaction(choice.*, message == view.wm_save_defaults);
+        },
+        management.wm_changed => {
+            app.libraryChanged();
+            return @intFromBool(app.palette.refresh_failed);
+        },
+        management.wm_back => app.show(.previous_target),
+        management.wm_support => app.contextMenu(),
+        management.wm_edit_allowed => return @intFromBool(app.canEdit()),
+        management.wm_resolve_channel => if (lparam != 0) app.resolveChannel(@ptrFromInt(@as(usize, @bitCast(lparam)))),
+        else => return win.DefWindowProcW(hwnd, message, wparam, lparam),
+    }
+    return 0;
+}
+
+fn dispatch(message: *win.MSG) void {
+    if (current) |app| {
+        if (app.manager.filterMessage(message)) return;
+        if (app.palette.filterMessage(message)) return;
+    }
+    _ = win.TranslateMessage(message);
+    _ = win.DispatchMessageW(message);
+}
+
+fn pump(signal: win.HANDLE, milliseconds: u32) !void {
+    if (win.MsgWaitForMultipleObjectsEx(1, &signal, milliseconds, win.QS_ALLINPUT, win.MWMO_INPUTAVAILABLE) == win.WAIT_FAILED)
+        return error.WorkerWaitFailed;
+    var message: win.MSG = undefined;
+    var count: usize = 0;
+    while (count < 32 and win.PeekMessageW(&message, null, 0, 0, win.PM_REMOVE) != 0) : (count += 1) {
+        if (message.message == win.WM_QUIT) {
+            win.PostQuitMessage(@intCast(message.wParam));
+            return;
+        }
+        dispatch(&message);
+    }
+}
