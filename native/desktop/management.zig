@@ -102,7 +102,6 @@ const Editor = struct {
     parent: win.HWND = null,
     parent_was_enabled: bool = false,
     viewport: Viewport = .{},
-    laying_out: bool = false,
 };
 
 // Win32 asks for virtual item values independently of model commits. The
@@ -187,7 +186,6 @@ pub const Management = struct {
     scope_update_failed: bool = false,
     refreshing: bool = false,
     refresh_pending: bool = false,
-    laying_out: bool = false,
     viewport: Viewport = .{},
     opening_editor: bool = false,
     saving_editor: bool = false,
@@ -845,9 +843,12 @@ pub const Management = struct {
 
     fn resizeEditor(self: *Management) void {
         const e = &self.dialog;
-        if (e.save == null or e.laying_out) return;
-        e.laying_out = true;
-        defer e.laying_out = false;
+        if (e.save == null) return;
+        e.viewport.arrange(e.window, self, placeEditor);
+    }
+
+    fn placeEditor(self: *Management) void {
+        const e = &self.dialog;
         const dpi = self.dpi;
         const height: i32 = switch (e.mode) {
             .add_item, .edit_item => 300,
@@ -1001,9 +1002,11 @@ pub const Management = struct {
     }
 
     fn resize(self: *Management) void {
-        if (self.list == null or self.back == null or self.laying_out) return;
-        self.laying_out = true;
-        defer self.laying_out = false;
+        if (self.list == null or self.back == null) return;
+        self.viewport.arrange(self.window, self, placeControls);
+    }
+
+    fn placeControls(self: *Management) void {
         const dpi = self.dpi;
         const content = self.viewport.layout(self.window, dpi, .{ .width = 344, .height = 372 }, null) orelse return;
         const top = -self.viewport.y;
@@ -1224,11 +1227,13 @@ fn dataFromWindow(hwnd: win.HWND, message: win.UINT, lparam: win.LPARAM) ?*Manag
 fn viewProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
     const self = dataFromWindow(hwnd, message, lparam) orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
-        win.WM_SIZE => if (!self.laying_out and wparam != win.SIZE_MINIMIZED) {
+        win.WM_SIZE => if (!self.viewport.updating and wparam != win.SIZE_MINIMIZED) {
+            const revision = self.viewport.scroll_revision;
             self.resize();
-            if (self.viewport.revealFocus(hwnd)) self.resize();
+            if (revision == self.viewport.scroll_revision and self.viewport.revealFocus(hwnd)) self.resize();
         },
-        viewport.wm_focus_changed => if (!self.laying_out and self.viewport.revealFocus(hwnd)) self.resize(),
+        viewport.wm_reflow => if (self.viewport.takeReflow(hwnd)) self.resize(),
+        viewport.wm_focus_changed => if (self.viewport.revealFocus(hwnd)) self.resize(),
         win.WM_GETMINMAXINFO => {
             const info: *win.MINMAXINFO = @ptrFromInt(@as(usize, @bitCast(lparam)));
             viewport.minimumTrack(hwnd, self.dpi, info);
@@ -1246,11 +1251,13 @@ fn viewProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: 
 fn editorProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
     const self = dataFromWindow(hwnd, message, lparam) orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
-        win.WM_SIZE => if (!self.dialog.laying_out and wparam != win.SIZE_MINIMIZED) {
+        win.WM_SIZE => if (!self.dialog.viewport.updating and wparam != win.SIZE_MINIMIZED) {
+            const revision = self.dialog.viewport.scroll_revision;
             self.resizeEditor();
-            if (self.dialog.viewport.revealFocus(hwnd)) self.resizeEditor();
+            if (revision == self.dialog.viewport.scroll_revision and self.dialog.viewport.revealFocus(hwnd)) self.resizeEditor();
         },
-        viewport.wm_focus_changed => if (!self.dialog.laying_out and self.dialog.viewport.revealFocus(hwnd)) self.resizeEditor(),
+        viewport.wm_reflow => if (self.dialog.viewport.takeReflow(hwnd)) self.resizeEditor(),
+        viewport.wm_focus_changed => if (self.dialog.viewport.revealFocus(hwnd)) self.resizeEditor(),
         win.WM_HSCROLL, win.WM_VSCROLL => if (lparam == 0 and self.dialog.viewport.scroll(hwnd, if (message == win.WM_HSCROLL) win.SB_HORZ else win.SB_VERT, wparam, self.dpi)) self.resizeEditor(),
         win.DM_GETDEFID => return (win.DC_HASDEFID << 16) | @intFromEnum(Id.confirm),
         win.WM_CLOSE => self.cancelDialog(),

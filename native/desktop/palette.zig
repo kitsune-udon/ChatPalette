@@ -53,7 +53,6 @@ pub const Palette = struct {
     message: win.HWND = null,
     search_hint: win.HWND = null,
     viewport: Viewport = .{},
-    laying_out: bool = false,
     data: storage.Data = .{},
     rows: [500]Row = undefined,
     count: usize = 0,
@@ -119,6 +118,7 @@ pub const Palette = struct {
         if (self.selected_id) |id| allocator.free(id);
         self.selected_id = null;
         self.window = null;
+        self.viewport = .{};
     }
 
     pub fn show(self: *Palette) void {
@@ -350,9 +350,11 @@ pub const Palette = struct {
     }
 
     fn resize(self: *Palette) void {
-        if (self.search_hint == null or self.laying_out) return;
-        self.laying_out = true;
-        defer self.laying_out = false;
+        if (self.search_hint == null) return;
+        self.viewport.arrange(self.window, self, placeControls);
+    }
+
+    fn placeControls(self: *Palette) void {
         const content = self.viewport.layout(self.window, self.dpi, .{ .width = 344, .height = 373 }, .{ .below_width = 535, .minimum_height = 405 }) orelse return;
         self.layout(self.dpi.fittingUnits(content.width), self.dpi.fittingUnits(content.height));
     }
@@ -448,11 +450,13 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             _ = win.SendMessageW(hwnd, win.WM_CLOSE, 0, 0);
         },
         win.WM_SHOWWINDOW => if (wparam == 0) palette.cancelSearch(),
-        win.WM_SIZE => if (!palette.laying_out and wparam != win.SIZE_MINIMIZED) {
+        win.WM_SIZE => if (!palette.viewport.updating and wparam != win.SIZE_MINIMIZED) {
+            const revision = palette.viewport.scroll_revision;
             palette.resize();
-            if (palette.viewport.revealFocus(hwnd)) palette.resize();
+            if (revision == palette.viewport.scroll_revision and palette.viewport.revealFocus(hwnd)) palette.resize();
         },
-        viewport.wm_focus_changed => if (!palette.laying_out and palette.viewport.revealFocus(hwnd)) palette.resize(),
+        viewport.wm_reflow => if (palette.viewport.takeReflow(hwnd)) palette.resize(),
+        viewport.wm_focus_changed => if (palette.viewport.revealFocus(hwnd)) palette.resize(),
         win.WM_HSCROLL, win.WM_VSCROLL => if (lparam == 0 and palette.viewport.scroll(hwnd, if (message == win.WM_HSCROLL) win.SB_HORZ else win.SB_VERT, wparam, palette.dpi)) palette.resize(),
         win.WM_TIMER => if (wparam == search_timer) palette.searchTimer(win.GetTickCount64(), win.IsWindowVisible(hwnd) != 0),
         win.WM_GETMINMAXINFO => {

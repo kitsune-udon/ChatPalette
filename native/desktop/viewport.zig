@@ -3,6 +3,7 @@ const windows = @import("win.zig");
 const win = windows.api;
 
 pub const wm_focus_changed = win.WM_APP + 55;
+pub const wm_reflow = win.WM_APP + 56;
 
 pub fn minimumTrack(window: win.HWND, dpi: windows.Dpi, limits: *win.MINMAXINFO) void {
     // The legacy minimum is a DPI-scaled client size. Its outer frame
@@ -33,13 +34,63 @@ pub fn trackFocus(child: win.HWND, parent: win.HWND, styles: win.DWORD) !void {
 fn focusProcedure(child: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, id: usize, parent: usize) callconv(.winapi) win.LRESULT {
     if (message == win.WM_NCDESTROY) _ = win.RemoveWindowSubclass(child, focusProcedure, id);
     const result = win.DefSubclassProc(child, message, wparam, lparam);
-    if (message == win.WM_SETFOCUS) _ = win.PostMessageW(@ptrFromInt(parent), wm_focus_changed, 0, 0);
+    if (message == win.WM_SETFOCUS and win.GetFocus() == child)
+        _ = win.SendMessageW(@ptrFromInt(parent), wm_focus_changed, 0, 0);
     return result;
 }
 
 pub const Viewport = struct {
     x: i32 = 0,
     y: i32 = 0,
+    owner: win.HWND = null,
+    updating: bool = false,
+    repaint: bool = false,
+    follow_focus: bool = false,
+    posted: bool = false,
+    scroll_revision: u64 = 0,
+
+    pub fn arrange(self: *Viewport, window: win.HWND, owner: anytype, comptime draw: fn (@TypeOf(owner)) void) void {
+        if (self.owner != window) self.* = .{ .owner = window };
+        if (self.updating) {
+            self.repaint = true;
+            return;
+        }
+        self.updating = true;
+        for (0..2) |_| {
+            self.repaint = false;
+            var before: win.RECT = undefined;
+            const measured = win.GetWindowRect(window, &before) != 0;
+            draw(owner);
+            if (self.owner != window) return;
+            if (win.IsWindow(window) == 0) {
+                self.* = .{};
+                return;
+            }
+            var after: win.RECT = undefined;
+            if (measured and win.GetWindowRect(window, &after) != 0 and
+                (before.right - before.left != after.right - after.left or before.bottom - before.top != after.bottom - after.top))
+                self.repaint = true;
+            if (!self.repaint and self.follow_focus) {
+                self.follow_focus = false;
+                self.repaint = self.revealFocusNow(window);
+            }
+            if (!self.repaint) break;
+        }
+        self.updating = false;
+        if (self.repaint and !self.posted) self.posted = win.PostMessageW(window, wm_reflow, 0, 0) != 0;
+    }
+
+    pub fn takeReflow(self: *Viewport, window: win.HWND) bool {
+        if (!self.posted or self.owner != window) return false;
+        self.posted = false;
+        return self.repaint;
+    }
+
+    fn acceptScroll(self: *Viewport, changed: bool) bool {
+        self.scroll_revision +%= 1;
+        self.follow_focus = false;
+        return changed;
+    }
 
     pub const Size = struct { width: i32, height: i32 };
     pub const Compact = struct { below_width: i32, minimum_height: i32 };
@@ -83,17 +134,26 @@ pub const Viewport = struct {
             win.SB_THUMBPOSITION => if (info.nMax <= std.math.maxInt(u16)) @as(i32, windows.high(wparam)) else offset.*,
             else => return false,
         };
-        return moveOffset(offset, info, next);
+        return self.acceptScroll(moveOffset(offset, info, next));
     }
 
     pub fn wheel(self: *Viewport, window: win.HWND, wparam: win.WPARAM) bool {
         const info = scrollInfo(window, win.SB_VERT) orelse return false;
         // Match the legacy viewport: one wheel notch is 96 client pixels.
         const delta: i16 = @bitCast(windows.high(wparam));
-        return moveOffset(&self.y, info, self.y - win.MulDiv(delta, 96, win.WHEEL_DELTA));
+        return self.acceptScroll(moveOffset(&self.y, info, self.y - win.MulDiv(delta, 96, win.WHEEL_DELTA)));
     }
 
     pub fn revealFocus(self: *Viewport, window: win.HWND) bool {
+        if (self.owner != window or window == null) return false;
+        if (self.updating or self.repaint) {
+            self.follow_focus = true;
+            return false;
+        }
+        return self.revealFocusNow(window);
+    }
+
+    fn revealFocusNow(self: *Viewport, window: win.HWND) bool {
         const focus = win.GetFocus();
         if (focus == null or win.IsChild(window, focus) == 0) return false;
         var child: win.RECT = undefined;

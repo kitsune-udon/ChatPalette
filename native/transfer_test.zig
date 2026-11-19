@@ -719,7 +719,7 @@ fn checkEditorHistory(scratch: std.mem.Allocator, installation: std.fs.Dir, path
     report.editor_long_change_saved_and_reopened = true;
 
     report.stage = "editor-long-undo";
-    if (win.IsWindowEnabled(try ui.control(manager, 235)) == 0) return error.LongEditDidNotCreateUndo;
+    if (!waitUntilEnabled(try ui.control(manager, 235), pid)) return error.LongEditDidNotCreateUndo;
     try ui.click(manager, 235);
     try expectDb(path, original);
     editor = try openLastEditor(manager, pid);
@@ -1403,7 +1403,7 @@ fn driveTransfer(scratch: std.mem.Allocator, host: win.HWND, pid: u32, step: Tra
         .export_file, .export_existing, .import_invalid, .import_no, .import_locked, .import_yes => |value| value,
         .cancel_picker => unreachable,
     };
-    try ui.setText(picker.filename, path);
+    try typePickerFilename(scratch, picker, path, pid);
     try clickDialog(picker.window, win.IDOK);
     try ui.waitClosed(picker.window, pid);
     switch (step) {
@@ -1496,6 +1496,74 @@ fn isEdit(window: win.HWND) bool {
     var class: [16]u16 = undefined;
     const length = win.GetClassNameW(window, &class, class.len);
     return length > 0 and std.mem.eql(u16, class[0..@intCast(length)], windows.wide("Edit"));
+}
+
+fn keyStroke(code: u16, scan: u16, flags: win.DWORD) win.INPUT {
+    var event = std.mem.zeroes(win.INPUT);
+    event.type = win.INPUT_KEYBOARD;
+    event.u.ki.wVk = code;
+    event.u.ki.wScan = scan;
+    event.u.ki.dwFlags = flags;
+    return event;
+}
+
+// Explorer can display a WM_SETTEXT value without using it as the selected filename.
+fn typePickerFilename(scratch: std.mem.Allocator, picker: Picker, path: []const u8, pid: u32) !void {
+    const edit = picker.filename;
+    if (ui.windowPid(picker.window) != pid or ui.windowPid(edit) != pid or
+        win.GetAncestor(edit, win.GA_ROOT) != picker.window)
+        return error.ForeignProductProcess;
+    if (win.GetForegroundWindow() != picker.window) _ = win.SetForegroundWindow(picker.window);
+    if (win.GetForegroundWindow() != picker.window) return error.FilePickerNotForeground;
+    var rect: win.RECT = undefined;
+    if (win.GetWindowRect(edit, &rect) == 0) return error.FilePickerEditNotVisible;
+    const point: win.POINT = .{
+        .x = @divTrunc(rect.left + rect.right, 2),
+        .y = @divTrunc(rect.top + rect.bottom, 2),
+    };
+    if (win.WindowFromPhysicalPoint(point) != edit or win.GetAsyncKeyState(win.VK_LBUTTON) < 0 or
+        win.SetPhysicalCursorPos(point.x, point.y) == 0)
+        return error.FilePickerEditNotVisible;
+    if (win.GetForegroundWindow() != picker.window) return error.FilePickerNotForeground;
+    var mouse = std.mem.zeroes([2]win.INPUT);
+    mouse[0].type = win.INPUT_MOUSE;
+    mouse[0].u.mi.dwFlags = win.MOUSEEVENTF_LEFTDOWN;
+    mouse[1].type = win.INPUT_MOUSE;
+    mouse[1].u.mi.dwFlags = win.MOUSEEVENTF_LEFTUP;
+    const clicked = win.SendInput(mouse.len, &mouse, @sizeOf(win.INPUT));
+    if (clicked == 1) _ = win.SendInput(1, &mouse[1], @sizeOf(win.INPUT));
+    if (clicked != mouse.len) return error.FilePickerEditNotFocused;
+    var info = std.mem.zeroes(win.GUITHREADINFO);
+    info.cbSize = @sizeOf(win.GUITHREADINFO);
+    const thread = win.GetWindowThreadProcessId(picker.window, null);
+    const deadline = win.GetTickCount64() + 800;
+    while (win.GetTickCount64() < deadline) {
+        if (win.GetGUIThreadInfo(thread, &info) != 0 and info.hwndFocus == edit) break;
+        win.Sleep(15);
+    }
+    if (info.hwndFocus != edit or win.GetForegroundWindow() != picker.window) return error.FilePickerEditNotFocused;
+
+    const wide = try std.unicode.utf8ToUtf16LeAlloc(scratch, path);
+    const inputs = try scratch.alloc(win.INPUT, 4 + wide.len * 2);
+    inputs[0..4].* = .{
+        keyStroke(win.VK_CONTROL, 0, 0),
+        keyStroke('A', 0, 0),
+        keyStroke('A', 0, win.KEYEVENTF_KEYUP),
+        keyStroke(win.VK_CONTROL, 0, win.KEYEVENTF_KEYUP),
+    };
+    for (wide, 0..) |unit, i| {
+        inputs[4 + i * 2] = keyStroke(0, unit, win.KEYEVENTF_UNICODE);
+        inputs[5 + i * 2] = keyStroke(0, unit, win.KEYEVENTF_UNICODE | win.KEYEVENTF_KEYUP);
+    }
+    if (win.SendInput(@intCast(inputs.len), inputs.ptr, @sizeOf(win.INPUT)) != inputs.len)
+        return error.FilePickerKeyDelivery;
+    const until = win.GetTickCount64() + 1500;
+    while (win.GetTickCount64() < until) {
+        if (win.GetForegroundWindow() != picker.window) return error.FilePickerNotForeground;
+        if (std.mem.eql(u8, try ui.readText(scratch, edit), path)) return;
+        win.Sleep(15);
+    }
+    return error.FilenameFieldDidNotRetainPath;
 }
 
 fn clickDialog(dialog: win.HWND, id: c_int) !void {

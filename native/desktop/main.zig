@@ -55,7 +55,19 @@ pub fn run(mode: Startup) !void {
     defer owner.release();
     const data_dir = try std.fs.path.join(allocator, &.{ dir, "data" });
     defer allocator.free(data_dir);
-    try std.fs.cwd().makePath(data_dir);
+    std.fs.cwd().makePath(data_dir) catch |failure| {
+        std.debug.print("データフォルダーの準備失敗: {s}\n", .{@errorName(failure)});
+        if (mode != .smoke) {
+            const guidance = "データフォルダーを準備できません。同じ名前のファイルがないか、書き込み権限があるかを確認してください。";
+            if (std.fmt.allocPrint(allocator, "{s}\r\n対象: {s}\r\n原因: {s}", .{ guidance, data_dir, @errorName(failure) })) |details| {
+                defer allocator.free(details);
+                messageBox(null, details, windows.wide("起動エラー"), win.MB_ICONWARNING);
+            } else |_| {
+                messageBox(null, guidance, windows.wide("起動エラー"), win.MB_ICONWARNING);
+            }
+        }
+        return failure;
+    };
     const db_path = try std.fs.path.join(allocator, &.{ data_dir, "settings.db" });
     defer allocator.free(db_path);
     const opened = try openSettings(db_path, mode);
@@ -96,7 +108,10 @@ const Settings = struct { db: storage.Store, snapshot: storage.Snapshot };
 fn openSettings(path: []const u8, mode: Startup) !Settings {
     while (true) {
         if (readSettings(path)) |settings| return settings else |failure| {
-            if (mode == .smoke) return failure;
+            if (mode == .smoke) {
+                std.debug.print("設定の読み込み失敗: {s}\n", .{@errorName(failure)});
+                return failure;
+            }
             const choice = win.MessageBoxW(null, windows.wide("設定を読み込めませんでした。再試行で読み直し、無視で元の設定を退避して新規起動します。"), windows.wide("設定の復旧"), win.MB_ABORTRETRYIGNORE | win.MB_ICONERROR | win.MB_DEFBUTTON1);
             if (choice == win.IDRETRY) continue;
             if (choice != win.IDIGNORE) return failure;
@@ -997,7 +1012,10 @@ const App = struct {
         if (self.worker.active or self.reaction != null or self.preparation != null or self.modal or self.quitting) return;
         const command = self.queue.next() orelse return;
         const quick = command.event.action == .reaction;
-        if (quick) self.starting_reaction = command;
+        if (quick) {
+            self.starting_reaction = command;
+            self.updateReactionButtons();
+        }
         const success = self.execute(command) catch |failure| result: {
             if (quick) {
                 var detail: [256]u8 = undefined;
@@ -1360,10 +1378,12 @@ const App = struct {
     }
 
     fn failReactionStart(self: *App, reason: feedback.Reason, detail: []const u8) bool {
+        const revision = self.reaction_revision;
         const command = self.starting_reaction;
         self.starting_reaction = null;
         if (command) |starting| self.queue.finish(starting, false);
-        self.showReactionResult(feedback.Result.quickStart(reason, detail));
+        self.updateReactionButtons();
+        if (self.reaction_revision == revision) self.showReactionResult(feedback.Result.quickStart(reason, detail));
         return false;
     }
 
@@ -1409,7 +1429,7 @@ const App = struct {
     }
 
     fn reactionButtonsActive(self: *const App) bool {
-        return self.reaction != null or self.preparation != null or self.reactionQueued();
+        return self.reaction != null or self.preparation != null or self.quickReactionStarting() or self.reactionQueued();
     }
 
     fn updateReactionButtons(self: *App) void {
@@ -1418,8 +1438,10 @@ const App = struct {
         defer self.updating_reaction_buttons = false;
         while (true) {
             const active = self.reactionButtonsActive();
+            const can_edit = self.canEdit();
             self.palette.reactionButtons(active);
-            if (active == self.reactionButtonsActive()) return;
+            self.manager.updateActions();
+            if (active == self.reactionButtonsActive() and can_edit == self.canEdit()) return;
         }
     }
 

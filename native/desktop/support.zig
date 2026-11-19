@@ -105,6 +105,8 @@ fn addChoice(hwnd: win.HWND, label: []const u8) !void {
 
 const Dialog = struct {
     window: win.HWND = null,
+    disabled_parent: win.HWND = null,
+    original_focus: win.HWND = null,
     dpi: windows.Dpi = .{},
     font: windows.GuiFont = .{},
     labels: [storage.action_count]win.HWND = @splat(null),
@@ -124,7 +126,6 @@ const Dialog = struct {
     save: win.HWND = null,
     cancel: win.HWND = null,
     viewport: Viewport = .{},
-    laying_out: bool = false,
     editor: ?ShortcutEditor = null,
     finishing: bool = false,
 
@@ -196,6 +197,7 @@ const Dialog = struct {
             if ((self.itemsDirty() or !sameKeys(editor.baseline.keys, pending.keys)) and
                 !self.askDiscard("未保存の変更を破棄して閉じますか？")) return;
         }
+        self.releaseParent();
         _ = win.ShowWindow(self.window, win.SW_HIDE);
     }
 
@@ -353,9 +355,11 @@ const Dialog = struct {
     }
 
     fn resize(self: *Dialog) void {
-        if (self.cancel == null or self.laying_out) return;
-        self.laying_out = true;
-        defer self.laying_out = false;
+        if (self.cancel == null) return;
+        self.viewport.arrange(self.window, self, placeControls);
+    }
+
+    fn placeControls(self: *Dialog) void {
         const is_document = self.document != null;
         const content = self.viewport.layout(self.window, self.dpi, .{
             .width = if (is_document) 344 else 408,
@@ -394,16 +398,31 @@ const Dialog = struct {
         self.place(self.cancel, width - 106, footer, 90, 30);
     }
 
+    fn releaseParent(self: *Dialog) void {
+        const parent = self.disabled_parent orelse return;
+        self.disabled_parent = null;
+        if (win.IsWindow(parent) == 0) return;
+        const owned = win.GetForegroundWindow() == self.window;
+        _ = win.EnableWindow(parent, 1);
+        if (!owned or win.IsWindowVisible(parent) == 0 or win.IsWindowEnabled(parent) == 0) return;
+        const current = win.GetForegroundWindow();
+        if (current != self.window and current != parent) return;
+        _ = win.SetForegroundWindow(parent);
+        const focus = self.original_focus;
+        if (win.GetForegroundWindow() == parent and focus != null and win.IsChild(parent, focus) != 0 and
+            win.IsWindowVisible(focus) != 0 and win.IsWindowEnabled(focus) != 0) _ = win.SetFocus(focus);
+    }
+
     fn run(self: *Dialog, parent: win.HWND) !void {
         self.font.applyChildren(self.window);
         windows.fitWindow(self.window, parent);
         self.resize();
-        const disabled = parent != null and win.IsWindowEnabled(parent) != 0;
-        if (disabled) _ = win.EnableWindow(parent, 0);
-        defer if (disabled) {
-            _ = win.EnableWindow(parent, 1);
-            _ = win.SetForegroundWindow(parent);
-        };
+        if (parent != null and win.IsWindowEnabled(parent) != 0) {
+            self.disabled_parent = parent;
+            self.original_focus = win.GetFocus();
+            _ = win.EnableWindow(parent, 0);
+        }
+        defer self.releaseParent();
         _ = win.ShowWindow(self.window, win.SW_SHOW);
         _ = win.SetForegroundWindow(self.window);
         _ = win.SetFocus(if (self.document != null) self.document else self.edits[0]);
@@ -486,9 +505,10 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
         return 0;
     }
     if (message == win.WM_SIZE) {
-        if (!dialog.laying_out and wparam != win.SIZE_MINIMIZED) {
+        if (!dialog.viewport.updating and wparam != win.SIZE_MINIMIZED) {
+            const revision = dialog.viewport.scroll_revision;
             dialog.resize();
-            if (dialog.viewport.revealFocus(hwnd)) dialog.resize();
+            if (revision == dialog.viewport.scroll_revision and dialog.viewport.revealFocus(hwnd)) dialog.resize();
         }
         return 0;
     }
@@ -497,8 +517,12 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
         viewport.minimumTrack(hwnd, dialog.dpi, limits);
         return 0;
     }
+    if (message == viewport.wm_reflow) {
+        if (dialog.viewport.takeReflow(hwnd)) dialog.resize();
+        return 0;
+    }
     if (message == viewport.wm_focus_changed) {
-        if (!dialog.laying_out and dialog.viewport.revealFocus(hwnd)) dialog.resize();
+        if (dialog.viewport.revealFocus(hwnd)) dialog.resize();
         return 0;
     }
     if ((message == win.WM_HSCROLL or message == win.WM_VSCROLL) and lparam == 0) {
