@@ -1,5 +1,8 @@
 ﻿$ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path $PSScriptRoot -Parent
+if (Test-Path -LiteralPath (Join-Path $ProjectRoot 'build.zig')) {
+    throw 'Run the AutoHotkey tests and benchmarks from the isolated v0.8.0 checkout. Use chatpalette-tools test-run or benchmark for Zig.'
+}
 $script:checks = 0
 function Assert($condition, [string]$label) {
     if (!$condition) {

@@ -371,7 +371,7 @@ const App = struct {
         switch (command) {
             menu_open => self.show(.active_window),
             menu_quit => self.quit(false),
-            menu_restart => self.quit(true),
+            menu_restart => self.requestRestart(),
             menu_manage => self.openManagement(false),
             menu_keys, menu_help, menu_diag, menu_import, menu_export, menu_reaction_result => self.dialogCommand(command),
             menu_capture => self.startPreparation(.reaction_capture),
@@ -768,7 +768,12 @@ const App = struct {
     }
 
     fn diagnostics(self: *const App, parent: win.HWND) !void {
-        try support.diagnosticDocument(parent, self.diagnosticSnapshot(win.GetTickCount64()), version);
+        try support.diagnosticDocument(parent, .{ .context = self, .read = readDiagnosticSnapshot }, version);
+    }
+
+    fn readDiagnosticSnapshot(context: *const anyopaque) diagnostic.Snapshot {
+        const self: *const App = @ptrCast(@alignCast(context));
+        return self.diagnosticSnapshot(win.GetTickCount64());
     }
 
     fn diagnosticSnapshot(self: *const App, now: u64) diagnostic.Snapshot {
@@ -827,6 +832,18 @@ const App = struct {
         return false;
     }
 
+    fn requestRestart(self: *App) void {
+        if (self.quitting) return;
+        if (self.updatingViews()) return self.notify("一覧を更新しています。完了後にもう一度操作してください。");
+        if (!self.manager.isEditing()) {
+            if (self.reaction != null or self.preparation != null or self.reactionQueued())
+                return self.notify("リアクション処理中です。停止してから押してください。");
+            if (self.worker.active or self.queue.busy() or self.modal)
+                return self.notify("前の処理を確認中です。完了後にもう一度押してください。");
+        }
+        self.quit(true);
+    }
+
     fn quit(self: *App, restarting: bool) void {
         if (self.manager.isEditing()) {
             self.manager.show();
@@ -848,7 +865,7 @@ const App = struct {
             self.last_stop_failure = failure;
             self.quitting = false;
             self.restarting = false;
-            self.notifyWorkerExit(notice);
+            self.notify(notice);
             return;
         };
         self.last_stop_failure = null;
@@ -906,7 +923,7 @@ const App = struct {
         self.showStatusTip(message);
     }
 
-    fn notifyWorkerExit(self: *App, message: []const u8) void {
+    fn notify(self: *App, message: []const u8) void {
         self.palette.status(message);
         if (win.IsWindowVisible(self.palette.window) == 0) self.showStatusTip(message);
     }
@@ -950,7 +967,7 @@ const App = struct {
                 .cleanup = self.worker.cleanup_failure orelse if (failure == error.WorkerDidNotExit) failure else null,
                 .may_have_arrived = self.worker.request_may_have_arrived,
             };
-            if (self.cleanupNotice(failure)) |notice| self.notifyWorkerExit(notice);
+            if (self.cleanupNotice(failure)) |notice| self.notify(notice);
             return failure;
         };
         self.last_worker_failure = null;
@@ -2234,6 +2251,72 @@ test "desktop records the communication cause and an unconfirmed worker exit tog
     const retained = try app.diagnosticSnapshot(win.GetTickCount64()).format(&buffer, version);
     for ([_][]const u8{ "直近の操作 browser_context\r\n結果 ok", "直近のページ操作 chat_clear", "ページ操作の処理段階 クリアキー送信", "ページ操作の結果 cleared", "ページ操作のブラウザー Brave" }) |expected|
         try testing.expect(std.mem.indexOf(u8, retained, expected) != null);
+}
+
+test "the restart menu refuses active work while a same-path launch can drain it" {
+    const testing = std.testing;
+    var app: App = .{
+        .executable = undefined,
+        .db = undefined,
+        .snapshot = undefined,
+        .history = undefined,
+        .running_digest = null,
+    };
+    defer app.queue.deinit(allocator);
+    const previous = current;
+    current = &app;
+    defer current = previous;
+    var message: win.MSG = undefined;
+    const signal = try keyboard.Cancellation.create();
+    defer signal.close();
+    app.input_cancellation = .{ .target = 1, .signal = signal };
+
+    app.manager.opening_editor = true;
+    _ = messageHandler(null, win.WM_COMMAND, menu_restart, 0);
+    try testing.expect(!app.quitting and !app.restarting);
+    app.manager.opening_editor = false;
+    app.worker.active = true;
+    _ = messageHandler(null, win.WM_COMMAND, menu_restart, 0);
+    try testing.expect(!app.quitting and !app.restarting);
+    try testing.expectEqual(@as(win.DWORD, win.WAIT_TIMEOUT), win.WaitForSingleObject(signal.handle, 0));
+    app.worker.active = false;
+
+    try app.queue.enqueue(allocator, .{ .action = .reaction, .window = 1 }, 0, null);
+    const generation = app.queue.generation;
+    _ = messageHandler(null, win.WM_COMMAND, menu_restart, 0);
+    try testing.expect(!app.quitting and !app.restarting);
+    try testing.expectEqual(@as(usize, 1), app.queue.pending.items.len);
+    try testing.expectEqual(generation, app.queue.generation);
+    try testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE));
+
+    app.worker.active = true;
+    _ = messageHandler(null, instance.take_over, 0, 0);
+    try testing.expect(app.quitting and !app.restarting);
+    try testing.expectEqual(@as(usize, 0), app.queue.pending.items.len);
+    try testing.expectEqual(@as(win.DWORD, win.WAIT_OBJECT_0), win.WaitForSingleObject(signal.handle, 0));
+    try testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE));
+    app.worker.active = false;
+    app.finishQuit();
+    try testing.expect(win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) != 0);
+}
+
+test "the idle restart menu requests an exit with restart intent" {
+    const testing = std.testing;
+    var app: App = .{
+        .executable = undefined,
+        .db = undefined,
+        .snapshot = undefined,
+        .history = undefined,
+        .running_digest = null,
+    };
+    const previous = current;
+    current = &app;
+    defer current = previous;
+    _ = messageHandler(null, win.WM_COMMAND, menu_restart, 0);
+    try testing.expect(app.quitting and app.restarting);
+    var message: win.MSG = undefined;
+    try testing.expect(win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE) != 0);
+    try testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, null, win.WM_QUIT, win.WM_QUIT, win.PM_REMOVE));
 }
 
 test "diagnostics derive phases from pending and live reaction work" {

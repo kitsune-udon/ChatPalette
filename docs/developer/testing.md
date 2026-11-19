@@ -16,7 +16,7 @@
 | 利用環境のIME、DPI、常駐アプリとのキー競合 | 該当する設定を備えたWindowsの対話デスクトップ。利用環境での再現が必要な場合は、そのホストを使う |
 | 旧版と候補の初回応答時間 | 同じWindows、ブラウザーの版、プロファイル、ページとフォーカス位置で測る。試行ごとにワーカーを新規起動し、先に測る実装を交互に入れ替える |
 
-合成ページの試験でも、WindowsのUI Automationと名前付きパイプを通して製品を操作します。Sandboxでは利用者のウィンドウからキー入力を隔離し、DOMのイベントから送信回数を確かめられます。ブラウザーごとに実測結果を記録します。初回応答の比較では、起動済みブラウザーに対し、ワーカー起動直前から最初の応答を受信し終えるまでを測ります。ゲストで測った時間にはゲストの構成を添え、同じゲスト内で比較します。[Windows Sandboxの構成](https://learn.microsoft.com/ja-jp/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file) · [ワーカー試作時の計測条件](../../prototype/zig-worker/README.md#比較結果)
+合成ページの試験でも、WindowsのUI Automationと名前付きパイプを通して製品を操作します。Sandboxでは利用者のウィンドウからキー入力を隔離し、DOMのイベントから送信回数を確かめられます。ブラウザーごとに実測結果を記録します。初回応答の比較では、起動済みブラウザーに対し、ワーカー起動直前から最初の応答を受信し終えるまでを測ります。ゲストで測った時間にはゲストの構成を添え、同じゲスト内で比較します。[Windows Sandboxの構成](https://learn.microsoft.com/ja-jp/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file) · [0.8.0とZig版の比較手順](../../native/tools/compare.md)
 
 ### 修正箇所に絞って検証する
 

@@ -11,6 +11,7 @@ const class_name = windows.wide("ChatPalette.Support");
 const ok_id = 1;
 const cancel_id = 2;
 const reset_id = 3;
+const refresh_document_id = 4;
 const scope_id = 200;
 const first_slot_id = 201;
 const second_slot_id = 202;
@@ -40,6 +41,16 @@ const action_labels = [_][]const u8{
 /// caller can display its error using the still-open editor as the owner.
 pub const ShortcutSaver = *const fn (context: *anyopaque, dialog: win.HWND, keys: [storage.action_count][]const u8) bool;
 pub const ShortcutItemSaver = *const fn (context: *anyopaque, dialog: win.HWND, scope: []const u8, first: []const u8, second: []const u8) bool;
+
+pub const DiagnosticSource = struct {
+    context: *const anyopaque,
+    read: *const fn (*const anyopaque) diagnostics.Snapshot,
+};
+
+const DiagnosticDocument = struct {
+    source: DiagnosticSource,
+    version: []const u8,
+};
 
 const ShortcutEditor = struct {
     baseline: ShortcutDraft,
@@ -134,6 +145,10 @@ const Dialog = struct {
     item_status: win.HWND = null,
     item_choices: ?ItemChoices = null,
     document: win.HWND = null,
+    document_ready: bool = false,
+    diagnostic: ?DiagnosticDocument = null,
+    refresh_document: win.HWND = null,
+    document_status: win.HWND = null,
     instructions: win.HWND = null,
     reset: win.HWND = null,
     save: win.HWND = null,
@@ -165,6 +180,43 @@ const Dialog = struct {
         if (self.item_choices) |*choices| choices.arena.deinit();
         self.font.deinit();
         self.window = null;
+    }
+
+    fn openDocument(self: *Dialog, parent: win.HWND, comptime title: []const u8, allow_copy: bool) !void {
+        try self.open(parent, title, 604, 530);
+        self.document = try control(self.window, "EDIT", "", 100, win.ES_READONLY | win.ES_MULTILINE | win.ES_AUTOVSCROLL | win.WS_BORDER | win.WS_VSCROLL | win.WS_TABSTOP);
+        if (self.diagnostic != null) {
+            self.refresh_document = try control(self.window, "BUTTON", "最新の状態に更新", refresh_document_id, win.WS_TABSTOP);
+            self.document_status = try control(self.window, "STATIC", "", 0, 0);
+        }
+        if (allow_copy) {
+            self.reset = try control(self.window, "BUTTON", "表示中の診断情報をコピー", reset_id, win.WS_TABSTOP);
+            _ = win.EnableWindow(self.reset, 0);
+        }
+        self.cancel = try control(self.window, "BUTTON", "閉じる", cancel_id, win.WS_TABSTOP | win.BS_DEFPUSHBUTTON);
+    }
+
+    fn paintDocument(self: *Dialog, value: []const u8) !void {
+        const text = try std.unicode.utf8ToUtf16LeAllocZ(allocator, value);
+        defer allocator.free(text);
+        self.document_ready = false;
+        if (self.reset != null) _ = win.EnableWindow(self.reset, 0);
+        // Observe the edit control's acceptance of the new display text.
+        if (win.SendMessageW(self.document, win.WM_SETTEXT, 0, @bitCast(@intFromPtr(text.ptr))) <= 0)
+            return error.PaintSupportDocument;
+        self.document_ready = true;
+        if (self.reset != null) _ = win.EnableWindow(self.reset, 1);
+    }
+
+    fn updateDiagnostic(self: *Dialog) !void {
+        const config = self.diagnostic orelse return;
+        if (self.finishing or self.close_requested) return;
+        self.finishing = true;
+        defer self.finishing = false;
+        var buffer: [2048]u8 = undefined;
+        const snapshot = config.source.read(config.source.context);
+        try self.paintDocument(try snapshot.format(&buffer, config.version));
+        windows.setText(self.document_status, "");
     }
 
     fn draft(self: *const Dialog) !ShortcutDraft {
@@ -384,12 +436,17 @@ const Dialog = struct {
         const is_document = self.document != null;
         const content = self.viewport.layout(self.window, self.dpi, .{
             .width = if (is_document) 344 else 408,
-            .height = if (is_document) 178 else 700,
+            .height = if (is_document) (if (self.diagnostic != null) 216 else 178) else 700,
         }, null) orelse return;
         const width = self.dpi.fittingUnits(content.width);
         const footer = self.dpi.fittingUnits(content.height) - 44;
         if (is_document) {
-            self.place(self.document, 12, 12, width - 24, footer - 20);
+            const refresh_height: c_int = if (self.diagnostic != null) 38 else 0;
+            self.place(self.document, 12, 12, width - 24, footer - 20 - refresh_height);
+            if (self.diagnostic != null) {
+                self.place(self.refresh_document, 12, footer - refresh_height, 145, 30);
+                self.place(self.document_status, 168, footer - refresh_height, width - 180, 34);
+            }
             self.place(self.reset, 12, footer, 213, 30);
             self.place(self.cancel, width - 104, footer, 92, 30);
             return;
@@ -563,7 +620,10 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             ok_id => dialog.saveKeys(),
             cancel_id => dialog.requestClose(),
             reset_id => if (dialog.document != null) {
-                if (dialog.reset != null and !dialog.finishing) {
+                // Read from the completed edit control. The source is only read on open or refresh.
+                if (dialog.reset != null and dialog.document_ready and !dialog.finishing and !dialog.close_requested) {
+                    dialog.finishing = true;
+                    defer dialog.finishing = false;
                     _ = win.SendMessageW(dialog.document, win.EM_SETSEL, 0, -1);
                     _ = win.SendMessageW(dialog.document, win.WM_COPY, 0, 0);
                 }
@@ -571,6 +631,8 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
                 for (dialog.edits, storage.default_shortcut_keys) |edit, key| windows.setText(edit, key);
                 dialog.updateKeys();
             },
+            refresh_document_id => dialog.updateDiagnostic() catch
+                windows.setText(dialog.document_status, "診断情報を更新できませんでした。"),
             100...(100 + storage.action_count - 1) => if (notification == win.EN_CHANGE and !dialog.finishing) dialog.updateKeys(),
             scope_id => if (notification == win.CBN_SELCHANGE) dialog.changeScope(),
             first_slot_id, second_slot_id => if (notification == win.CBN_SELCHANGE and !dialog.finishing) dialog.updateItems(),
@@ -629,22 +691,19 @@ pub fn shortcuts(parent: win.HWND, snapshot: *const storage.Snapshot, context: *
 }
 
 pub fn document(parent: win.HWND, comptime title: []const u8, value: []const u8, allow_copy: bool) !void {
-    const text = try std.unicode.utf8ToUtf16LeAllocZ(allocator, value);
-    defer allocator.free(text);
     var dialog: Dialog = .{};
     defer dialog.close();
-    try dialog.open(parent, title, 604, 530);
-    dialog.document = try control(dialog.window, "EDIT", "", 100, win.ES_READONLY | win.ES_MULTILINE | win.ES_AUTOVSCROLL | win.WS_BORDER | win.WS_VSCROLL | win.WS_TABSTOP);
-    // WM_COPY always reads this completed, read-only document on the UI thread.
-    if (win.SetWindowTextW(dialog.document, text) == 0) return error.PaintSupportDocument;
-    if (allow_copy) dialog.reset = try control(dialog.window, "BUTTON", "表示中の診断情報をコピー", reset_id, win.WS_TABSTOP);
-    dialog.cancel = try control(dialog.window, "BUTTON", "閉じる", cancel_id, win.WS_TABSTOP | win.BS_DEFPUSHBUTTON);
+    try dialog.openDocument(parent, title, allow_copy);
+    try dialog.paintDocument(value);
     try dialog.run(parent);
 }
 
-pub fn diagnosticDocument(parent: win.HWND, snapshot: diagnostics.Snapshot, comptime version: []const u8) !void {
-    var buffer: [1024]u8 = undefined;
-    try document(parent, "診断情報", try snapshot.format(&buffer, version), true);
+pub fn diagnosticDocument(parent: win.HWND, source: DiagnosticSource, version: []const u8) !void {
+    var dialog: Dialog = .{ .diagnostic = .{ .source = source, .version = version } };
+    defer dialog.close();
+    try dialog.openDocument(parent, "診断情報", true);
+    try dialog.updateDiagnostic();
+    try dialog.run(parent);
 }
 
 pub const help =

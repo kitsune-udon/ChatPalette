@@ -1,5 +1,8 @@
 ﻿param([string]$PipeName, [switch]$Library)
 $ErrorActionPreference = 'Stop'
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\build.zig')) {
+    throw 'Run the PowerShell worker from the isolated v0.8.0 package. Use ChatPalette.exe for the Zig worker.'
+}
 $script:AddressBarCache = @{}
 $script:FocusedChat = $null
 . (Join-Path $PSScriptRoot 'reaction_automation.ps1')
