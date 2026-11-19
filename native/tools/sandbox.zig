@@ -2,6 +2,7 @@ const std = @import("std");
 const files = @import("files.zig");
 const process = @import("process.zig");
 const log_tail = @import("sandbox_log.zig");
+const audio = @import("sandbox_audio.zig");
 
 const input_guest = "C:\\ChatPaletteInput";
 const output_guest = "C:\\ChatPaletteEvidence";
@@ -313,6 +314,15 @@ fn readSelection(alloc: std.mem.Allocator, input: std.fs.Dir) !Selection {
     });
 }
 
+pub fn silenceGuest(alloc: std.mem.Allocator, input_path: []const u8, output_path: []const u8, evidence: std.fs.Dir) !void {
+    if (!std.mem.eql(u8, input_path, input_guest) or !std.mem.eql(u8, output_path, output_guest))
+        return error.SandboxAudioGuestRequired;
+    const muted_outputs = try audio.muteGuest();
+    const report = try std.json.Stringify.valueAlloc(alloc, .{ .muted_outputs = muted_outputs }, .{});
+    defer alloc.free(report);
+    try files.writeNew(evidence, "audio.json", report);
+}
+
 pub fn host(
     allocator: std.mem.Allocator,
     app: []const u8,
@@ -580,6 +590,7 @@ fn guestRun(alloc: std.mem.Allocator, input_path: []const u8, output_path: []con
     const test_bytes = try input.readFileAlloc(alloc, test_name, max_executable_bytes);
     const observed = files.digest(test_bytes);
     if (!std.mem.eql(u8, &expected, &observed)) return error.SandboxInputChanged;
+    try silenceGuest(alloc, input_path, output_path, output);
 
     const tmp = try std.process.getEnvVarOwned(alloc, "TEMP");
     const work_path = try files.newDirectory(alloc, tmp, "ChatPaletteTest-");
@@ -721,6 +732,9 @@ test "Sandbox prepares the selected harness and rejects modified guest input" {
     defer staged.close();
     const selection = try readSelection(arena.allocator(), staged);
     try std.testing.expectEqualStrings("with space", selection.args[1]);
+    try std.testing.expectError(error.SandboxAudioGuestRequired, guestRun(arena.allocator(), input, results));
+    try std.testing.expectError(error.FileNotFound, temporary.dir.access("prepared/results/audio.json", .{}));
+    try std.testing.expectError(error.FileNotFound, temporary.dir.access("prepared/results/stdout.txt", .{}));
     const modified = try staged.createFile(test_name, .{ .truncate = true });
     try modified.writeAll("mutated app fixture");
     modified.close();

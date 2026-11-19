@@ -9,6 +9,7 @@ const stop_id = 1;
 pub const wm_present = win.WM_APP + 18;
 pub const wm_stop = win.WM_APP + 19;
 pub const Phase = enum { running, stopping, finished };
+pub const kind_labels = [_][]const u8{ "❤️ ハート", "😁 笑顔", "🎉 お祝い", "😲 驚き", "💯 100点", "ランダム（毎回）" };
 
 pub const Reason = enum {
     completed,
@@ -68,6 +69,7 @@ pub const Result = struct {
     counts: ?Counts = null,
     detail: ?[]u8 = null,
     stage: enum { queued, finished } = .finished,
+    settings: ?struct { kind: u8, standard: bool } = null,
 
     pub fn init(reason: Reason, counts: ?Counts, detail: []const u8) Result {
         return .{ .reason = reason, .counts = counts, .detail = if (detail.len == 0) null else allocator.dupe(u8, detail) catch null };
@@ -90,7 +92,15 @@ pub const Result = struct {
         const counts = self.counts orelse return reason;
         var count_buffer: [120]u8 = undefined;
         const count_text = counts.text(&count_buffer) catch return reason;
-        return std.fmt.bufPrint(buffer, "{s}\r\n{s}\r\nYouTube側で受理された回数は未確認です。", .{ reason, count_text }) catch reason;
+        var applied_buffer: [96]u8 = undefined;
+        const applied = if (self.settings) |settings| label: {
+            if (settings.kind == 0 or settings.kind > kind_labels.len) break :label "";
+            break :label std.fmt.bufPrint(&applied_buffer, "適用：{s} / {s}\r\n", .{
+                if (settings.standard) "標準設定" else "今回の設定",
+                kind_labels[settings.kind - 1],
+            }) catch "";
+        } else "";
+        return std.fmt.bufPrint(buffer, "{s}\r\n{s}{s}\r\nYouTube側で受理された回数は未確認です。", .{ reason, applied, count_text }) catch reason;
     }
 
     pub fn document(self: Result, alloc: std.mem.Allocator) ![]u8 {
@@ -102,6 +112,7 @@ pub const Result = struct {
 };
 
 pub const Overlay = struct {
+    lifecycle: enum { stable, opening, cancelling_open, closing } = .stable,
     window: win.HWND = null,
     font: windows.GuiFont = .{},
     summary: win.HWND = null,
@@ -110,7 +121,10 @@ pub const Overlay = struct {
 
     pub fn open(self: *Overlay, host: win.HWND) !void {
         if (self.window != null) return;
+        if (self.lifecycle != .stable) return error.ReactionProgressBusy;
         const owner = host orelse return error.CreateReactionProgress;
+        self.lifecycle = .opening;
+        defer self.lifecycle = .stable;
         var wc = std.mem.zeroes(win.WNDCLASSW);
         wc.hInstance = win.GetModuleHandleW(null);
         wc.lpfnWndProc = handle;
@@ -120,22 +134,37 @@ pub const Overlay = struct {
         if (win.RegisterClassW(&wc) == 0 and win.GetLastError() != win.ERROR_CLASS_ALREADY_EXISTS) return error.RegisterReactionProgress;
         const border: win.DWORD = win.WS_BORDER;
         const dpi = windows.Dpi.system();
-        self.window = win.CreateWindowExW(win.WS_EX_NOACTIVATE | win.WS_EX_TOOLWINDOW | win.WS_EX_TOPMOST, class, windows.wide("リアクションの進捗"), 0x8000_0000 | border, dpi.pixels(20), dpi.pixels(20), dpi.pixels(400), dpi.pixels(228), null, null, wc.hInstance, null) orelse return error.CreateReactionProgress;
-        errdefer self.close();
-        self.font = try windows.GuiFont.init(dpi);
-        _ = try control(self.window, dpi, "STATIC", "リアクションの進捗", 14, 12, 370, 22, 0);
-        self.summary = try control(self.window, dpi, "STATIC", "", 14, 42, 370, 86, 0);
-        self.hint = try control(self.window, dpi, "STATIC", "", 14, 136, 370, 38, 0);
-        self.stop = try control(self.window, dpi, "BUTTON", "停止", 14, 180, 120, 30, stop_id);
-        self.font.applyChildren(self.window);
-        if (win.SetWindowSubclass(self.stop, stopButton, stop_id, @intFromPtr(owner)) == 0)
+        var draft: Overlay = .{};
+        errdefer draft.close();
+        draft.window = win.CreateWindowExW(win.WS_EX_NOACTIVATE | win.WS_EX_TOOLWINDOW | win.WS_EX_TOPMOST, class, windows.wide("リアクションの進捗"), 0x8000_0000 | border, dpi.pixels(20), dpi.pixels(20), dpi.pixels(400), dpi.pixels(228), null, null, wc.hInstance, null) orelse return error.CreateReactionProgress;
+        draft.font = try windows.GuiFont.init(dpi);
+        _ = try control(draft.window, dpi, "STATIC", "リアクションの進捗", 14, 12, 370, 22, 0);
+        draft.summary = try control(draft.window, dpi, "STATIC", "", 14, 42, 370, 86, 0);
+        draft.hint = try control(draft.window, dpi, "STATIC", "", 14, 136, 370, 38, 0);
+        draft.stop = try control(draft.window, dpi, "BUTTON", "停止", 14, 180, 120, 30, stop_id);
+        draft.font.applyChildren(draft.window);
+        if (win.SetWindowSubclass(draft.stop, stopButton, stop_id, @intFromPtr(owner)) == 0)
             return error.CreateReactionStopButton;
+        if (self.lifecycle == .cancelling_open) return error.ReactionProgressClosed;
+        // Native controls dispatch synchronously. Publish all handles together.
+        self.* = draft;
     }
 
     pub fn close(self: *Overlay) void {
-        if (self.window != null) _ = win.DestroyWindow(self.window);
-        self.font.deinit();
-        self.* = .{};
+        switch (self.lifecycle) {
+            .opening => {
+                self.lifecycle = .cancelling_open;
+                return;
+            },
+            .cancelling_open, .closing => return,
+            .stable => {},
+        }
+        const window = self.window;
+        var font = self.font;
+        self.* = .{ .lifecycle = .closing };
+        defer self.* = .{};
+        if (window != null) _ = win.DestroyWindow(window);
+        font.deinit();
     }
 
     pub fn update(self: Overlay, message: []const u8, keys: shortcuts.Bindings, state: Phase) bool {
@@ -216,4 +245,118 @@ test "reaction results distinguish an unknown operation from a stop and preserve
     try std.testing.expect(!std.mem.eql(u8, Reason.stopped.message(), Reason.unknown.message()));
     var key_buffer: [30]u8 = undefined;
     try std.testing.expectEqualStrings("Ctrl+Shift+F12", shortcuts.label(try shortcuts.parse("^+F12"), &key_buffer));
+}
+
+test "reaction results show the settings of the job that produced them" {
+    const counts: Counts = .{ .completed = 1, .total = 1, .mean_ms = null };
+    var palette_job = Result.init(.completed, counts, "");
+    defer palette_job.deinit();
+    palette_job.settings = .{ .kind = 1, .standard = false };
+    var shortcut_job = Result.init(.completed, counts, "");
+    defer shortcut_job.deinit();
+    shortcut_job.settings = .{ .kind = 6, .standard = true };
+
+    var buffer: [600]u8 = undefined;
+    const current = palette_job.summary(&buffer);
+    try std.testing.expect(std.mem.indexOf(u8, current, "適用：今回の設定 / ❤️ ハート") != null);
+    try std.testing.expect(std.mem.indexOf(u8, current, "標準設定") == null);
+    try std.testing.expect(std.mem.indexOf(u8, shortcut_job.summary(&buffer), "適用：標準設定 / ランダム（毎回）") != null);
+}
+
+test "reaction overlay keeps construction private and recovers from native child failure" {
+    const Probe = struct {
+        const Mode = enum { fail_child, cancel_open, construct, close };
+        threadlocal var active: ?*@This() = null;
+
+        overlay: *Overlay,
+        host: win.HWND,
+        keys: shortcuts.Bindings,
+        mode: Mode,
+        parent: win.HWND = null,
+        children: usize = 0,
+        destroyed: bool = false,
+        unpublished: bool = false,
+        nested_open: ?anyerror = null,
+        nested_update: bool = false,
+        nested_show: bool = false,
+
+        fn checkUnpublished(self: *@This()) void {
+            self.unpublished = self.overlay.window == null and self.overlay.summary == null and
+                self.overlay.hint == null and self.overlay.stop == null and self.overlay.font.handle == null;
+            self.overlay.open(self.host) catch |err| {
+                self.nested_open = err;
+            };
+            self.nested_update = self.overlay.update("Reentrant progress", self.keys, .running);
+            self.nested_show = self.overlay.showChecked();
+        }
+
+        fn observe(code: c_int, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+            const self = active orelse return win.CallNextHookEx(null, code, wparam, lparam);
+            if (code == win.HCBT_CREATEWND) {
+                const creating: *const win.CBT_CREATEWNDW = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                const parent = creating.lpcs[0].hwndParent orelse return win.CallNextHookEx(null, code, wparam, lparam);
+                var name: [80]u16 = undefined;
+                const length = win.GetClassNameW(parent, &name, name.len);
+                if (length <= 0 or !std.mem.eql(u16, name[0..@intCast(length)], class))
+                    return win.CallNextHookEx(null, code, wparam, lparam);
+                self.parent = parent;
+                self.children += 1;
+                if (self.children == 1) {
+                    self.checkUnpublished();
+                    if (self.mode == .cancel_open) self.overlay.close();
+                }
+                if (self.mode == .fail_child and self.children == 4) return 1;
+            } else if (code == win.HCBT_DESTROYWND and self.parent != null and wparam == @intFromPtr(self.parent)) {
+                self.destroyed = true;
+                if (self.mode == .close) self.checkUnpublished();
+            }
+            return win.CallNextHookEx(null, code, wparam, lparam);
+        }
+
+        fn expectUnpublished(self: @This()) !void {
+            try std.testing.expect(self.unpublished and !self.nested_update and !self.nested_show);
+            try std.testing.expectEqual(@as(?anyerror, error.ReactionProgressBusy), self.nested_open);
+        }
+    };
+    const expect = std.testing.expect;
+    const host = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 1, 1, null, null, win.GetModuleHandleW(null), null) orelse
+        return error.CreateOverlayTestHost;
+    defer _ = win.DestroyWindow(host);
+    var overlay: Overlay = .{};
+    defer overlay.close();
+    const keys = try shortcuts.validate(shortcuts.default_keys);
+    var probe: Probe = .{ .overlay = &overlay, .host = host, .keys = keys, .mode = .fail_child };
+    Probe.active = &probe;
+    defer Probe.active = null;
+    const hook = win.SetWindowsHookExW(win.WH_CBT, @ptrCast(&Probe.observe), null, win.GetCurrentThreadId()) orelse
+        return error.CreateOverlayTestHook;
+    defer _ = win.UnhookWindowsHookEx(hook);
+
+    try std.testing.expectError(error.CreateReactionProgressControl, overlay.open(host));
+    try probe.expectUnpublished();
+    try expect(probe.children == 4 and probe.destroyed and win.IsWindow(probe.parent) == 0);
+    try expect(overlay.window == null and overlay.lifecycle == .stable);
+
+    probe = .{ .overlay = &overlay, .host = host, .keys = keys, .mode = .cancel_open };
+    try std.testing.expectError(error.ReactionProgressClosed, overlay.open(host));
+    try probe.expectUnpublished();
+    try expect(probe.destroyed and win.IsWindow(probe.parent) == 0);
+    try expect(overlay.window == null and overlay.lifecycle == .stable);
+
+    probe = .{ .overlay = &overlay, .host = host, .keys = keys, .mode = .construct };
+    try overlay.open(host);
+    try probe.expectUnpublished();
+    try expect(probe.children == 4 and overlay.window == probe.parent and win.IsWindow(overlay.window) != 0);
+    try expect(overlay.summary != null and overlay.hint != null and overlay.stop != null and overlay.font.handle != null);
+    for ([_]win.HWND{ overlay.summary, overlay.hint, overlay.stop }) |child|
+        try expect(win.GetParent(child) == overlay.window);
+    try expect(win.IsWindowVisible(overlay.window) == 0);
+    const done = overlay.window;
+    try overlay.open(host);
+    try expect(overlay.window == done and probe.children == 4);
+
+    probe = .{ .overlay = &overlay, .host = host, .keys = keys, .mode = .close, .parent = done };
+    overlay.close();
+    try probe.expectUnpublished();
+    try expect(probe.destroyed and win.IsWindow(done) == 0 and overlay.window == null);
 }

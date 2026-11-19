@@ -1,5 +1,6 @@
 const std = @import("std");
 const shortcuts = @import("shortcuts.zig");
+const model = @import("../storage/model.zig");
 
 const max_video_id = 11;
 pub const VideoId = [max_video_id]u8;
@@ -43,8 +44,32 @@ pub const FocusProof = struct {
 pub const Command = struct {
     event: shortcuts.Event,
     generation: u64,
-    /// The library snapshot at acceptance. The desktop revalidates it before delivering text.
+    /// The library revision at acceptance, used by the palette shortcut.
     library: u64,
+    slot: ?SlotSource = null,
+
+    fn release(self: Command) void {
+        if (self.slot) |source| source.library.release();
+    }
+};
+
+pub const SlotSource = struct {
+    pub const Scope = union(enum) {
+        shared,
+        automatic,
+        manual: []const u8,
+
+        pub fn current(self: Scope, preferences: model.Preferences) bool {
+            return switch (self) {
+                .shared => true,
+                .automatic => preferences.auto_mode,
+                .manual => |id| !preferences.auto_mode and std.mem.eql(u8, preferences.input_profile_id, id),
+            };
+        }
+    };
+
+    library: model.Snapshot.LibraryLease,
+    scope: Scope,
 };
 
 pub const Queue = struct {
@@ -57,6 +82,7 @@ pub const Queue = struct {
     active: bool = false,
 
     pub fn deinit(self: *Queue, allocator: std.mem.Allocator) void {
+        self.cancel();
         self.pending.deinit(allocator);
     }
 
@@ -65,8 +91,13 @@ pub const Queue = struct {
     }
 
     pub fn enqueue(self: *Queue, allocator: std.mem.Allocator, event: shortcuts.Event, library: u64, operation_video: ?VideoId) !void {
+        try self.enqueueWithSlot(allocator, event, library, operation_video, null);
+    }
+
+    /// On success the queue owns the slot source until the operation finishes or is discarded.
+    pub fn enqueueWithSlot(self: *Queue, allocator: std.mem.Allocator, event: shortcuts.Event, library: u64, operation_video: ?VideoId, source: ?SlotSource) !void {
         if (self.target != 0 and self.target != event.window) self.cancel();
-        try self.pending.append(allocator, .{ .event = event, .generation = self.generation, .library = library });
+        try self.pending.append(allocator, .{ .event = event, .generation = self.generation, .library = library, .slot = source });
         self.target = event.window;
         if (self.video == null) self.video = operation_video;
     }
@@ -95,6 +126,7 @@ pub const Queue = struct {
     }
 
     pub fn finish(self: *Queue, command: Command, succeeded: bool) void {
+        command.release();
         self.active = false;
         if (command.generation != self.generation) return;
         if (!succeeded or self.pending.items.len == 0) self.cancel();
@@ -102,6 +134,7 @@ pub const Queue = struct {
 
     pub fn cancel(self: *Queue) void {
         self.generation +%= 1;
+        for (self.pending.items) |command| command.release();
         self.pending.clearRetainingCapacity();
         self.target = 0;
         self.video = null;
@@ -109,6 +142,33 @@ pub const Queue = struct {
         self.focus.len = 0;
     }
 };
+
+test "cancelling queued slots keeps only the running command's library alive" {
+    const allocator = std.testing.allocator;
+    var queue: Queue = .{};
+    defer queue.deinit(allocator);
+    {
+        var snapshot = try model.Snapshot.clone(allocator, .{
+            .shared_items = &.{.{ .id = "admitted", .name = "item", .text = "original", .slot = 1 }},
+        });
+        defer snapshot.deinit();
+        for (0..2) |_| {
+            const library = try snapshot.retainLibrary();
+            errdefer library.release();
+            try queue.enqueueWithSlot(allocator, .{ .action = .shared1, .window = 2 }, 1, null, .{
+                .library = library,
+                .scope = .shared,
+            });
+        }
+    }
+
+    const running = queue.next() orelse return error.MissingSlotCommand;
+    defer queue.finish(running, false);
+    try queue.enqueue(allocator, .{ .action = .chat_focus, .window = 3 }, 2, null);
+    try std.testing.expectEqual(@as(usize, 1), queue.pending.items.len);
+    try std.testing.expectEqualStrings("original", running.slot.?.library.read().shared_items[0].text);
+    try std.testing.expect(!queue.accepts(running, 2));
+}
 
 test "queued input retains its tab proof and a new generation may bind another tab" {
     var queue: Queue = .{};

@@ -21,6 +21,25 @@ pub fn wide(comptime value: []const u8) [:0]const u16 {
     return std.unicode.utf8ToUtf16LeStringLiteral(value);
 }
 
+pub fn copyText(destination: []u16, source: []const u8) void {
+    if (destination.len == 0) return;
+    var iter = std.unicode.Utf8View.initUnchecked(source).iterator();
+    var length: usize = 0;
+    while (iter.nextCodepoint()) |point| {
+        const needed: usize = if (point <= 0xffff) 1 else 2;
+        if (length + needed >= destination.len) break;
+        if (needed == 1) {
+            destination[length] = @intCast(point);
+        } else {
+            const adjusted = point - 0x10000;
+            destination[length] = @intCast(0xd800 + (adjusted >> 10));
+            destination[length + 1] = @intCast(0xdc00 + (adjusted & 0x3ff));
+        }
+        length += needed;
+    }
+    destination[length] = 0;
+}
+
 pub fn recallOwnedWindow(window: api.HWND) void {
     if (window == null or api.IsWindow(window) == 0) return;
     var target = window;

@@ -122,6 +122,34 @@ pub const Snapshot = struct {
     data: Data = .{},
     // Set only for a library read or written in a validated DB transaction.
     library_origin: ?LibraryOrigin = null,
+    retained: ?*LibraryArena = null,
+
+    const LibraryArena = struct {
+        arena: std.heap.ArenaAllocator,
+        references: usize = 1,
+
+        fn release(self: *LibraryArena) void {
+            self.references -= 1;
+            if (self.references != 0) return;
+            const allocator = self.arena.child_allocator;
+            self.arena.deinit();
+            allocator.destroy(self);
+        }
+    };
+
+    pub const LibraryLease = struct {
+        owner: *LibraryArena,
+        profiles: []const Profile,
+        shared_items: []const Item,
+
+        pub fn read(self: LibraryLease) Data {
+            return .{ .profiles = self.profiles, .shared_items = self.shared_items };
+        }
+
+        pub fn release(self: LibraryLease) void {
+            self.owner.release();
+        }
+    };
 
     pub fn init(allocator: std.mem.Allocator) Snapshot {
         return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
@@ -129,7 +157,22 @@ pub const Snapshot = struct {
 
     pub fn deinit(self: *Snapshot) void {
         self.arena.deinit();
+        if (self.retained) |owner| owner.release();
         self.* = undefined;
+    }
+
+    // Keep the published library alive through a queued operation without copying its items.
+    pub fn retainLibrary(self: *Snapshot) !LibraryLease {
+        const owner = self.retained orelse first: {
+            const allocator = self.arena.child_allocator;
+            const retained = try allocator.create(LibraryArena);
+            retained.* = .{ .arena = self.arena };
+            self.arena = std.heap.ArenaAllocator.init(allocator);
+            self.retained = retained;
+            break :first retained;
+        };
+        owner.references += 1;
+        return .{ .owner = owner, .profiles = self.data.profiles, .shared_items = self.data.shared_items };
     }
 
     pub fn clone(allocator: std.mem.Allocator, data: Data) !Snapshot {

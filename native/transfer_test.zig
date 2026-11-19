@@ -303,8 +303,12 @@ fn drive(scratch: std.mem.Allocator, output: []const u8, root: std.fs.Dir, insta
     try ui.click(palette, 115);
     var manager = try ui.waitWindow(windows.wide("ChatPalette.Management"), null, pid);
     _ = try ui.message(manager, win.WM_NULL, 0, 0);
-    const notice = win.FindWindowExW(manager, null, windows.wide("STATIC"), windows.wide("YouTubeを前面にし、Ctrl+Alt+Q でパレットを開いて連携してください。"));
-    if (notice == null or ui.windowPid(notice) != pid or win.IsWindowVisible(palette) != 0) return error.MissingChannelLinkNotice;
+    const notice = try ui.control(manager, management.notice_control_id);
+    const notice_text = try ui.readText(scratch, notice);
+    if (ui.windowPid(notice) != pid or win.IsWindowVisible(notice) == 0 or win.IsWindowVisible(palette) != 0 or
+        win.GetWindowLongW(notice, win.GWL_STYLE) & win.ES_READONLY == 0 or
+        !std.mem.eql(u8, notice_text, "通知：YouTubeを前面にし、Ctrl+Alt+Q でパレットを開いて連携してください。"))
+        return error.MissingChannelLinkNotice;
     try expectDigest(installation, db_path, before_link);
     report.link_without_browser_explains_failure = true;
     report.stage = "narrow-management";

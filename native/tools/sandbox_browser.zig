@@ -129,7 +129,7 @@ pub fn guest(allocator: std.mem.Allocator, input: []const u8, output: []const u8
     defer evidence.close();
     try files.writeNew(evidence, "sandbox-browser.started", "");
     var report: Report = .{};
-    runFixture(alloc, input, evidence, &report) catch |failure| {
+    runFixture(alloc, input, output, evidence, &report) catch |failure| {
         report.failure = @errorName(failure);
     };
     report.passed = report.failure == null and report.cleanup_failure == null;
@@ -137,7 +137,7 @@ pub fn guest(allocator: std.mem.Allocator, input: []const u8, output: []const u8
     if (!report.passed) return error.SandboxBrowserFailed;
 }
 
-fn runFixture(alloc: std.mem.Allocator, input_path: []const u8, evidence: std.fs.Dir, report: *Report) !void {
+fn runFixture(alloc: std.mem.Allocator, input_path: []const u8, output_path: []const u8, evidence: std.fs.Dir, report: *Report) !void {
     var startup = try std.time.Timer.start();
     const cwd = std.fs.cwd();
     var input = try cwd.openDir(input_path, .{ .no_follow = true });
@@ -161,6 +161,7 @@ fn runFixture(alloc: std.mem.Allocator, input_path: []const u8, evidence: std.fs
     if (startup_remaining != 0) std.Thread.sleep(startup_remaining);
     report.desktop_wait_ms = startup_remaining / std.time.ns_per_ms;
 
+    try sandbox.silenceGuest(alloc, input_path, output_path, evidence);
     const raw = try std.fs.path.join(alloc, &.{ work_path, "fixture" });
     const observed = process.observe(alloc, &.{
         try std.fs.path.join(alloc, &.{ work_path, fixture_name }),

@@ -18,7 +18,7 @@ const version = @import("app_info").version;
 
 const allocator = std.heap.page_allocator;
 pub const Startup = enum { normal, quiet, smoke };
-const PaletteTarget = union(enum) { active_window, previous_target, shortcut: operations.Command };
+const PaletteTarget = union(enum) { active_window, previous_target: enum { keep_options, load_defaults }, shortcut: operations.Command };
 const tray_message = win.WM_APP + 2;
 const drain_message = win.WM_APP + 3;
 const advance_reaction_message = win.WM_APP + 4;
@@ -315,7 +315,7 @@ const App = struct {
         if (win.RegisterClassW(&window_class) == 0) return error.RegisterDesktopWindow;
         self.window = win.CreateWindowExW(0, instance.class_name, owner, 0, 0, 0, 0, 0, null, null, window_class.hInstance, null) orelse return error.CreateDesktopWindow;
         try self.palette.open(self.window);
-        self.palette.refresh(self.snapshot.data);
+        self.refreshPalette();
         self.palette.resetReaction(self.snapshot.data.preferences);
         self.updateReactionButtons();
         try self.keyboard.install(try shortcuts.validate(self.snapshot.data.preferences.shortcut_keys));
@@ -338,25 +338,41 @@ const App = struct {
         self.prefs_arena.deinit();
     }
 
-    fn installTray(self: *App) void {
+    fn trayData(self: *const App) win.NOTIFYICONDATAW {
         var icon = std.mem.zeroes(win.NOTIFYICONDATAW);
         icon.cbSize = @sizeOf(win.NOTIFYICONDATAW);
         icon.hWnd = self.window;
         icon.uID = 1;
+        return icon;
+    }
+
+    fn trayTip(self: *const App, text: []u16) void {
+        const prefix = windows.wide("ChatPalette：");
+        @memcpy(text[0..prefix.len], prefix);
+        const name = if (self.palette.inputProfile()) |profile| profile.name else "配信者未選択";
+        windows.copyText(text[prefix.len..], name);
+    }
+
+    fn installTray(self: *App) void {
+        var icon = self.trayData();
         icon.uFlags = win.NIF_ICON | win.NIF_TIP | win.NIF_MESSAGE;
         icon.uCallbackMessage = tray_message;
         icon.hIcon = win.LoadIconW(null, @ptrFromInt(32512));
-        const name = windows.wide("ChatPalette");
-        @memcpy(icon.szTip[0..name.len], name);
+        self.trayTip(&icon.szTip);
         self.tray = win.Shell_NotifyIconW(win.NIM_ADD, &icon) != 0;
+    }
+
+    fn refreshTray(self: *const App) void {
+        if (!self.tray) return;
+        var icon = self.trayData();
+        icon.uFlags = win.NIF_TIP;
+        self.trayTip(&icon.szTip);
+        _ = win.Shell_NotifyIconW(win.NIM_MODIFY, &icon);
     }
 
     fn removeTray(self: *App) void {
         if (!self.tray) return;
-        var icon = std.mem.zeroes(win.NOTIFYICONDATAW);
-        icon.cbSize = @sizeOf(win.NOTIFYICONDATAW);
-        icon.hWnd = self.window;
-        icon.uID = 1;
+        var icon = self.trayData();
         _ = win.Shell_NotifyIconW(win.NIM_DELETE, &icon);
         self.tray = false;
     }
@@ -413,8 +429,13 @@ const App = struct {
             self.manager.show();
             return;
         }
-        if (self.reaction != null or self.preparation != null) return self.reaction_progress.show();
+        if (self.reaction != null or self.preparation != null) {
+            if (target_source != .previous_target or target_source.previous_target == .keep_options) self.reaction_progress.show();
+            return;
+        }
         if (self.worker.active or (self.queue.active and target_source != .shortcut)) return;
+        const returning_from = if (target_source == .previous_target) self.manager.window else null;
+        if (returning_from != null and self.updatingViews()) return;
         const active_window = win.GetForegroundWindow();
         if (target_source != .previous_target) {
             if (target_source == .shortcut and windows.number(active_window) != target_source.shortcut.event.window) return;
@@ -427,16 +448,24 @@ const App = struct {
             }
         }
         self.palette.detected_profile = false;
-        if (self.snapshot.data.preferences.auto_mode and self.target != null and active_window != null) {
-            const context = self.paletteContext();
-            self.detectProfile(context, active_window);
-            if (!self.quitting and (!self.paletteContextCurrent(context) or !self.foreground(windows.number(active_window)))) return;
+        if (self.snapshot.data.preferences.auto_mode) {
+            if (self.target != null and active_window != null) {
+                const context = self.paletteContext();
+                self.detectProfile(context, active_window);
+                if (!self.quitting and (!self.paletteContextCurrent(context) or !self.foreground(windows.number(active_window)))) return;
+            } else self.palette.status("YouTubeの入力欄からパレットを開いてください。");
         }
         if (self.quitting) return self.finishQuit();
-        self.palette.refresh(self.snapshot.data);
+        if (returning_from != null and (self.manager.window != returning_from or self.manager.isEditing())) return;
+        self.refreshPalette();
         self.refreshRegistrationStatus();
         self.status_tip.close();
+        if (target_source == .previous_target and target_source.previous_target == .load_defaults)
+            self.palette.resetReaction(self.snapshot.data.preferences);
         self.palette.show();
+        if (returning_from != null and self.manager.window == returning_from and
+            !self.manager.isEditing() and win.IsWindowVisible(self.palette.window) != 0)
+            _ = win.ShowWindow(returning_from, win.SW_HIDE);
     }
 
     fn registrationLabel(self: *const App, browser: ?[]const u8, buffer: []u8) []const u8 {
@@ -465,11 +494,19 @@ const App = struct {
     fn openManagement(self: *App, from_palette: bool) void {
         if (!self.canEdit() or !self.ensureManagement()) return;
         if (from_palette) {
-            const row = self.palette.selectedRow();
+            const lost_automatic_target = self.snapshot.data.preferences.auto_mode and input.browser(self.target) == null;
+            const row = if (self.palette.selectedRow()) |selected|
+                if (lost_automatic_target and selected.profile_id.len != 0) null else selected
+            else
+                null;
             self.manager.selectForEditing(
-                if (row) |value| value.profile_id else self.palette.visibleProfileId(),
+                if (row) |value| value.profile_id else if (lost_automatic_target) "" else self.palette.visibleProfileId(),
                 if (row) |value| value.item.id else "",
             ) catch return self.report("編集する弾幕を選択できませんでした。");
+            if (lost_automatic_target) {
+                self.palette.detected_profile = false;
+                self.refreshTray();
+            }
         }
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
         self.manager.show();
@@ -523,8 +560,13 @@ const App = struct {
         self.refreshSavedPalette();
     }
 
-    fn refreshSavedPalette(self: *App) void {
+    fn refreshPalette(self: *App) void {
         self.palette.refresh(self.snapshot.data);
+        self.refreshTray();
+    }
+
+    fn refreshSavedPalette(self: *App) void {
+        self.refreshPalette();
         if (management.savedViewWarning(false, self.palette.refresh_failed)) |notice| self.report(notice);
     }
 
@@ -563,32 +605,33 @@ const App = struct {
     }
 
     fn changeMode(self: *App, automatic: bool) void {
-        if (!self.canEdit()) return self.palette.refresh(self.snapshot.data);
+        if (!self.canEdit()) return self.refreshPalette();
         var preferences = self.snapshot.data.preferences;
         preferences.auto_mode = automatic;
         self.palette.detected_profile = false;
         self.writePreferences(preferences) catch {
-            self.palette.refresh(self.snapshot.data);
+            self.refreshPalette();
             return self.report("自動判別の設定を保存できませんでした。");
         };
+        self.palette.status("");
         if (automatic and self.target != null) {
             self.detectProfile(self.paletteContext(), win.GetForegroundWindow());
-            if (!self.quitting) self.palette.refresh(self.snapshot.data);
+            if (!self.quitting) self.refreshPalette();
         }
         self.finishQuit();
     }
 
     fn changeProfile(self: *App, index: usize) void {
         if (self.palette.refreshing) return;
-        if (!self.canEdit()) return self.palette.refresh(self.snapshot.data);
+        if (!self.canEdit()) return self.refreshPalette();
         const id = self.palette.profile_choices.resolve(self.snapshot.data, index) orelse {
-            self.palette.refresh(self.snapshot.data);
+            self.refreshPalette();
             return self.report("対象が見つかりません。配信者を選び直してください。");
         };
         var preferences = self.snapshot.data.preferences;
         preferences.input_profile_id = id;
         self.writePreferences(preferences) catch {
-            self.palette.refresh(self.snapshot.data);
+            self.refreshPalette();
             self.report("配信者を選択できませんでした。");
         };
     }
@@ -624,11 +667,9 @@ const App = struct {
         if (!self.paletteContextCurrent(context) or !self.foreground(foreground_window)) return;
         const channel = response.field("Channel");
         if (!response.is("ok") or channel.len == 0) return self.report(self.resolveFailureNotice());
-        const profile = (self.selectDetectedProfile(channel) catch return self.report("自動選択を保存できませんでした。")) orelse
+        if ((self.selectDetectedProfile(channel) catch return self.report("自動選択を保存できませんでした。")) == null)
             return self.report("配信者が未連携です。管理からチャンネルを連携できます。");
-        const label = std.fmt.allocPrint(allocator, "自動選択 {s}", .{profile.name}) catch return;
-        defer allocator.free(label);
-        self.report(label);
+        self.palette.status("");
     }
 
     fn selectDetectedProfile(self: *App, channel: []const u8) !?storage.Profile {
@@ -646,7 +687,7 @@ const App = struct {
         }
         if (self.palette.detected_profile != (profile != null)) {
             self.palette.detected_profile = profile != null;
-            if (win.IsWindowVisible(self.palette.window) != 0) self.palette.refresh(self.snapshot.data);
+            if (win.IsWindowVisible(self.palette.window) != 0) self.refreshPalette() else self.refreshTray();
         }
         return profile;
     }
@@ -942,7 +983,7 @@ const App = struct {
         else if (std.mem.eql(u8, state, "focus_failed"))
             "チャット欄へのフォーカス移動を確認できませんでした。入力欄をクリックしてください。"
         else if (std.mem.eql(u8, state, "unknown"))
-            "操作結果を確認できませんでした。画面で確認してください。"
+            "操作結果を確認できませんでした。自動では再実行しません。画面で結果を確認してください。"
         else
             state;
         self.palette.status(message);
@@ -1357,7 +1398,10 @@ const App = struct {
         }
 
         fn current(self: *const InputPlan, app: *const App) bool {
-            if (app.input_settings_revision != self.settings_revision) return false;
+            return app.input_settings_revision == self.settings_revision and self.itemCurrent(app);
+        }
+
+        fn itemCurrent(self: *const InputPlan, app: *const App) bool {
             const data = app.snapshot.data;
             if (self.scope.len != 0) {
                 const profile = data.findProfile(self.scope) orelse return false;
@@ -1373,36 +1417,43 @@ const App = struct {
     };
 
     fn slot(self: *App, command: operations.Command, video: operations.VideoId, page_token: operations.PageToken) !bool {
+        const source = command.slot orelse return false;
+        if (!source.scope.current(self.snapshot.data.preferences)) return false;
         const target = command.event.window;
         const action = command.event.action;
         const slot_number: u8 = if (action == .profile1 or action == .shared1) 1 else 2;
-        const prefs = self.snapshot.data.preferences;
-        const profile_slot = action == .profile1 or action == .profile2;
-        if (command.library != self.library_revision) return false;
-        const profile_id = if (profile_slot and prefs.auto_mode) detected: {
-            const reply = self.requestOnPage(.resolve, target, &video, &page_token, &.{}) catch |failure| {
-                if (!self.commandCurrent(command) or command.library != self.library_revision) return false;
-                return failure;
-            };
-            defer reply.deinit();
-            if (!self.commandCurrent(command) or command.library != self.library_revision) return false;
-            if (reply.is("unavailable")) {
-                self.report(self.resolveFailureNotice());
-                return false;
-            }
-            if (!self.pageReplySucceeded(reply, video, .ok)) return false;
-            const profile = (self.selectDetectedProfile(reply.field("Channel")) catch {
-                self.report("自動選択を保存できませんでした。");
-                return false;
-            }) orelse {
-                self.report("配信者が未連携です。管理からチャンネルを連携できます。");
-                return false;
-            };
-            break :detected profile.id;
-        } else if (profile_slot) prefs.input_profile_id else "";
-        if (command.library != self.library_revision) return false;
-        if (profile_slot and profile_id.len == 0) return false;
-        const items = try self.snapshot.data.itemsFor(profile_id);
+        const profile_id = switch (source.scope) {
+            .shared => "",
+            .manual => |id| if (id.len != 0) id else return false,
+            .automatic => detected: {
+                const reply = self.requestOnPage(.resolve, target, &video, &page_token, &.{}) catch |failure| {
+                    if (!self.commandCurrent(command) or !source.scope.current(self.snapshot.data.preferences)) return false;
+                    return failure;
+                };
+                defer reply.deinit();
+                if (!self.commandCurrent(command) or !source.scope.current(self.snapshot.data.preferences)) return false;
+                if (reply.is("unavailable")) {
+                    self.report(self.resolveFailureNotice());
+                    return false;
+                }
+                if (!self.pageReplySucceeded(reply, video, .ok)) return false;
+                const channel = reply.field("Channel");
+                if ((self.selectDetectedProfile(channel) catch {
+                    self.report("自動選択を保存できませんでした。");
+                    return false;
+                }) == null) {
+                    self.report("配信者が未連携です。管理からチャンネルを連携できます。");
+                    return false;
+                }
+                if (!self.commandCurrent(command) or !source.scope.current(self.snapshot.data.preferences)) return false;
+                // Publishing the selection can dispatch window messages. Read the committed profile again.
+                const data = self.snapshot.data;
+                const selected = data.findProfile(data.preferences.input_profile_id) orelse return self.rejectPage(.changed);
+                if (!std.mem.eql(u8, selected.channel, channel)) return self.rejectPage(.changed);
+                break :detected selected.id;
+            },
+        };
+        const items = source.library.read().itemsFor(profile_id) catch return self.rejectPage(.changed);
         const item = for (items) |item| {
             if (item.slot == slot_number) break item;
         } else {
@@ -1411,15 +1462,35 @@ const App = struct {
         };
         var plan = try InputPlan.capture(self, profile_id, item);
         defer plan.arena.deinit();
+        if (!plan.itemCurrent(self)) return self.rejectPage(.changed);
         const verification = try self.verifyShortcutInput(target, video, page_token);
         defer verification.deinit();
-        if (!self.commandCurrent(command) or !plan.current(self)) return false;
+        if (!self.commandCurrent(command) or !source.scope.current(self.snapshot.data.preferences) or !plan.itemCurrent(self)) return false;
         if (!self.pageReplySucceeded(verification, video, .ok)) return false;
         const outcome = try self.commitInput(.input_insert, target, video, page_token, plan.text);
         if (self.shortcutSuperseded(command.generation)) return false;
         if (outcome != .inserted) return self.rejectPage(outcome);
         self.report("弾幕を入力しました。");
         return true;
+    }
+
+    fn enqueueShortcut(self: *App, event: shortcuts.Event, video: ?operations.VideoId) !void {
+        const scope: operations.SlotSource.Scope = switch (event.action) {
+            .shared1, .shared2 => .shared,
+            .profile1, .profile2 => scope: {
+                const data = self.snapshot.data;
+                if (data.preferences.auto_mode) break :scope .automatic;
+                const selected = data.findProfile(data.preferences.input_profile_id);
+                break :scope .{ .manual = if (selected) |profile| profile.id else "" };
+            },
+            else => return self.queue.enqueue(allocator, event, self.library_revision, video),
+        };
+        const library = try self.snapshot.retainLibrary();
+        errdefer library.release();
+        try self.queue.enqueueWithSlot(allocator, event, self.library_revision, video, .{
+            .library = library,
+            .scope = scope,
+        });
     }
 
     fn verifyShortcutInput(self: *App, target: usize, video: operations.VideoId, page_token: operations.PageToken) !transport.Reply {
@@ -1438,7 +1509,7 @@ const App = struct {
             if (self.paletteContextCurrent(context) and (self.foreground(windows.number(context.target)) or
                 self.foreground(windows.number(self.palette.window))))
             {
-                self.palette.refresh(self.snapshot.data);
+                self.refreshPalette();
                 self.report(switch (failure) {
                     error.ProfileChanged => "配信者が変わりました。弾幕を選び直してください。",
                     error.ProfileSelectionNotSaved => "自動選択を保存できませんでした。",
@@ -1450,6 +1521,7 @@ const App = struct {
                 self.palette.show();
             }
         };
+        self.updateReactionButtons();
         self.finishQuit();
         if (self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
@@ -1764,14 +1836,20 @@ const App = struct {
         return .{ .video = video, .page = page_proof };
     }
 
+    fn saveReactionDefaults(self: *App, options: view.ReactionOptions) !void {
+        var prefs = self.snapshot.data.preferences;
+        if (prefs.reaction_kind == options.kind and prefs.reaction_count == options.count and
+            prefs.reaction_interval_ms == options.interval) return;
+        prefs.reaction_kind = options.kind;
+        prefs.reaction_count = options.count;
+        prefs.reaction_interval_ms = options.interval;
+        try self.writePreferences(prefs);
+    }
+
     fn paletteReaction(self: *App, options: view.ReactionOptions, save: bool) void {
         if (!self.canEdit() or self.manager.isEditing()) return;
         if (save) {
-            var prefs = self.snapshot.data.preferences;
-            prefs.reaction_kind = options.kind;
-            prefs.reaction_count = options.count;
-            prefs.reaction_interval_ms = options.interval;
-            self.writePreferences(prefs) catch return self.report("標準設定を保存できませんでした。");
+            self.saveReactionDefaults(options) catch return self.report("標準設定を保存できませんでした。");
             return self.report("リアクションの標準設定を保存しました。");
         }
         const origin = self.reactionOrigin();
@@ -2037,8 +2115,11 @@ const App = struct {
         if (job.shortcut) |command| self.queue.finish(command, job.succeeded());
         self.updateReactionButtons();
         // A replacement queued during the old request owns the next result and progress display.
-        if (self.reaction_revision == revision and !(superseded and self.reactionQueued()))
-            self.publishReactionResult(reason, reactionCounts(job), detail);
+        if (self.reaction_revision == revision and !(superseded and self.reactionQueued())) {
+            var result = feedback.Result.init(reason, reactionCounts(job), detail);
+            result.settings = .{ .kind = job.kind, .standard = job.shortcut != null };
+            self.showReactionResult(result);
+        }
         if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
 };
@@ -2864,6 +2945,147 @@ test "shortcut save publishes committed keys including swaps and the stop bindin
     try testing.expectEqual(@as(?shortcuts.Event, .{ .action = .palette, .window = 42 }), released.event);
 }
 
+test "saving unchanged reaction defaults succeeds without writing to the database" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    var app: App = .{
+        .executable = undefined,
+        .db = &db,
+        .snapshot = try db.load(heap),
+        .history = storage.LibraryHistory.init(heap),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    const prefs = app.snapshot.data.preferences;
+    const unchanged: view.ReactionOptions = .{ .kind = prefs.reaction_kind, .count = prefs.reaction_count, .interval = prefs.reaction_interval_ms };
+    const changed: view.ReactionOptions = .{ .kind = 2, .count = unchanged.count, .interval = unchanged.interval };
+
+    try db.db.exec("PRAGMA query_only=ON");
+    try app.saveReactionDefaults(unchanged);
+    try testing.expectError(error.DatabaseReadOnly, app.saveReactionDefaults(changed));
+    try testing.expectEqual(unchanged.kind, app.snapshot.data.preferences.reaction_kind);
+    try testing.expectEqual(@as(u64, 0), app.input_settings_revision);
+    try testing.expectEqual(@as(u64, 0), app.library_revision);
+    var original = try db.load(heap);
+    defer original.deinit();
+    try testing.expectEqual(unchanged.kind, original.data.preferences.reaction_kind);
+
+    try db.db.exec("PRAGMA query_only=OFF");
+    try app.saveReactionDefaults(changed);
+    try testing.expectEqual(changed.kind, app.snapshot.data.preferences.reaction_kind);
+    try testing.expectEqual(@as(u64, 1), app.input_settings_revision);
+    var saved = try db.load(heap);
+    defer saved.deinit();
+    try testing.expectEqual(changed.kind, saved.data.preferences.reaction_kind);
+}
+
+test "return from management keeps its window open until the palette can be shown" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    const Probe = struct {
+        fn click(owner: win.HWND, button: win.HWND) void {
+            _ = win.SendMessageW(owner, win.WM_COMMAND, @intCast(win.GetDlgCtrlID(button)), @bitCast(@intFromPtr(button)));
+        }
+
+        fn expectOptions(palette: view.Palette, indices: [3]win.LRESULT) !void {
+            for ([_]win.HWND{ palette.reaction_kind, palette.reaction_count, palette.reaction_interval }, indices) |control, index|
+                try testing.expectEqual(index, win.SendMessageW(control, win.CB_GETCURSEL, 0, 0));
+        }
+
+        fn expectProfile(app: *const App, label: []const u8, tooltip: []const u16) !void {
+            const shown = try windows.text(app.palette.input_context, heap);
+            defer heap.free(shown);
+            try testing.expectEqualStrings(label, shown);
+            var tip: [128]u16 = undefined;
+            app.trayTip(&tip);
+            try testing.expectEqualSlices(u16, tooltip, std.mem.sliceTo(&tip, 0));
+        }
+    };
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    try db.save(.{
+        .preferences = .{ .auto_mode = false, .input_profile_id = "profile", .reaction_kind = 3, .reaction_count = 100, .reaction_interval_ms = 150 },
+        .profiles = &.{.{ .id = "profile", .name = "試験配信者", .items = &.{.{ .id = "entry", .name = "試験用", .text = "本文" }} }},
+    });
+    var app: App = .{
+        .executable = undefined,
+        .db = &db,
+        .snapshot = try db.load(heap),
+        .history = storage.LibraryHistory.init(heap),
+        .running_digest = null,
+    };
+    defer app.deinit();
+    const previous = current;
+    current = &app;
+    defer current = previous;
+    var wc = std.mem.zeroes(win.WNDCLASSW);
+    wc.hInstance = win.GetModuleHandleW(null);
+    wc.lpfnWndProc = messageHandler;
+    wc.lpszClassName = windows.wide("ChatPalette.TestManagementReturn");
+    if (win.RegisterClassW(&wc) == 0) return error.TestManagementReturnClass;
+    app.window = win.CreateWindowExW(0, wc.lpszClassName, windows.wide("test"), 0, 0, 0, 0, 0, null, null, wc.hInstance, null) orelse return error.TestManagementReturnHost;
+    try app.palette.open(app.window);
+    try app.manager.open(app.window, &db, &app.snapshot, &app.history);
+    app.manager.show();
+    app.target = @ptrFromInt(42);
+    app.palette.resetReaction(.{ .reaction_kind = 2, .reaction_count = 10, .reaction_interval_ms = 25 });
+    for ([_]enum { worker, page, modal }{ .worker, .page, .modal }) |blocked| {
+        app.worker.active = blocked == .worker;
+        app.queue.active = blocked == .page;
+        app.modal = blocked == .modal;
+        for ([_]win.HWND{ app.manager.back, app.manager.load_defaults }) |button| {
+            Probe.click(app.manager.window, button);
+            try testing.expect(win.IsWindowVisible(app.manager.window) != 0);
+            try testing.expect(win.IsWindowVisible(app.palette.window) == 0);
+            try testing.expectEqual(@as(usize, 42), windows.number(app.target));
+            try Probe.expectOptions(app.palette, .{ 1, 1, 1 });
+        }
+    }
+    app.modal = false;
+    Probe.click(app.manager.window, app.manager.back);
+    try testing.expect(win.IsWindowVisible(app.palette.window) != 0);
+    try testing.expect(win.IsWindowVisible(app.manager.window) == 0);
+    try testing.expectEqual(@as(usize, 42), windows.number(app.target));
+    try Probe.expectOptions(app.palette, .{ 1, 1, 1 });
+    try Probe.expectProfile(&app, "手動選択：試験配信者", windows.wide("ChatPalette：試験配信者"));
+
+    app.openManagement(false);
+    Probe.click(app.manager.window, app.manager.load_defaults);
+    try testing.expect(win.IsWindowVisible(app.palette.window) != 0 and win.IsWindowVisible(app.manager.window) == 0);
+    try Probe.expectOptions(app.palette, .{ 2, 2, 4 });
+    try testing.expectEqual(@as(u64, 0), app.input_settings_revision);
+
+    var detected = app.snapshot.data.preferences;
+    detected.auto_mode = true;
+    app.palette.detected_profile = true;
+    try app.writePreferences(detected);
+    try testing.expectEqualStrings("profile", (app.palette.selectedRow() orelse return error.MissingSelectedProfileRow).profile_id);
+    try Probe.expectProfile(&app, "自動判別：試験配信者", windows.wide("ChatPalette：試験配信者"));
+    app.openManagement(true);
+    try testing.expect(win.IsWindowVisible(app.manager.window) != 0);
+    try testing.expect(app.manager.editing == null and app.manager.selection == null);
+    try testing.expectEqualStrings("profile", app.snapshot.data.preferences.input_profile_id);
+    app.target = null;
+    Probe.click(app.manager.window, app.manager.back);
+    try testing.expect(app.palette.count == 0);
+    try Probe.expectProfile(&app, "自動判別：共通の弾幕のみ", windows.wide("ChatPalette：配信者未選択"));
+    try testing.expectEqualStrings("profile", app.snapshot.data.preferences.input_profile_id);
+}
+
 test "saved library edits and imports report view failures and recover without replaying the save" {
     const testing = std.testing;
     const heap = testing.allocator;
@@ -2918,7 +3140,7 @@ test "saved library edits and imports report view failures and recover without r
         _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, duplicate_id, @bitCast(@intFromPtr(duplicate)));
         const duplicate_notice = try windows.text(app.manager.notice, heap);
         defer heap.free(duplicate_notice);
-        try testing.expectEqualStrings("保存済みです。パレットを更新できませんでした。パレットを開き直してください。", duplicate_notice);
+        try testing.expectEqualStrings("通知：保存済みです。パレットを更新できませんでした。パレットを開き直してください。", duplicate_notice);
         try testing.expect(app.palette.refresh_failed and !app.manager.list_update_failed);
         try testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(app.manager.list, win.LVM_GETITEMCOUNT, 0, 0));
         var duplicated = try db.load(heap);
@@ -2932,7 +3154,7 @@ test "saved library edits and imports report view failures and recover without r
         _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, @intCast(win.GetDlgCtrlID(undo)), @bitCast(@intFromPtr(undo)));
         const undo_notice = try windows.text(app.manager.notice, heap);
         defer heap.free(undo_notice);
-        try testing.expectEqualStrings("保存済みです。管理画面とパレットを更新できませんでした。両方の画面を開き直してください。", undo_notice);
+        try testing.expectEqualStrings("通知：保存済みです。管理画面とパレットを更新できませんでした。両方の画面を開き直してください。", undo_notice);
         try testing.expect(app.palette.refresh_failed and app.manager.list_update_failed);
         try testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(app.manager.list, win.LVM_GETITEMCOUNT, 0, 0));
         try testing.expectEqual(@as(usize, 0), app.history.length);
@@ -2955,7 +3177,7 @@ test "saved library edits and imports report view failures and recover without r
         _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, duplicate_id, @bitCast(@intFromPtr(duplicate)));
         const scope_notice = try windows.text(app.manager.notice, heap);
         defer heap.free(scope_notice);
-        try testing.expectEqualStrings("保存済みです。管理画面を更新できませんでした。管理画面を開き直してください。", scope_notice);
+        try testing.expectEqualStrings("通知：保存済みです。管理画面を更新できませんでした。管理画面を開き直してください。", scope_notice);
         try testing.expect(app.manager.refreshFailed() and !app.manager.list_update_failed and !app.palette.refresh_failed);
         try testing.expect(win.IsWindowEnabled(app.manager.scope) == 0);
         try testing.expect(win.IsWindowEnabled(duplicate) != 0);
@@ -3183,7 +3405,7 @@ fn shortcut(event: shortcuts.Event) void {
     else
         null;
     const generation = app.queue.generation;
-    app.queue.enqueue(allocator, event, app.library_revision, video) catch {
+    app.enqueueShortcut(event, video) catch {
         app.queue.cancel();
         if (app.input_cancellation) |pending| pending.signal.cancel();
         return;
@@ -3236,7 +3458,7 @@ fn messageHandler(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam:
             app.libraryChanged();
             return @intFromBool(app.palette.refresh_failed);
         },
-        management.wm_back => app.show(.previous_target),
+        management.wm_back => app.show(.{ .previous_target = if (wparam == 0) .keep_options else .load_defaults }),
         management.wm_support => app.contextMenu(),
         management.wm_edit_allowed => return @intFromBool(app.canEdit()),
         management.wm_resolve_channel => if (lparam != 0) app.resolveChannel(@ptrFromInt(@as(usize, @bitCast(lparam)))),

@@ -31,6 +31,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("native/tools/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     const worker_module = b.createModule(.{
         .root_source_file = b.path("native/worker/main.zig"),
@@ -57,6 +58,8 @@ pub fn build(b: *std.Build) void {
     worker_client_module.linkSystemLibrary("ole32", .{});
     tools_module.addImport("worker_client", worker_client_module);
     tools_module.linkSystemLibrary("version", .{});
+    tools_module.linkSystemLibrary("advapi32", .{});
+    tools_module.linkSystemLibrary("ole32", .{});
     const tools = b.addExecutable(.{ .name = "chatpalette-tools", .root_module = tools_module });
     const tools_step = b.step("tools", "Build the Zig validation and packaging tools");
     tools_step.dependOn(&b.addInstallArtifact(tools, .{}).step);

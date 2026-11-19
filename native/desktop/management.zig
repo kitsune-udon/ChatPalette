@@ -14,6 +14,7 @@ pub const wm_back = win.WM_APP + 21;
 pub const wm_resolve_channel = win.WM_APP + 22;
 pub const wm_edit_allowed = win.WM_APP + 23;
 pub const wm_support = win.WM_APP + 24;
+pub const notice_control_id: c_int = @intFromEnum(Id.notice);
 
 pub fn savedViewWarning(management_failed: bool, palette_failed: bool) ?[]const u8 {
     if (management_failed and palette_failed) return "保存済みです。管理画面とパレットを更新できませんでした。両方の画面を開き直してください。";
@@ -71,9 +72,12 @@ const Id = enum(u16) {
     undo,
     support,
     back,
+    notice,
+    load_defaults,
 };
 
 const EditorMode = enum { add_item, edit_item, move_item, add_profile, rename_profile, link_profile };
+const ScopeChoice = struct { id: []const u8, name: []const u8 };
 
 const Editor = struct {
     window: win.HWND = null,
@@ -87,7 +91,7 @@ const Editor = struct {
     channel: []const u8 = "",
     browser_target: usize = 0,
     browser_pid: u32 = 0,
-    link_profiles: []const []const u8 = &.{},
+    scopes: []const ScopeChoice = &.{},
     name: win.HWND = null,
     text: win.HWND = null,
     choice: win.HWND = null,
@@ -101,6 +105,7 @@ const Editor = struct {
     cancel: win.HWND = null,
     parent: win.HWND = null,
     parent_was_enabled: bool = false,
+    close_after_open: bool = false,
     viewport: Viewport = .{},
 };
 
@@ -201,6 +206,7 @@ pub const Management = struct {
     undo_button: win.HWND = null,
     support: win.HWND = null,
     back: win.HWND = null,
+    load_defaults: win.HWND = null,
     notice: win.HWND = null,
     item_buttons: [buttons.len]win.HWND = @splat(null),
     dialog: Editor = .{},
@@ -239,9 +245,11 @@ pub const Management = struct {
             hwnd.* = try controlText(self.window, wide("BUTTON"), button.text, win.WS_TABSTOP, button.id);
         }
         self.undo_button = try control(self.window, "BUTTON", "直前の変更を元に戻す", win.WS_TABSTOP, .undo);
+        self.notice = try control(self.window, "EDIT", "", win.WS_TABSTOP | win.WS_BORDER | win.WS_VSCROLL | win.ES_MULTILINE | win.ES_AUTOVSCROLL | win.ES_READONLY, .notice);
+        _ = win.ShowWindow(self.notice, win.SW_HIDE);
         self.support = try control(self.window, "BUTTON", "操作・サポート…", win.WS_TABSTOP, .support);
         self.back = try control(self.window, "BUTTON", "パレットへ戻る", win.WS_TABSTOP, .back);
-        self.notice = try control(self.window, "STATIC", "", 0, null);
+        self.load_defaults = try control(self.window, "BUTTON", "標準設定を読み込んで戻る", win.WS_TABSTOP, .load_defaults);
         self.font.applyChildren(self.window);
         self.resize();
         self.refresh();
@@ -379,9 +387,9 @@ pub const Management = struct {
         if (!self.scope_update_failed) choose(self.scope, choice);
         self.refreshList();
         if (self.scope_update_failed) {
-            windows.setText(self.notice, "配信者一覧を更新できませんでした。管理画面を開き直してください。");
+            self.setNotice("配信者一覧を更新できませんでした。管理画面を開き直してください。");
         } else if (scope_was_failed and !self.list_update_failed) {
-            windows.setText(self.notice, "");
+            self.setNotice("");
         }
     }
 
@@ -393,10 +401,10 @@ pub const Management = struct {
         if (self.list == null) return;
         self.publishList() catch {
             self.list_update_failed = true;
-            windows.setText(self.notice, "管理一覧を更新できませんでした。管理画面を開き直してください。");
+            self.setNotice("管理一覧を更新できませんでした。管理画面を開き直してください。");
             return;
         };
-        if (self.list_update_failed) windows.setText(self.notice, "");
+        if (self.list_update_failed) self.setNotice("");
         self.list_update_failed = false;
     }
 
@@ -507,10 +515,9 @@ pub const Management = struct {
         if (!self.isEditing()) _ = win.ShowWindow(self.window, win.SW_HIDE);
     }
 
-    fn hideAndReturn(self: *Management) void {
+    fn returnToPalette(self: *Management, load_defaults: bool) void {
         if (self.raiseEditor() or self.isEditing()) return;
-        self.hide();
-        _ = win.SendMessageW(self.host, wm_back, 0, 0);
+        _ = win.SendMessageW(self.host, wm_back, @intFromBool(load_defaults), 0);
     }
 
     fn changed(self: *Management, new_selection: ?[]const u8) void {
@@ -527,7 +534,7 @@ pub const Management = struct {
         defer self.publishing_change = false;
         self.refresh();
         const palette_failed = win.SendMessageW(self.host, wm_changed, 0, 0) != 0;
-        windows.setText(self.notice, savedViewWarning(self.refreshFailed(), palette_failed) orelse success);
+        self.setNotice(savedViewWarning(self.refreshFailed(), palette_failed) orelse success);
         // A synchronous callback can change the control even when its notification is ignored.
         self.reconcileSelection();
     }
@@ -537,7 +544,7 @@ pub const Management = struct {
         defer self.publishing_change = false;
         setIdentity(&self.selection, "") catch unreachable;
         self.refresh();
-        if (!self.refreshFailed()) windows.setText(self.notice, "一覧を更新しました。対象を選び直してください。");
+        if (!self.refreshFailed()) self.setNotice("一覧を更新しました。対象を選び直してください。");
         self.reconcileSelection();
     }
 
@@ -545,15 +552,31 @@ pub const Management = struct {
         if (!std.mem.eql(u8, self.editingId(), scope)) setIdentity(&self.editing, scope) catch {};
     }
 
+    fn setNotice(self: Management, value: []const u8) void {
+        const labelled = if (value.len != 0) std.fmt.allocPrint(allocator, "通知：{s}", .{value}) catch null else null;
+        defer if (labelled) |text| allocator.free(text);
+        if (!windows.setTextChecked(self.notice, labelled orelse value)) return;
+        const visible = win.GetWindowLongW(self.notice, win.GWL_STYLE) & win.WS_VISIBLE != 0;
+        const has_text = win.GetWindowTextLengthW(self.notice) != 0;
+        if (visible != has_text) _ = win.ShowWindow(self.notice, if (has_text) win.SW_SHOWNA else win.SW_HIDE);
+    }
+
+    fn showErrorText(self: Management, message: []const u8) void {
+        if (self.dialog.window != null) {
+            windows.setText(self.dialog.status, message);
+        } else {
+            self.setNotice(message);
+        }
+    }
+
     fn showError(self: Management, err: anyerror) void {
-        const label = if (self.dialog.window != null) self.dialog.status else self.notice;
         if (err == error.ChannelMissing) {
             const key = self.snapshot.data.preferences.shortcut_keys[@intFromEnum(shortcuts.Action.palette)];
             const chord = shortcuts.parse(key) catch null;
             var key_buffer: [30]u8 = undefined;
             var message: [240]u8 = undefined;
             const details = std.fmt.bufPrint(&message, "YouTubeを前面にし、{s} でパレットを開いて連携してください。", .{shortcuts.label(chord, &key_buffer)}) catch unreachable;
-            windows.setText(label, details);
+            self.showErrorText(details);
             return;
         }
         const failure = self.db.failureCodes();
@@ -564,11 +587,11 @@ pub const Management = struct {
             else
                 std.fmt.bufPrint(&buffer, "保存失敗 ({d})。ロールバック ({d}) に失敗しました。再起動してください。", .{ failure.original, rollback });
             if (details) |status| {
-                windows.setText(label, status);
+                self.showErrorText(status);
                 return;
             } else |_| {}
         }
-        windows.setText(label, switch (err) {
+        self.showErrorText(switch (err) {
             error.InvalidText => "名前と1行の本文を入力してください。",
             error.DuplicateChannel => "このチャンネルはすでに別の配信者に連携されています。",
             error.DatabaseChanged => "設定が別の接続で変更されました。再起動して読み直してください。",
@@ -596,8 +619,8 @@ pub const Management = struct {
             self.hide();
             return;
         }
-        if (id == @intFromEnum(Id.back)) {
-            self.hideAndReturn();
+        if (id == @intFromEnum(Id.back) or id == @intFromEnum(Id.load_defaults)) {
+            self.returnToPalette(id == @intFromEnum(Id.load_defaults));
             return;
         }
         if (id == @intFromEnum(Id.support)) {
@@ -723,7 +746,9 @@ pub const Management = struct {
         self.opening_editor = true;
         defer {
             self.opening_editor = false;
-            if (mode == .link_profile) self.updateActions();
+            const cancelled = self.dialog.close_after_open;
+            if (cancelled) self.closeDialog();
+            if (cancelled or mode == .link_profile) self.updateActions();
         }
         var dialog: Editor = .{ .mode = mode, .arena = std.heap.ArenaAllocator.init(allocator) };
         defer dialog.arena.deinit();
@@ -774,6 +799,7 @@ pub const Management = struct {
         dialog.arena = std.heap.ArenaAllocator.init(allocator);
         errdefer if (self.editor_generation == generation and self.dialog.window == editor_window) self.closeDialog();
         try self.editorControls();
+        if (self.dialog.close_after_open) return;
         self.font.applyChildren(self.dialog.window);
         windows.fitWindow(self.dialog.window, self.dialog.parent);
         self.resizeEditor();
@@ -830,8 +856,7 @@ pub const Management = struct {
             .move_item => {
                 editor.choice_label = try control(parent, "STATIC", "移動先を選んでください。移動するとキー割当を解除します。", 0, null);
                 editor.choice = try control(parent, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP, .choice);
-                try fillScopes(editor.choice, self.snapshot.data.profiles, "共通の弾幕");
-                choose(editor.choice, if (editor.origin.len == 0) 1 else 0);
+                try self.fillEditorScopes();
             },
             .add_profile, .rename_profile => {
                 editor.name_label = try control(parent, "STATIC", "配信者名", 0, null);
@@ -840,19 +865,7 @@ pub const Management = struct {
             .link_profile => {
                 editor.choice_label = try control(parent, "STATIC", "このチャンネルで自動選択する配信者", 0, null);
                 editor.choice = try control(parent, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP, .choice);
-                try fillScopes(editor.choice, self.snapshot.data.profiles, "新しい配信者を登録");
-                const owned = editor.arena.allocator();
-                const link_profiles = try owned.alloc([]const u8, self.snapshot.data.profiles.len + 1);
-                link_profiles[0] = "";
-                var selected: usize = 0;
-                for (self.snapshot.data.profiles, 1..) |candidate, i| {
-                    link_profiles[i] = try owned.dupe(u8, candidate.id);
-                    const equal = std.mem.eql;
-                    if (equal(u8, candidate.id, editor.origin) or
-                        (editor.origin.len == 0 and equal(u8, candidate.channel, editor.channel))) selected = i;
-                }
-                editor.link_profiles = link_profiles;
-                choose(editor.choice, selected);
+                try self.fillEditorScopes();
                 editor.name_label = try control(parent, "STATIC", "アプリ内で表示する名前", 0, null);
                 editor.name = try control(parent, "EDIT", "", win.WS_TABSTOP | win.WS_BORDER | win.ES_AUTOHSCROLL, .name);
                 editor.details = try control(parent, "STATIC", "", win.SS_NOPREFIX, null);
@@ -867,9 +880,43 @@ pub const Management = struct {
             windows.setText(editor.text, editor.original_text);
         }
         editor.status = try control(parent, "STATIC", "", 0, null);
-        editor.save = try controlText(parent, wide("BUTTON"), if (editor.mode == .link_profile) wide("連携する") else wide("保存"), win.BS_DEFPUSHBUTTON | win.WS_TABSTOP, .confirm);
+        const save_label = switch (editor.mode) {
+            .link_profile => wide("連携する"),
+            .move_item => wide("移動"),
+            else => wide("保存"),
+        };
+        editor.save = try controlText(parent, wide("BUTTON"), save_label, win.BS_DEFPUSHBUTTON | win.WS_TABSTOP, .confirm);
+        if (editor.mode == .move_item and editor.scopes.len == 0) {
+            _ = win.EnableWindow(editor.save, 0);
+            windows.setText(editor.status, "移動先がありません。先に配信者を追加してください。");
+        }
         editor.cancel = try control(parent, "BUTTON", "キャンセル", win.WS_TABSTOP, .cancel);
         self.updateEditorChoice();
+    }
+
+    fn fillEditorScopes(self: *Management) !void {
+        const editor = &self.dialog;
+        const owned = editor.arena.allocator();
+        const profiles = self.snapshot.data.profiles;
+        const scopes = try owned.alloc(ScopeChoice, profiles.len + 1);
+        const link = editor.mode == .link_profile;
+        var count: usize = 0;
+        if (link or editor.origin.len != 0) {
+            scopes[0] = .{ .id = "", .name = if (link) "新しい配信者を登録" else "共通の弾幕" };
+            count = 1;
+        }
+        var selected: usize = 0;
+        for (profiles) |profile| {
+            const origin = std.mem.eql(u8, profile.id, editor.origin);
+            if (!link and origin) continue;
+            if (link and (origin or (editor.origin.len == 0 and std.mem.eql(u8, profile.channel, editor.channel)))) selected = count;
+            scopes[count] = .{ .id = try owned.dupe(u8, profile.id), .name = try owned.dupe(u8, profile.name) };
+            count += 1;
+        }
+        // Each displayed label and its ID come from the same snapshot.
+        try fillScopes(editor.choice, scopes[0..count], null);
+        editor.scopes = scopes[0..count];
+        if (count != 0) choose(editor.choice, selected);
     }
 
     fn updateEditorChoice(self: *Management) void {
@@ -880,8 +927,8 @@ pub const Management = struct {
             _ = win.EnableWindow(self.dialog.name, enable);
             _ = win.EnableWindow(self.dialog.name_label, enable);
             const index = selected orelse return;
-            if (index >= self.dialog.link_profiles.len) return;
-            const profile = self.snapshot.data.findProfile(self.dialog.link_profiles[index]);
+            if (index >= self.dialog.scopes.len) return;
+            const profile = self.snapshot.data.findProfile(self.dialog.scopes[index].id);
             const prior = if (profile) |value| value.channel else "";
             var details: [640]u8 = undefined;
             const summary = std.fmt.bufPrint(&details, "{s}\r\n現在：{s}\r\n変更後：{s}\r\n{s}", .{
@@ -973,6 +1020,10 @@ pub const Management = struct {
     }
 
     fn cancelDialog(self: *Management) void {
+        if (self.opening_editor) {
+            self.dialog.close_after_open = true;
+            return;
+        }
         if (self.confirming or (self.saving_editor and self.dialog.mode != .link_profile)) return;
         if (self.editorDirty() catch true) {
             if (!self.confirm(self.dialog.window, "保存せずに閉じますか？", "未保存の変更"))
@@ -997,17 +1048,23 @@ pub const Management = struct {
         const was_foreground = win.GetForegroundWindow() == editor;
         const parent = closing.parent;
         if (closing.parent_was_enabled and win.IsWindow(parent) != 0) _ = win.EnableWindow(parent, 1);
+        // Enabling the parent dispatches WM_ENABLE synchronously and can change the foreground window.
+        const foreground = win.GetForegroundWindow();
+        const return_to_parent = was_foreground and (foreground == editor or foreground == parent) and
+            self.editor_generation == generation and self.dialog.window == null and
+            parent == self.window and win.IsWindowVisible(parent) != 0 and win.IsWindowEnabled(parent) != 0;
+        if (return_to_parent and foreground == editor) _ = win.SetForegroundWindow(parent);
         _ = win.DestroyWindow(editor);
-        if (self.editor_generation != generation or self.dialog.window != null) return;
-        if (was_foreground and parent == self.window and win.IsWindowVisible(parent) != 0 and win.IsWindowEnabled(parent) != 0) {
-            _ = win.SetForegroundWindow(parent);
+        if (return_to_parent and self.editor_generation == generation and self.dialog.window == null and
+            parent == self.window and win.GetForegroundWindow() == parent)
+        {
             _ = win.SetFocus(self.list);
             if (self.viewport.revealFocus(self.window)) self.resize();
         }
     }
 
     fn saveDialog(self: *Management) !void {
-        if (self.saving_editor or !self.editAllowed()) return;
+        if (self.opening_editor or self.saving_editor or !self.editAllowed()) return;
         const mode = self.dialog.mode;
         self.saving_editor = true;
         defer {
@@ -1033,7 +1090,9 @@ pub const Management = struct {
                 item_selection = try self.history.item(self.db, self.snapshot, self.dialog.origin, value);
             },
             .move_item => {
-                const destination = try scopeAt(self.snapshot.data, selected orelse return error.ProfileMissing);
+                const index = selected orelse return error.ProfileMissing;
+                if (index >= self.dialog.scopes.len) return error.ProfileMissing;
+                const destination = self.dialog.scopes[index].id;
                 _ = try self.history.item(self.db, self.snapshot, self.dialog.origin, .{ .move = .{ .id = self.dialog.id, .destination = destination } });
                 const remaining = self.snapshot.data.itemsFor(self.dialog.origin) catch &.{};
                 if (remaining.len != 0) item_selection = remaining[0].id;
@@ -1048,8 +1107,8 @@ pub const Management = struct {
             },
             .link_profile => {
                 const index = selected orelse return error.ProfileMissing;
-                if (index >= self.dialog.link_profiles.len) return error.ProfileMissing;
-                const target = try allocator.dupe(u8, self.dialog.link_profiles[index]);
+                if (index >= self.dialog.scopes.len) return error.ProfileMissing;
+                const target = try allocator.dupe(u8, self.dialog.scopes[index].id);
                 defer allocator.free(target);
                 var latest = self.resolveChannel(allocator) catch |failure| {
                     if (self.dialog.window != request_window or self.editor_generation != request_generation) return;
@@ -1081,13 +1140,13 @@ pub const Management = struct {
     }
 
     fn resize(self: *Management) void {
-        if (self.list == null or self.back == null) return;
+        if (self.list == null or self.load_defaults == null) return;
         self.viewport.arrange(self.window, self, placeControls);
     }
 
     fn placeControls(self: *Management) void {
         const dpi = self.dpi;
-        const content = self.viewport.layout(self.window, dpi, .{ .width = 344, .height = 372 }, null) orelse return;
+        const content = self.viewport.layout(self.window, dpi, .{ .width = 344, .height = 421 }, null) orelse return;
         const top = -self.viewport.y;
         const margin = dpi.pixels(12);
         const pad = margin - self.viewport.x;
@@ -1100,7 +1159,7 @@ pub const Management = struct {
         move(self.profile_menu, pad + half + gap, top + dpi.pixels(69), half, dpi.pixels(28));
         move(self.channel, pad, top + dpi.pixels(102), full, dpi.pixels(26));
         const list_top = dpi.pixels(131);
-        const list_bottom = @max(list_top + dpi.pixels(56), content.height - dpi.pixels(182));
+        const list_bottom = @max(list_top + dpi.pixels(56), content.height - dpi.pixels(231));
         const foot = top + list_bottom;
         move(self.list, pad, top + list_top, full, list_bottom - list_top);
         _ = win.SendMessageW(self.list, win.LVM_SETCOLUMNWIDTH, 0, @divTrunc(full * 3, 10));
@@ -1117,9 +1176,10 @@ pub const Management = struct {
             left += button_width + gap;
         }
         move(self.undo_button, pad, foot + dpi.pixels(72), full, dpi.pixels(27));
-        move(self.notice, pad, foot + dpi.pixels(106), full, dpi.pixels(28));
-        move(self.back, pad, foot + dpi.pixels(140), half, dpi.pixels(27));
-        move(self.support, pad + half + gap, foot + dpi.pixels(140), half, dpi.pixels(27));
+        move(self.notice, pad, foot + dpi.pixels(106), full, dpi.pixels(44));
+        move(self.back, pad, foot + dpi.pixels(156), half, dpi.pixels(27));
+        move(self.support, pad + half + gap, foot + dpi.pixels(156), half, dpi.pixels(27));
+        move(self.load_defaults, pad, foot + dpi.pixels(189), full, dpi.pixels(27));
     }
 
     fn notify(self: *Management, header: *const win.NMHDR) win.LRESULT {
@@ -1157,7 +1217,7 @@ pub const Management = struct {
             2 => content.slotLabel(item.slot),
             else => "",
         };
-        copyText(buffer, description);
+        windows.copyText(buffer, description);
     }
 
     fn findName(self: *Management, find: *const win.NMLVFINDITEMW) win.LRESULT {
@@ -1196,26 +1256,6 @@ fn slotText(out: []u8, prefs: storage.Preferences, profile: bool, slot: u8) []co
     return shortcuts.label(chord, out);
 }
 
-fn copyText(destination: []u16, source: []const u8) void {
-    if (destination.len == 0) return;
-    const view = std.unicode.Utf8View.initUnchecked(source);
-    var iter = view.iterator();
-    var length: usize = 0;
-    while (iter.nextCodepoint()) |point| {
-        const needed: usize = if (point <= 0xffff) 1 else 2;
-        if (length + needed >= destination.len) break;
-        if (needed == 1) {
-            destination[length] = @intCast(point);
-        } else {
-            const adjusted = point - 0x10000;
-            destination[length] = @intCast(0xd800 + (adjusted >> 10));
-            destination[length + 1] = @intCast(0xdc00 + (adjusted & 0x3ff));
-        }
-        length += needed;
-    }
-    destination[length] = 0;
-}
-
 fn register(name: [:0]const u16, callback: win.WNDPROC) !void {
     var info = std.mem.zeroes(win.WNDCLASSW);
     info.lpfnWndProc = callback;
@@ -1239,27 +1279,21 @@ fn controlText(parent: win.HWND, kind: [:0]const u16, value: [:0]const u16, flag
     return hwnd;
 }
 
-fn fillScopes(box: win.HWND, profiles: []const storage.Profile, shared: []const u8) !void {
+fn fillScopes(box: win.HWND, scopes: anytype, first: ?[]const u8) !void {
     _ = win.SendMessageW(box, win.WM_SETREDRAW, 0, 0);
     defer {
         _ = win.SendMessageW(box, win.WM_SETREDRAW, 1, 0);
         _ = win.InvalidateRect(box, null, 1);
     }
     _ = win.SendMessageW(box, win.CB_RESETCONTENT, 0, 0);
-    try addChoice(box, shared);
-    for (profiles) |entry| try addChoice(box, entry.name);
+    if (first) |label| try addChoice(box, label);
+    for (scopes) |entry| try addChoice(box, entry.name);
 }
 
 fn addChoice(box: win.HWND, value: []const u8) !void {
     const text = try std.unicode.utf8ToUtf16LeAllocZ(allocator, value);
     defer allocator.free(text);
     if (win.SendMessageW(box, win.CB_ADDSTRING, 0, pointerParam(text.ptr)) < 0) return error.ManagementChoices;
-}
-
-fn scopeAt(data: storage.Data, index: usize) ![]const u8 {
-    if (index == 0) return "";
-    if (index > data.profiles.len) return error.ProfileMissing;
-    return data.profiles[index - 1].id;
 }
 
 fn choose(box: win.HWND, index: usize) void {
@@ -1353,6 +1387,114 @@ fn editorProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam
     return 0;
 }
 
+test "management notice wraps scrolls and supports selecting its complete text" {
+    const Probe = struct {
+        copied: bool = false,
+        first: win.DWORD = 0,
+        last: win.DWORD = 0,
+
+        fn observeCopy(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            if (message == win.WM_COPY) {
+                const self: *@This() = @ptrFromInt(context);
+                _ = win.SendMessageW(hwnd, win.EM_GETSEL, @intFromPtr(&self.first), pointerParam(&self.last));
+                self.copied = true;
+                return 0;
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+
+        fn checkLayout(view: *Management, width: i32, height: i32) !i32 {
+            const expect = std.testing.expect;
+            const dpi = view.dpi;
+            var outer = win.RECT{ .left = 0, .top = 0, .right = dpi.pixels(width), .bottom = dpi.pixels(height) };
+            const style: u32 = @bitCast(win.GetWindowLongW(view.window, win.GWL_STYLE));
+            const frame = style & ~@as(u32, win.WS_VSCROLL | win.WS_HSCROLL);
+            const ext_style: u32 = @bitCast(win.GetWindowLongW(view.window, win.GWL_EXSTYLE));
+            try expect(win.AdjustWindowRectExForDpi(&outer, frame, 0, ext_style, dpi.value) != 0);
+            try expect(win.SetWindowPos(view.window, null, 0, 0, outer.right - outer.left, outer.bottom - outer.top, win.SWP_NOMOVE | win.SWP_NOZORDER | win.SWP_NOACTIVATE) != 0);
+            view.resize();
+            var notice: win.RECT = undefined;
+            var back: win.RECT = undefined;
+            var list: win.RECT = undefined;
+            try expect(win.GetWindowRect(view.notice, &notice) != 0 and win.GetWindowRect(view.back, &back) != 0 and win.GetWindowRect(view.list, &list) != 0);
+            try expect(notice.left == list.left and notice.right == list.right);
+            try expect(notice.bottom - notice.top >= dpi.pixels(44) and notice.bottom <= back.top);
+            try expect(win.SendMessageW(view.list, win.LVM_GETCOUNTPERPAGE, 0, 0) >= 1);
+            return notice.right - notice.left;
+        }
+    };
+    const t = std.testing;
+    var dir = t.tmpDir(.{});
+    defer dir.cleanup();
+    const home = try dir.dir.realpathAlloc(t.allocator, ".");
+    defer t.allocator.free(home);
+    const path = try std.fs.path.join(t.allocator, &.{ home, "settings.db" });
+    defer t.allocator.free(path);
+    var db = try storage.Store.open(t.allocator, path);
+    defer db.close();
+    try db.save(.{ .shared_items = &.{.{ .id = "notice-row", .name = "弾幕", .text = "本文" }} });
+    var snapshot = try db.load(t.allocator);
+    defer snapshot.deinit();
+    var history = storage.LibraryHistory.init(t.allocator);
+    defer history.deinit();
+    var view: Management = .{};
+    defer view.close();
+    try view.open(null, &db, &snapshot, &history);
+    _ = win.ShowWindow(view.window, win.SW_SHOWNOACTIVATE);
+    try t.expect(win.IsWindowVisible(view.notice) == 0 and win.GetWindowTextLengthW(view.notice) == 0);
+    try t.expect(win.GetNextDlgTabItem(view.window, view.support, 1) != view.notice);
+    const style: u32 = @bitCast(win.GetWindowLongW(view.notice, win.GWL_STYLE));
+    const notice_styles: u32 = win.ES_MULTILINE | win.ES_READONLY | win.WS_TABSTOP;
+    try t.expect(style & notice_styles == notice_styles);
+    try t.expect(style & @as(u32, win.WS_HSCROLL | win.ES_AUTOHSCROLL) == 0);
+
+    view.setNotice(savedViewWarning(true, false).?);
+    const saved_text = try windows.text(view.notice, t.allocator);
+    defer t.allocator.free(saved_text);
+    try t.expectEqualStrings("通知：保存済みです。管理画面を更新できませんでした。管理画面を開き直してください。", saved_text);
+    view.showError(error.ItemMissing);
+    const rejected = try windows.text(view.notice, t.allocator);
+    defer t.allocator.free(rejected);
+    try t.expectEqualStrings("通知：対象が見つかりません。選び直してください。", rejected);
+
+    const long_notice =
+        "保存済みです。\r\n管理一覧を更新できませんでした。\r\nパレットは更新済みです。\r\n" ++
+        "選び直してから操作を続けてください。\r\n画面を閉じても確定済みのデータは残ります。\r\n" ++
+        "本文はこの編集欄から確認できます。\r\nコピーする範囲を選択できます。\r\n末尾の確認";
+    view.setNotice(long_notice);
+    try t.expect(win.IsWindowVisible(view.notice) != 0);
+    try t.expectEqual(view.notice, win.GetNextDlgTabItem(view.window, view.support, 1));
+    try t.expectEqual(view.support, win.GetNextDlgTabItem(view.window, view.notice, 0));
+    const narrow = try Probe.checkLayout(&view, 360, 520);
+    const wide_width = try Probe.checkLayout(&view, 760, 660);
+    try t.expect(wide_width > narrow);
+    try t.expectEqual(narrow, try Probe.checkLayout(&view, 360, 520));
+    const first_line = win.SendMessageW(view.notice, win.EM_GETFIRSTVISIBLELINE, 0, 0);
+    try t.expect(win.SendMessageW(view.notice, win.EM_GETLINECOUNT, 0, 0) >= 8);
+    try t.expect(win.GetWindowLongW(view.notice, win.GWL_STYLE) & win.WS_VSCROLL != 0);
+    _ = win.SendMessageW(view.notice, win.WM_VSCROLL, win.SB_BOTTOM, 0);
+    try t.expect(win.SendMessageW(view.notice, win.EM_GETFIRSTVISIBLELINE, 0, 0) > first_line);
+    const shown = try windows.text(view.notice, t.allocator);
+    defer t.allocator.free(shown);
+    try t.expectEqualStrings("通知：" ++ long_notice, shown);
+
+    const text_length: win.DWORD = @intCast(win.GetWindowTextLengthW(view.notice));
+    const match_length: win.DWORD = @intCast(wide("末尾の確認").len);
+    const selection_start = text_length - match_length;
+    var copy: Probe = .{};
+    try t.expect(win.SetWindowSubclass(view.notice, Probe.observeCopy, 67, @intFromPtr(&copy)) != 0);
+    defer _ = win.RemoveWindowSubclass(view.notice, Probe.observeCopy, 67);
+    _ = win.SendMessageW(view.notice, win.EM_SETSEL, selection_start, -1);
+    _ = win.SendMessageW(view.notice, win.WM_COPY, 0, 0);
+    try t.expect(copy.copied);
+    try t.expectEqual(text_length, copy.last);
+    try t.expectEqual(selection_start, copy.first);
+
+    view.setNotice("");
+    try t.expect(win.IsWindowVisible(view.notice) == 0 and win.GetWindowTextLengthW(view.notice) == 0);
+    try t.expect(win.GetNextDlgTabItem(view.window, view.support, 1) != view.notice);
+}
+
 test "desktop DPI keeps space for long management actions at the viewport minimum" {
     for ([_]u32{ 96, 120, 144, 192 }) |scale| {
         const dpi: windows.Dpi = .{ .value = scale };
@@ -1368,11 +1510,11 @@ test "desktop DPI keeps space for long management actions at the viewport minimu
 
 test "virtual row buffers terminate before splitting emoji surrogate pairs" {
     var small: [3]u16 = undefined;
-    copyText(&small, "A👏B");
+    windows.copyText(&small, "A👏B");
     try std.testing.expectEqual(@as(u16, 'A'), small[0]);
     try std.testing.expectEqual(@as(u16, 0), small[1]);
     var bigger: [5]u16 = undefined;
-    copyText(&bigger, "A👏B");
+    windows.copyText(&bigger, "A👏B");
     try std.testing.expectEqualSlices(u16, &.{ 'A', 0xd83d, 0xdc4f, 'B', 0 }, &bigger);
 }
 
@@ -1735,6 +1877,100 @@ const NativeManagementReads = struct {
         return win.DefSubclassProc(window, message, wparam, lparam);
     }
 };
+
+test "move editor saves the displayed destination ID across profile deletion" {
+    const testing = std.testing;
+    const heap = testing.allocator;
+    const CloseDuringBuild = struct {
+        var editor: win.HWND = null;
+
+        fn observe(code: c_int, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+            if (code == win.HC_ACTION and editor == null) {
+                const message: *const win.CWPSTRUCT = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                if (message.message == win.CB_ADDSTRING) {
+                    editor = win.GetParent(message.hwnd);
+                    _ = win.SendMessageW(editor, win.WM_CLOSE, 0, 0);
+                }
+            }
+            return win.CallNextHookEx(null, code, wparam, lparam);
+        }
+    };
+    var directory = testing.tmpDir(.{});
+    defer directory.cleanup();
+    const root = try directory.dir.realpathAlloc(heap, ".");
+    defer heap.free(root);
+    const path = try std.fs.path.join(heap, &.{ root, "settings.db" });
+    defer heap.free(path);
+    var db = try storage.Store.open(heap, path);
+    defer db.close();
+    try db.save(.{
+        .profiles = &.{
+            .{ .id = "link-a", .name = "同じ名前" },
+            .{ .id = "link-A", .name = "同じ名前" },
+            .{ .id = "third", .name = "別の配信者" },
+        },
+        .shared_items = &.{.{ .id = "moved", .name = "弾幕", .text = "本文", .slot = 1 }},
+    });
+    var snapshot = try db.load(heap);
+    defer snapshot.deinit();
+    var history = storage.LibraryHistory.init(heap);
+    defer history.deinit();
+    const host_class = wide("ChatPalette.TestMoveEditor");
+    try register(host_class, testHost);
+    const host = win.CreateWindowExW(0, host_class, wide("test"), 0, 0, 0, 0, 0, null, null, win.GetModuleHandleW(null), null) orelse return error.TestHost;
+    defer _ = win.DestroyWindow(host);
+    var manager: Management = .{};
+    try manager.open(host, &db, &snapshot, &history);
+    defer manager.close();
+
+    {
+        const hook = win.SetWindowsHookExW(win.WH_CALLWNDPROC, @ptrCast(&CloseDuringBuild.observe), null, win.GetCurrentThreadId()) orelse return error.TestBuildHook;
+        defer _ = win.UnhookWindowsHookEx(hook);
+        defer CloseDuringBuild.editor = null;
+        try manager.openDialogAt(.move_item, snapshot.data.shared_items[0], "");
+        try testing.expect(CloseDuringBuild.editor != null);
+        try testing.expect(win.IsWindow(CloseDuringBuild.editor) == 0);
+        try testing.expect(manager.dialog.window == null and win.IsWindowEnabled(manager.window) != 0);
+        try testing.expectEqual(@as(usize, 0), history.length);
+    }
+
+    try manager.openDialogAt(.move_item, snapshot.data.shared_items[0], "");
+    try testing.expectEqual(@as(win.LRESULT, 3), win.SendMessageW(manager.dialog.choice, win.CB_GETCOUNT, 0, 0));
+    choose(manager.dialog.choice, 1);
+    _ = try history.profile(&db, &snapshot, .{ .delete = "link-a" });
+    try manager.saveDialog();
+    try testing.expect(manager.dialog.window == null);
+    var saved = try db.load(heap);
+    defer saved.deinit();
+    const moved = try saved.data.itemsFor("link-A");
+    try testing.expectEqual(@as(usize, 1), moved.len);
+    try testing.expectEqualStrings("moved", moved[0].id);
+    try testing.expectEqual(@as(u8, 0), moved[0].slot);
+    try testing.expectEqual(@as(usize, 0), (try saved.data.itemsFor("third")).len);
+    try testing.expectEqual(@as(usize, 0), saved.data.shared_items.len);
+
+    try manager.openDialogAt(.move_item, moved[0], "link-A");
+    try testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(manager.dialog.choice, win.CB_GETCOUNT, 0, 0));
+    try testing.expectEqual(@as(?usize, 0), currentChoice(manager.dialog.choice));
+    choose(manager.dialog.choice, 1);
+    _ = try history.profile(&db, &snapshot, .{ .delete = "third" });
+    const before = history.length;
+    try testing.expectError(error.ProfileMissing, manager.saveDialog());
+    try testing.expectEqual(before, history.length);
+    try testing.expect(manager.dialog.window != null);
+    choose(manager.dialog.choice, 0);
+    try manager.saveDialog();
+    var returned = try db.load(heap);
+    defer returned.deinit();
+    try testing.expectEqual(@as(usize, 1), returned.data.shared_items.len);
+    try testing.expectEqualStrings("moved", returned.data.shared_items[0].id);
+    try testing.expectEqual(@as(usize, 0), (try returned.data.itemsFor("link-A")).len);
+
+    _ = try history.profile(&db, &snapshot, .{ .delete = "link-A" });
+    try manager.openDialogAt(.move_item, snapshot.data.shared_items[0], "");
+    try testing.expectEqual(@as(?usize, null), currentChoice(manager.dialog.choice));
+    try testing.expect(win.IsWindowEnabled(manager.dialog.save) == 0);
+}
 
 const LinkFixture = struct {
     const Transition = enum { none, edit_choice, cancel, replace_with_error, changed_channel, changed_window, changed_owner };

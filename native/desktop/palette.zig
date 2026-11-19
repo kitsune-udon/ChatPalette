@@ -1,6 +1,8 @@
 const std = @import("std");
 const storage = @import("../storage/store.zig");
 const windows = @import("win.zig");
+const shortcuts = @import("shortcuts.zig");
+const reaction_progress = @import("reaction_progress.zig");
 const viewport = @import("viewport.zig");
 const Viewport = viewport.Viewport;
 const win = windows.api;
@@ -18,20 +20,79 @@ pub const wm_start_reaction = win.WM_APP + 16;
 pub const wm_save_defaults = win.WM_APP + 17;
 pub const wm_link = win.WM_APP + 25;
 
-const Id = enum(u16) { search = 101, list, insert, stop, manage, support, auto_mode, profile, start, reaction_kind, reaction_count, reaction_interval, save_defaults, load_defaults, link };
+const Id = enum(u16) { search = 101, list, insert, stop, manage, support, auto_mode, profile, start, reaction_kind, reaction_count, reaction_interval, save_defaults, load_defaults, link, sort };
+const SortOrder = enum {
+    saved,
+    name_text_asc,
+    name_text_desc,
+    scope_asc,
+    key_desc,
+
+    fn label(self: SortOrder) []const u8 {
+        return switch (self) {
+            .saved => "保存順",
+            .name_text_asc => "名前・本文 昇順",
+            .name_text_desc => "名前・本文 降順",
+            .scope_asc => "対象 昇順",
+            .key_desc => "キー 降順",
+        };
+    }
+};
+const sort_row = 32;
+const minimum_width = 344;
+const compact_width = 535;
+const minimum_height = 394 + sort_row;
+const compact_minimum_height = 426 + sort_row;
 
 pub const ReactionOptions = struct { kind: u8, count: u32, interval: u32 };
 pub const reaction_counts = storage.Preferences.reaction_counts;
 pub const reaction_intervals = storage.Preferences.reaction_intervals;
 
 pub const Palette = struct {
+    const max_rows = 500;
     const Row = struct { item: storage.Item, profile_id: []const u8 };
+    const ItemRows = struct {
+        rows: [max_rows]Row = undefined,
+        count: usize = 0,
+
+        fn collect(self: *ItemRows, items: []const storage.Item, profile_id: []const u8, query: []const u8) bool {
+            for (items) |item| {
+                if (!matchesQuery(query, item)) continue;
+                if (self.count == self.rows.len) return true;
+                self.rows[self.count] = .{ .item = item, .profile_id = profile_id };
+                self.count += 1;
+            }
+            return false;
+        }
+    };
+
+    const SortContext = struct {
+        order: SortOrder,
+        preferences: *const storage.Preferences,
+        profile_name: []const u8,
+
+        fn lessThan(self: SortContext, lhs: Row, rhs: Row) bool {
+            return switch (self.order) {
+                .saved => false,
+                .name_text_asc => nameTextOrder(lhs, rhs) == .lt,
+                .name_text_desc => nameTextOrder(lhs, rhs) == .gt,
+                .scope_asc => std.ascii.orderIgnoreCase(scopeText(lhs, self.profile_name), scopeText(rhs, self.profile_name)) == .lt,
+                .key_desc => blk: {
+                    var left: [32]u8 = undefined;
+                    var right: [32]u8 = undefined;
+                    break :blk std.ascii.orderIgnoreCase(keyText(lhs, self.preferences, &left), keyText(rhs, self.preferences, &right)) == .gt;
+                },
+            };
+        }
+    };
 
     window: win.HWND = null,
     dpi: windows.Dpi = .{},
     font: windows.GuiFont = .{},
     host: win.HWND = null,
     search: win.HWND = null,
+    sort_label: win.HWND = null,
+    sort_selector: win.HWND = null,
     list: win.HWND = null,
     preview: win.HWND = null,
     insert_button: win.HWND = null,
@@ -41,6 +102,7 @@ pub const Palette = struct {
     link_button: win.HWND = null,
     mode: win.HWND = null,
     profile: win.HWND = null,
+    input_context: win.HWND = null,
     profile_choices: @import("profile_choices.zig") = .{},
     reaction_heading: win.HWND = null,
     reaction_registration: win.HWND = null,
@@ -54,11 +116,15 @@ pub const Palette = struct {
     search_hint: win.HWND = null,
     viewport: Viewport = .{},
     data: storage.Data = .{},
-    rows: [500]Row = undefined,
+    rows: [max_rows]Row = undefined,
     count: usize = 0,
+    items_revision: u64 = 0,
     selected_id: ?[]u8 = null,
+    sort_order: SortOrder = .saved,
     search_due: ?u64 = null,
     refreshing: bool = false,
+    items_refreshing: bool = false,
+    items_pending: bool = false,
     resetting_search: bool = false,
     refresh_failed: bool = false,
     scope_refresh_failed: bool = false,
@@ -81,10 +147,16 @@ pub const Palette = struct {
         self.mode = try control(self.window, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP, .auto_mode);
         self.profile = try control(self.window, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP | win.WS_VSCROLL, .profile);
         self.support_button = try control(self.window, "BUTTON", "管理・ヘルプ", win.WS_TABSTOP, .support);
+        self.input_context = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         _ = addText(self.mode, win.CB_ADDSTRING, "自動判別");
         _ = addText(self.mode, win.CB_ADDSTRING, "手動選択");
         self.search = try control(self.window, "EDIT", "", win.ES_AUTOHSCROLL | win.WS_TABSTOP | win.WS_BORDER, .search);
         self.link_button = try control(self.window, "BUTTON", "チャンネル連携…", win.WS_TABSTOP, .link);
+        self.sort_label = try control(self.window, "STATIC", "並べ替え", 0, null);
+        self.sort_selector = try control(self.window, "COMBOBOX", "", win.CBS_DROPDOWNLIST | win.WS_TABSTOP, .sort);
+        for (std.meta.tags(SortOrder)) |order|
+            if (!addText(self.sort_selector, win.CB_ADDSTRING, order.label())) return error.CreatePaletteSortChoices;
+        _ = win.SendMessageW(self.sort_selector, win.CB_SETCURSEL, @intFromEnum(self.sort_order), 0);
         self.list = try control(self.window, "LISTBOX", "", win.LBS_NOTIFY | win.WS_VSCROLL | win.WS_TABSTOP | win.WS_BORDER, .list);
         self.preview = try control(self.window, "EDIT", "", win.ES_READONLY | win.ES_MULTILINE | win.WS_VSCROLL | win.WS_BORDER, null);
         self.insert_button = try control(self.window, "BUTTON", "選んだ弾幕を入力", win.BS_DEFPUSHBUTTON | win.WS_TABSTOP, .insert);
@@ -98,7 +170,7 @@ pub const Palette = struct {
         self.start_button = try control(self.window, "BUTTON", "リアクションを開始（3秒後）", win.WS_TABSTOP, .start);
         self.save_defaults = try control(self.window, "BUTTON", "標準設定に保存", win.WS_TABSTOP, .save_defaults);
         self.load_defaults = try control(self.window, "BUTTON", "標準設定を読み込む", win.WS_TABSTOP, .load_defaults);
-        for ([_][]const u8{ "❤️ ハート", "😁 笑顔", "🎉 お祝い", "😲 驚き", "💯 100点", "ランダム（毎回）" }) |kind|
+        for (reaction_progress.kind_labels) |kind|
             _ = addText(self.reaction_kind, win.CB_ADDSTRING, kind);
         var label: [24]u8 = undefined;
         for (reaction_counts) |value| _ = addText(self.reaction_count, win.CB_ADDSTRING, try std.fmt.bufPrint(&label, "{d} 回", .{value}));
@@ -181,12 +253,22 @@ pub const Palette = struct {
         _ = win.EnableWindow(self.profile, @intFromBool(!data.preferences.auto_mode and !self.scope_refresh_failed));
         if (win.SendMessageW(self.profile, win.CB_GETCURSEL, 0, 0) != @as(win.LRESULT, @intCast(selected)))
             _ = win.SendMessageW(self.profile, win.CB_SETCURSEL, selected, 0);
+        const mode = if (self.data.preferences.auto_mode) "自動判別" else "手動選択";
+        const scope = if (self.inputProfile()) |profile| profile.name else "共通の弾幕のみ";
+        if (std.fmt.allocPrint(allocator, "{s}：{s}", .{ mode, scope })) |label| {
+            defer allocator.free(label);
+            windows.setText(self.input_context, label);
+        } else |_| {}
         self.refreshItems();
     }
 
     pub fn visibleProfileId(self: *const Palette) []const u8 {
         if (self.data.preferences.auto_mode and !self.detected_profile) return "";
         return self.data.preferences.input_profile_id;
+    }
+
+    pub fn inputProfile(self: *const Palette) ?*const storage.Profile {
+        return self.data.findProfile(self.visibleProfileId());
     }
 
     pub fn resetReaction(self: Palette, defaults: storage.Preferences) void {
@@ -210,7 +292,11 @@ pub const Palette = struct {
     }
 
     fn queueSearch(self: *Palette) void {
-        const profile = self.data.findProfile(self.visibleProfileId());
+        if (self.refreshing) {
+            self.items_pending = true;
+            return;
+        }
+        const profile = self.inputProfile();
         const count = self.data.shared_items.len + if (profile) |value| value.items.len else 0;
         if (count <= 200) {
             self.refreshItems();
@@ -246,11 +332,20 @@ pub const Palette = struct {
     }
 
     pub fn selectedRow(self: *Palette) ?Row {
+        if (self.refreshing) return null;
         self.flushSearch();
         if (self.refresh_failed) return null;
+        const index = self.selectedIndex() orelse return null;
+        return self.rows[index];
+    }
+
+    fn selectedIndex(self: *const Palette) ?usize {
+        const revision = self.items_revision;
+        const count = win.SendMessageW(self.list, win.LB_GETCOUNT, 0, 0);
         const index = win.SendMessageW(self.list, win.LB_GETCURSEL, 0, 0);
-        if (index < 0 or index >= self.count) return null;
-        return self.rows[@intCast(index)];
+        if (self.items_pending or self.items_revision != revision or count < 0 or @as(usize, @intCast(count)) != self.count or
+            index < 0 or index >= self.count) return null;
+        return @intCast(index);
     }
 
     fn reactionCommand(self: Palette, message: win.UINT) void {
@@ -264,37 +359,63 @@ pub const Palette = struct {
 
     pub fn refreshItems(self: *Palette) void {
         if (self.list == null) return;
+        self.items_pending = true;
+        if (self.items_refreshing) return;
         const refreshing = self.refreshing;
         self.refreshing = true;
-        defer self.refreshing = refreshing;
+        self.items_refreshing = true;
+        defer {
+            self.items_refreshing = false;
+            self.refreshing = refreshing;
+        }
+        while (self.items_pending) {
+            self.items_pending = false;
+            self.refreshItemsPass();
+        }
+    }
+
+    fn changeSort(self: *Palette) void {
+        const selected = win.SendMessageW(self.sort_selector, win.CB_GETCURSEL, 0, 0);
+        if (selected < 0 or selected >= std.meta.tags(SortOrder).len) return;
+        const order: SortOrder = @enumFromInt(selected);
+        if (order == self.sort_order) return;
+        self.sort_order = order;
+        if (self.refreshing) {
+            self.items_pending = true;
+        } else self.refreshItems();
+    }
+
+    fn refreshItemsPass(self: *Palette) void {
         self.cancelSearch();
         const raw_query = windows.text(self.search, allocator) catch return self.failItemRefresh();
         defer allocator.free(raw_query);
+        if (self.items_pending) return;
         const query = std.mem.trim(u8, raw_query, " \t");
+        const profile = self.inputProfile();
+        const profile_name = if (profile) |value| value.name else "";
+        var next: ItemRows = .{};
+        const profile_truncated = if (profile) |value| next.collect(value.items, value.id, query) else false;
+        const truncated = profile_truncated or next.collect(self.data.shared_items, "", query);
+        if (self.sort_order != .saved) {
+            const context: SortContext = .{ .order = self.sort_order, .preferences = &self.data.preferences, .profile_name = profile_name };
+            std.mem.sort(Row, next.rows[0..next.count], context, SortContext.lessThan);
+        }
         _ = win.SendMessageW(self.list, win.WM_SETREDRAW, 0, 0);
         defer {
             _ = win.SendMessageW(self.list, win.WM_SETREDRAW, 1, 0);
             _ = win.InvalidateRect(self.list, null, 1);
         }
+        if (self.items_pending) return;
         _ = win.SendMessageW(self.list, win.LB_RESETCONTENT, 0, 0);
-        self.count = 0;
-        var truncated = false;
-        if (self.data.findProfile(self.visibleProfileId())) |profile| {
-            for (profile.items) |item| {
-                if (self.addMatch(query, item, profile.name, profile.id) catch return self.failItemRefresh()) {
-                    truncated = true;
-                    break;
-                }
-            }
+        if (self.items_pending) return;
+        for (next.rows[0..next.count], 0..) |row, index| {
+            self.appendRow(row, profile_name, index) catch return self.failItemRefresh();
+            if (self.items_pending) return;
         }
-        if (!truncated) {
-            for (self.data.shared_items) |item| {
-                if (self.addMatch(query, item, "共通", "") catch return self.failItemRefresh()) {
-                    truncated = true;
-                    break;
-                }
-            }
-        }
+        // Keep the published identities until the corresponding native rows are complete.
+        @memcpy(self.rows[0..next.count], next.rows[0..next.count]);
+        self.count = next.count;
+        self.items_revision +%= 1;
         self.refresh_failed = self.scope_refresh_failed;
         windows.setText(self.search_hint, if (truncated)
             "先頭500件を表示しています。検索で絞り込んでください。"
@@ -304,6 +425,7 @@ pub const Palette = struct {
             "一致する弾幕がありません。"
         else
             "弾幕を追加・編集できます。");
+        if (self.items_pending) return;
         if (self.count > 0) {
             const index = if (self.selected_id) |id| for (self.rows[0..self.count], 0..) |row, n| {
                 if (std.mem.eql(u8, row.item.id, id)) break n;
@@ -314,39 +436,68 @@ pub const Palette = struct {
     }
 
     fn failItemRefresh(self: *Palette) void {
+        if (self.items_pending) return;
         self.refresh_failed = true;
         self.count = 0;
+        self.items_revision +%= 1;
         _ = win.SendMessageW(self.list, win.LB_RESETCONTENT, 0, 0);
         windows.setText(self.search_hint, "弾幕一覧を更新できませんでした。検索し直してください。");
         self.showSelection();
     }
 
-    fn addMatch(self: *Palette, query: []const u8, item: storage.Item, scope: []const u8, profile_id: []const u8) !bool {
-        if (!matchesQuery(query, item)) return false;
-        if (self.count == self.rows.len) return true;
-        const key = if (item.slot == 0) "" else self.data.preferences.shortcut_keys[(if (profile_id.len == 0) @as(usize, 3) else 1) + item.slot - 1];
-        const text = try std.fmt.allocPrint(allocator, "{s}　{s}{s}{s}{s}", .{ scope, item.name, if (key.len > 0) "　[" else "", key, if (key.len > 0) "]" else "" });
+    fn nameTextOrder(lhs: Row, rhs: Row) std.math.Order {
+        const names = std.ascii.orderIgnoreCase(lhs.item.name, rhs.item.name);
+        return if (names == .eq) std.ascii.orderIgnoreCase(lhs.item.text, rhs.item.text) else names;
+    }
+
+    fn keyText(row: Row, preferences: *const storage.Preferences, buffer: []u8) []const u8 {
+        if (row.item.slot == 0 or row.item.slot > 2) return "";
+        const first: storage.Action = if (row.profile_id.len == 0) .shared1 else .profile1;
+        const key = preferences.shortcut_keys[@intFromEnum(first) + row.item.slot - 1];
+        const chord = (shortcuts.parse(key) catch return key) orelse return "";
+        return shortcuts.label(chord, buffer);
+    }
+
+    fn scopeText(row: Row, profile_name: []const u8) []const u8 {
+        return if (row.profile_id.len == 0) "共通" else profile_name;
+    }
+
+    fn appendRow(self: *Palette, row: Row, profile_name: []const u8, index: usize) !void {
+        var key_buffer: [32]u8 = undefined;
+        const key = keyText(row, &self.data.preferences, &key_buffer);
+        const scope = scopeText(row, profile_name);
+        const text = try std.fmt.allocPrint(allocator, "{s}　{s}{s}{s}{s}", .{ scope, row.item.name, if (key.len > 0) "　[" else "", key, if (key.len > 0) "]" else "" });
         defer allocator.free(text);
-        if (!addText(self.list, win.LB_ADDSTRING, text)) return error.RenderPaletteRow;
-        self.rows[self.count] = .{ .item = item, .profile_id = profile_id };
-        self.count += 1;
-        return false;
+        const added = appendNativeText(self.list, win.LB_ADDSTRING, text) orelse return error.RenderPaletteRow;
+        if (added != index) return error.RenderPaletteRow;
     }
 
     fn showSelection(self: *Palette) void {
-        const selected = win.SendMessageW(self.list, win.LB_GETCURSEL, 0, 0);
-        const item = if (selected >= 0 and selected < self.count) self.rows[@intCast(selected)].item else null;
+        if (self.items_pending) return;
+        const selected = self.selectedIndex();
+        if (self.items_pending) return;
+        const item = if (selected) |index| self.rows[index].item else null;
         _ = win.EnableWindow(self.insert_button, @intFromBool(item != null and !self.refresh_failed and self.search_due == null));
+        if (self.items_pending) return;
         windows.setText(self.preview, if (item) |value| value.text else "");
+        if (self.items_pending) return;
         if (self.selected_id) |id| allocator.free(id);
         self.selected_id = if (item) |value| allocator.dupe(u8, value.id) catch null else null;
     }
 
+    fn selectionChanged(self: *Palette) void {
+        if (self.refreshing) return;
+        self.refreshing = true;
+        self.showSelection();
+        self.refreshing = false;
+        if (self.items_pending) self.refreshItems();
+    }
+
     fn insert(self: *Palette) void {
         if (self.refreshing or self.settleSearchForAction() or self.refresh_failed) return;
-        const index = win.SendMessageW(self.list, win.LB_GETCURSEL, 0, 0);
-        if (!self.refreshing and !self.refresh_failed and index >= 0 and index < self.count)
-            _ = win.SendMessageW(self.host, wm_insert, @intCast(index), 0);
+        const index = self.selectedIndex() orelse return;
+        if (!self.refreshing and !self.refresh_failed and !self.settleSearchForAction())
+            _ = win.SendMessageW(self.host, wm_insert, index, 0);
     }
 
     fn resize(self: *Palette) void {
@@ -355,7 +506,7 @@ pub const Palette = struct {
     }
 
     fn placeControls(self: *Palette) void {
-        const content = self.viewport.layout(self.window, self.dpi, .{ .width = 344, .height = 373 }, .{ .below_width = 535, .minimum_height = 405 }) orelse return;
+        const content = self.viewport.layout(self.window, self.dpi, .{ .width = minimum_width, .height = minimum_height }, .{ .below_width = compact_width, .minimum_height = compact_minimum_height }) orelse return;
         self.layout(self.dpi.fittingUnits(content.width), self.dpi.fittingUnits(content.height));
     }
 
@@ -366,26 +517,31 @@ pub const Palette = struct {
     fn layout(self: Palette, width: i32, height: i32) void {
         const padding: i32 = 12;
         const full = width - 2 * padding;
-        const compact = width < 535;
+        const compact = width < compact_width;
         const extra: i32 = if (compact) 32 else 0;
+        const context_row: i32 = 21;
         const registration_row: i32 = 21;
-        const list_height = @max(height - 324 - extra - registration_row, 28);
+        const list_height = @max(height - 324 - extra - registration_row - context_row - sort_row, 28);
+        const below_list = context_row + sort_row + list_height;
         self.place(self.mode, padding, 12, 112, 180);
         self.place(self.profile, 134, 12, width - 264, 242);
         self.place(self.support_button, width - 122, 11, 110, 29);
+        self.place(self.input_context, padding, 43, full, 21);
         const link_width: i32 = 132;
-        self.place(self.search, padding, 51, full - link_width - 8, 27);
-        self.place(self.link_button, width - padding - link_width, 51, link_width, 27);
-        self.place(self.list, padding, 85, full, list_height);
-        self.place(self.preview, padding, 93 + list_height, full, 48);
-        self.place(self.insert_button, padding, 149 + list_height, 164, 30);
-        self.place(self.manage_button, padding + 173, 149 + list_height, 148, 30);
-        self.place(self.reaction_heading, padding, 188 + list_height, full, 20);
-        self.place(self.reaction_registration, padding, 209 + list_height, full, registration_row);
+        self.place(self.search, padding, 51 + context_row, full - link_width - 8, 27);
+        self.place(self.link_button, width - padding - link_width, 51 + context_row, link_width, 27);
+        self.place(self.sort_label, padding, 88 + context_row, 74, 24);
+        self.place(self.sort_selector, padding + 80, 85 + context_row, 160, 160);
+        self.place(self.list, padding, 85 + context_row + sort_row, full, list_height);
+        self.place(self.preview, padding, 93 + below_list, full, 48);
+        self.place(self.insert_button, padding, 149 + below_list, 164, 30);
+        self.place(self.manage_button, padding + 173, 149 + below_list, 148, 30);
+        self.place(self.reaction_heading, padding, 188 + below_list, full, 20);
+        self.place(self.reaction_registration, padding, 209 + below_list, full, registration_row);
         const kind_width: i32 = if (compact) 134 else 142;
         const count_width: i32 = if (compact) 80 else 100;
         const interval_x = padding + kind_width + count_width + 16;
-        const controls_top = list_height + registration_row;
+        const controls_top = below_list + registration_row;
         self.place(self.reaction_kind, padding, 209 + controls_top, kind_width, 210);
         self.place(self.reaction_count, padding + kind_width + 8, 209 + controls_top, count_width, 190);
         self.place(self.reaction_interval, interval_x, 209 + controls_top, @min(112, width - interval_x - padding), 235);
@@ -428,9 +584,14 @@ fn control(parent: win.HWND, comptime kind: []const u8, comptime text: []const u
 }
 
 fn addText(hwnd: win.HWND, message: win.UINT, value: []const u8) bool {
-    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(allocator, value) catch return false;
+    return appendNativeText(hwnd, message, value) != null;
+}
+
+fn appendNativeText(hwnd: win.HWND, message: win.UINT, value: []const u8) ?usize {
+    const utf16 = std.unicode.utf8ToUtf16LeAllocZ(allocator, value) catch return null;
     defer allocator.free(utf16);
-    return win.SendMessageW(hwnd, message, 0, @bitCast(@intFromPtr(utf16.ptr))) >= 0;
+    const index = win.SendMessageW(hwnd, message, 0, @bitCast(@intFromPtr(utf16.ptr)));
+    return if (index < 0) null else @intCast(index);
 }
 
 fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
@@ -467,10 +628,11 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             const id = windows.low(wparam);
             const code = windows.high(wparam);
             if (id == @intFromEnum(Id.search) and code == win.EN_CHANGE and !palette.resetting_search) palette.queueSearch();
-            if (id == @intFromEnum(Id.list) and code == win.LBN_SELCHANGE) palette.showSelection();
+            if (id == @intFromEnum(Id.sort) and code == win.CBN_SELCHANGE) palette.changeSort();
+            if (id == @intFromEnum(Id.list) and code == win.LBN_SELCHANGE) palette.selectionChanged();
             if (id == @intFromEnum(Id.insert) and code == win.BN_CLICKED or id == @intFromEnum(Id.list) and code == win.LBN_DBLCLK) palette.insert();
             if (id == @intFromEnum(Id.stop) and code == win.BN_CLICKED) _ = win.SendMessageW(palette.host, wm_stop, 0, 0);
-            if (id == @intFromEnum(Id.manage) and code == win.BN_CLICKED and !palette.settleSearchForAction())
+            if (id == @intFromEnum(Id.manage) and code == win.BN_CLICKED and !palette.refreshing and !palette.settleSearchForAction())
                 _ = win.SendMessageW(palette.host, wm_manage, 0, 0);
             if (id == @intFromEnum(Id.link) and code == win.BN_CLICKED) _ = win.SendMessageW(palette.host, wm_link, 0, 0);
             if (id == @intFromEnum(Id.support) and code == win.BN_CLICKED) _ = win.SendMessageW(palette.host, wm_support, 0, 0);
@@ -527,24 +689,55 @@ test "palette keeps unchanged native labels and replaces their displayed ID mapp
 }
 
 test "compact palette leaves room for the registration row and the bottom guidance" {
+    const Probe = struct {
+        fn resizeClient(palette: *Palette, width: i32, height: i32) !void {
+            const dpi = palette.dpi;
+            var outer = win.RECT{ .left = 0, .top = 0, .right = dpi.pixels(width), .bottom = dpi.pixels(height) };
+            const style: u32 = @bitCast(win.GetWindowLongW(palette.window, win.GWL_STYLE));
+            const frame = style & ~@as(u32, win.WS_VSCROLL | win.WS_HSCROLL);
+            const extended: u32 = @bitCast(win.GetWindowLongW(palette.window, win.GWL_EXSTYLE));
+            try std.testing.expect(win.AdjustWindowRectExForDpi(&outer, frame, 0, extended, dpi.value) != 0);
+            const flags = win.SWP_NOACTIVATE | win.SWP_NOZORDER | win.SWP_NOMOVE;
+            try std.testing.expect(win.SetWindowPos(palette.window, null, 0, 0, outer.right - outer.left, outer.bottom - outer.top, flags) != 0);
+            palette.resize();
+        }
+
+        fn boundsInClient(palette: *const Palette, child: win.HWND) !win.RECT {
+            var bounds: win.RECT = undefined;
+            try std.testing.expect(win.GetWindowRect(child, &bounds) != 0);
+            _ = win.MapWindowPoints(null, palette.window, @ptrCast(&bounds), 2);
+            return bounds;
+        }
+    };
+    const expect = std.testing.expect;
     var palette: Palette = .{};
     defer palette.close();
     try palette.open(null);
-    const width = 344;
-    const height = 410;
-    palette.layout(width, height);
-
-    var origin = std.mem.zeroes(win.POINT);
-    try std.testing.expect(win.ClientToScreen(palette.window, &origin) != 0);
-    for ([_]win.HWND{ palette.reaction_registration, palette.search_hint, palette.message, palette.load_defaults }) |control_window| {
-        var bounds: win.RECT = undefined;
-        try std.testing.expect(win.GetWindowRect(control_window, &bounds) != 0);
-        try std.testing.expect(bounds.left >= origin.x and bounds.right <= origin.x + width);
-        try std.testing.expect(bounds.top >= origin.y and bounds.bottom <= origin.y + height);
+    try Probe.resizeClient(&palette, minimum_width, compact_minimum_height);
+    var client: win.RECT = undefined;
+    try expect(win.GetClientRect(palette.window, &client) != 0);
+    for ([_]win.HWND{
+        palette.mode,              palette.profile,               palette.support_button, palette.input_context,
+        palette.search,            palette.link_button,           palette.sort_label,     palette.sort_selector,
+        palette.list,              palette.preview,               palette.insert_button,  palette.manage_button,
+        palette.reaction_heading,  palette.reaction_registration, palette.reaction_kind,  palette.reaction_count,
+        palette.reaction_interval, palette.start_button,          palette.stop_button,    palette.save_defaults,
+        palette.load_defaults,     palette.message,               palette.search_hint,
+    }) |control_window| {
+        const bounds = try Probe.boundsInClient(&palette, control_window);
+        try expect(bounds.left >= 0 and bounds.right <= client.right);
+        try expect(bounds.top >= 0 and bounds.bottom <= client.bottom);
     }
     var list: win.RECT = undefined;
-    try std.testing.expect(win.GetClientRect(palette.list, &list) != 0);
-    try std.testing.expect(list.bottom >= win.SendMessageW(palette.list, win.LB_GETITEMHEIGHT, 0, 0));
+    try expect(win.GetClientRect(palette.list, &list) != 0);
+    try expect(list.bottom >= win.SendMessageW(palette.list, win.LB_GETITEMHEIGHT, 0, 0));
+    try Probe.resizeClient(&palette, minimum_width, 410);
+    _ = win.SendMessageW(palette.window, win.WM_VSCROLL, win.SB_BOTTOM, 0);
+    try expect(palette.viewport.y > 0 and win.GetClientRect(palette.window, &client) != 0);
+    for ([_]win.HWND{ palette.load_defaults, palette.message, palette.search_hint }) |tail| {
+        const bounds = try Probe.boundsInClient(&palette, tail);
+        try expect(bounds.top >= 0 and bounds.bottom <= client.bottom);
+    }
 }
 
 test "short palette can scroll to every operation and clears its offsets when enlarged" {
@@ -586,9 +779,14 @@ test "palette searches beyond the visible 500 rows and retains the selected ID a
         .name = "共通の弾幕",
         .text = "前の検索対象",
     };
+    items[501].name = "A";
     items[501].text = "末尾の弾幕👏";
     palette.refresh(.{ .shared_items = &items });
     try std.testing.expectEqual(@as(usize, 500), palette.count);
+    _ = win.SendMessageW(palette.sort_selector, win.CB_SETCURSEL, @intFromEnum(SortOrder.name_text_asc), 0);
+    palette.changeSort();
+    try std.testing.expectEqual(@as(usize, 500), palette.count);
+    for (palette.rows[0..palette.count]) |row| try std.testing.expect(!std.mem.eql(u8, row.item.id, "item-501"));
     windows.setText(palette.search, "末尾");
     palette.flushSearch();
     try std.testing.expectEqual(@as(usize, 1), palette.count);
@@ -597,6 +795,163 @@ test "palette searches beyond the visible 500 rows and retains the selected ID a
     windows.setText(palette.search, "");
     palette.refresh(.{ .shared_items = &items });
     try std.testing.expectEqualStrings("item-501", palette.selectedRow().?.item.id);
+}
+
+test "palette sort preserves native preview and action identities in all five orders" {
+    const Probe = struct {
+        palette: *Palette,
+        inputs: usize = 0,
+        edits: usize = 0,
+        edited: ?Palette.Row = null,
+        input: ?Palette.Row = null,
+        switch_on_add: bool = false,
+        saw_pending: bool = false,
+
+        fn chooseOrder(palette: *Palette, order: SortOrder) void {
+            _ = win.SendMessageW(palette.sort_selector, win.CB_SETCURSEL, @intFromEnum(order), 0);
+            command(palette, .sort, win.CBN_SELCHANGE);
+        }
+
+        fn command(palette: *Palette, id: Id, notification: u16) void {
+            _ = win.SendMessageW(palette.window, win.WM_COMMAND, @as(usize, notification) << 16 | @intFromEnum(id), 0);
+        }
+
+        fn observeList(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, userdata: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const self: *@This() = @ptrFromInt(userdata);
+            if (message == win.LB_ADDSTRING and self.switch_on_add) {
+                self.switch_on_add = false;
+                chooseOrder(self.palette, .key_desc);
+                self.saw_pending = self.palette.items_pending and self.palette.refreshing;
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+
+        fn handleHost(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+            if (message == win.WM_NCCREATE) {
+                const params: *const win.CREATESTRUCTW = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                _ = win.SetWindowLongPtrW(hwnd, win.GWLP_USERDATA, @bitCast(@intFromPtr(params.lpCreateParams)));
+            }
+            if (message == wm_insert or message == wm_manage) {
+                const self: *@This() = @ptrFromInt(@as(usize, @bitCast(win.GetWindowLongPtrW(hwnd, win.GWLP_USERDATA))));
+                if (message == wm_manage) {
+                    self.edits += 1;
+                    self.edited = self.palette.selectedRow();
+                } else {
+                    self.inputs += 1;
+                    self.input = if (wparam < self.palette.count) self.palette.rows[wparam] else null;
+                }
+                return 0;
+            }
+            return win.DefWindowProcW(hwnd, message, wparam, lparam);
+        }
+    };
+    const t = std.testing;
+    const profile = [_]storage.Item{
+        .{ .id = "profile-z", .name = "Z", .text = "profile-z", .slot = 1 },
+        .{ .id = "case-item", .name = "Same", .text = "same", .slot = 2 },
+    };
+    const shared = [_]storage.Item{
+        .{ .id = "shared-a", .name = "A", .text = "shared-a", .slot = 2 },
+        .{ .id = "CASE-ITEM", .name = "Same", .text = "same", .slot = 1 },
+        .{ .id = "body-order", .name = "Same", .text = "first" },
+    };
+    const Fixture = struct { row: storage.Item, scope: []const u8, text: []const u8 };
+    const fixtures = [_]Fixture{
+        .{ .row = profile[0], .scope = "caster", .text = "配信者テスト　Z　[Ctrl+Alt+1]" },
+        .{ .row = profile[1], .scope = "caster", .text = "配信者テスト　Same　[Ctrl+Alt+2]" },
+        .{ .row = shared[0], .scope = "", .text = "共通　A　[Ctrl+Alt+4]" },
+        .{ .row = shared[1], .scope = "", .text = "共通　Same　[Ctrl+Alt+3]" },
+        .{ .row = shared[2], .scope = "", .text = "共通　Same" },
+    };
+    const data: storage.Data = .{
+        .profiles = &.{.{ .id = "caster", .name = "配信者テスト", .items = &profile }},
+        .shared_items = &shared,
+        .preferences = .{ .auto_mode = false, .input_profile_id = "caster" },
+    };
+    var palette: Palette = .{};
+    var probe: Probe = .{ .palette = &palette };
+    var wc = std.mem.zeroes(win.WNDCLASSW);
+    wc.hInstance = win.GetModuleHandleW(null);
+    wc.lpszClassName = windows.wide("ChatPalette.SortTest");
+    wc.lpfnWndProc = Probe.handleHost;
+    try t.expect(win.RegisterClassW(&wc) != 0 or win.GetLastError() == win.ERROR_CLASS_ALREADY_EXISTS);
+    const host = win.CreateWindowExW(0, wc.lpszClassName, windows.wide(""), 0, 0, 0, 1, 1, null, null, wc.hInstance, &probe) orelse
+        return error.CreateSortTestHost;
+    defer _ = win.DestroyWindow(host);
+    defer palette.close();
+    try palette.open(host);
+    palette.refresh(data);
+    const expected = [_][5]usize{
+        .{ 0, 1, 2, 3, 4 },
+        .{ 2, 4, 1, 3, 0 },
+        .{ 0, 1, 3, 4, 2 },
+        .{ 2, 3, 4, 0, 1 },
+        .{ 2, 3, 1, 0, 4 },
+    };
+    for (std.meta.tags(SortOrder), expected) |order, positions| {
+        const previous = palette.selectedRow().?.item.id;
+        Probe.chooseOrder(&palette, order);
+        try t.expectEqual(order, palette.sort_order);
+        try t.expectEqualStrings(previous, palette.selectedRow().?.item.id);
+        try t.expectEqual(@as(win.LRESULT, 5), win.SendMessageW(palette.list, win.LB_GETCOUNT, 0, 0));
+        for (positions, 0..) |fixture_index, index| {
+            const fixture = fixtures[fixture_index];
+            var native: [80]u16 = undefined;
+            const length = win.SendMessageW(palette.list, win.LB_GETTEXT, index, @bitCast(@intFromPtr(&native)));
+            try t.expect(length > 0 and length < native.len);
+            const caption = try std.unicode.utf16LeToUtf8Alloc(t.allocator, native[0..@intCast(length)]);
+            defer t.allocator.free(caption);
+            try t.expectEqualStrings(fixture.text, caption);
+            _ = win.SendMessageW(palette.list, win.LB_SETCURSEL, index, 0);
+            Probe.command(&palette, .list, win.LBN_SELCHANGE);
+            const preview = try windows.text(palette.preview, t.allocator);
+            defer t.allocator.free(preview);
+            try t.expectEqualStrings(fixture.row.text, preview);
+            Probe.command(&palette, .manage, win.BN_CLICKED);
+            try t.expectEqualStrings(fixture.scope, probe.edited.?.profile_id);
+            try t.expectEqualStrings(fixture.row.id, probe.edited.?.item.id);
+            palette.refresh(data);
+            try t.expectEqualStrings(fixture.row.id, palette.selectedRow().?.item.id);
+            const before = probe.inputs;
+            Probe.command(&palette, .insert, win.BN_CLICKED);
+            try t.expectEqual(before + 1, probe.inputs);
+            try t.expectEqualStrings(fixture.row.id, probe.input.?.item.id);
+            try t.expectEqualStrings(fixture.row.text, probe.input.?.item.text);
+        }
+    }
+    try t.expectEqual(@as(usize, 25), probe.edits);
+    try t.expectEqualStrings("caster", palette.data.preferences.input_profile_id);
+
+    try t.expect(win.SetWindowSubclass(palette.list, Probe.observeList, 74, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(palette.list, Probe.observeList, 74);
+    probe.switch_on_add = true;
+    Probe.chooseOrder(&palette, .name_text_asc);
+    try t.expect(probe.saw_pending and !probe.switch_on_add and !palette.refresh_failed);
+    try t.expectEqual(SortOrder.key_desc, palette.sort_order);
+    try t.expectEqualStrings("shared-a", palette.rows[0].item.id);
+
+    var alternate = data;
+    alternate.profiles = &.{.{ .id = "caster", .name = "Alpha Caster", .items = &profile }};
+    palette.refresh(alternate);
+    Probe.chooseOrder(&palette, .scope_asc);
+    try t.expectEqualStrings("profile-z", palette.rows[0].item.id);
+    try t.expectEqualStrings("case-item", palette.rows[1].item.id);
+    try t.expectEqualStrings("shared-a", palette.rows[2].item.id);
+    Probe.chooseOrder(&palette, .saved);
+    for (fixtures, palette.rows[0..palette.count]) |fixture, row|
+        try t.expectEqualStrings(fixture.row.id, row.item.id);
+
+    const outside = appendNativeText(palette.list, win.LB_ADDSTRING, "Unpublished fixture").?;
+    for ([_]usize{ outside, 0 }) |index| {
+        _ = win.SendMessageW(palette.list, win.LB_SETCURSEL, index, 0);
+        Probe.command(&palette, .list, win.LBN_SELCHANGE);
+        try t.expect(palette.selectedRow() == null and win.GetWindowTextLengthW(palette.preview) == 0);
+        try t.expect(win.IsWindowEnabled(palette.insert_button) == 0);
+        Probe.command(&palette, .insert, win.BN_CLICKED);
+        try t.expectEqual(@as(usize, 25), probe.inputs);
+        Probe.command(&palette, .manage, win.BN_CLICKED);
+        try t.expect(probe.edited == null);
+    }
 }
 
 test "scheduled palette search delays only large current scopes and settles before input or editing" {
@@ -720,6 +1075,162 @@ test "scheduled palette search delays only large current scopes and settles befo
     try std.testing.expect(!palette.refresh_failed and win.IsWindowEnabled(palette.insert_button) != 0);
     palette.insert();
     try std.testing.expectEqual(@as(usize, 2), probe.inputs);
+}
+
+test "palette defers reentrant search and publishes matching native text and identity" {
+    const Probe = struct {
+        palette: *Palette,
+        trigger: usize = 0,
+        appends: usize = 0,
+        calls: usize = 0,
+        stale_failure: bool,
+        replacement: ?storage.Data = null,
+        reject: bool = false,
+        updating: bool = false,
+        count_before: usize = 0,
+        count_after: usize = 0,
+        selected_during: bool = false,
+        preview_unchanged: bool = false,
+        inputs: usize = 0,
+        edits: usize = 0,
+        input_id: []const u8 = "",
+        edit_id: []const u8 = "",
+
+        fn command(palette: *Palette, id: Id, notification: u16) void {
+            _ = win.SendMessageW(palette.window, win.WM_COMMAND, @as(usize, notification) << 16 | @intFromEnum(id), 0);
+        }
+
+        fn textMatches(hwnd: win.HWND, expected: []const u8) bool {
+            const actual = windows.text(hwnd, std.testing.allocator) catch return false;
+            defer std.testing.allocator.free(actual);
+            return std.mem.eql(u8, expected, actual);
+        }
+
+        fn observeList(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, reference: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            const self: *@This() = @ptrFromInt(reference);
+            if (message == win.LB_ADDSTRING) {
+                if (self.reject) return win.LB_ERRSPACE;
+                if (self.trigger != 0) {
+                    self.appends += 1;
+                    if (self.appends == self.trigger) {
+                        self.trigger = 0;
+                        self.calls += 1;
+                        self.updating = self.palette.refreshing;
+                        self.count_before = self.palette.count;
+                        if (self.replacement) |data| self.palette.refresh(data);
+                        windows.setText(self.palette.search, "intermediate");
+                        windows.setText(self.palette.search, "latest");
+                        command(self.palette, .insert, win.BN_CLICKED);
+                        command(self.palette, .manage, win.BN_CLICKED);
+                        command(self.palette, .list, win.LBN_SELCHANGE);
+                        self.selected_during = self.palette.selectedRow() != null;
+                        self.preview_unchanged = textMatches(self.palette.preview, "prior body");
+                        self.count_after = self.palette.count;
+                        if (self.stale_failure) return win.LB_ERRSPACE;
+                    }
+                }
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+
+        fn handleHost(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+            if (message == win.WM_NCCREATE) {
+                const params: *const win.CREATESTRUCTW = @ptrFromInt(@as(usize, @bitCast(lparam)));
+                _ = win.SetWindowLongPtrW(hwnd, win.GWLP_USERDATA, @bitCast(@intFromPtr(params.lpCreateParams)));
+            }
+            if (message == wm_insert or message == wm_manage) {
+                const self: *@This() = @ptrFromInt(@as(usize, @bitCast(win.GetWindowLongPtrW(hwnd, win.GWLP_USERDATA))));
+                if (message == wm_insert) {
+                    self.inputs += 1;
+                    if (wparam < self.palette.count) self.input_id = self.palette.rows[wparam].item.id;
+                } else {
+                    self.edits += 1;
+                    if (self.palette.selectedRow()) |row| self.edit_id = row.item.id;
+                }
+                return 0;
+            }
+            return win.DefWindowProcW(hwnd, message, wparam, lparam);
+        }
+    };
+    const expect = std.testing.expect;
+    var wc = std.mem.zeroes(win.WNDCLASSW);
+    wc.hInstance = win.GetModuleHandleW(null);
+    wc.lpszClassName = windows.wide("ChatPalette.ReentrantSearchTest");
+    wc.lpfnWndProc = Probe.handleHost;
+    try expect(win.RegisterClassW(&wc) != 0 or win.GetLastError() == win.ERROR_CLASS_ALREADY_EXISTS);
+    for ([_]struct { total: usize, trigger: usize, stale_failure: bool }{
+        .{ .total = 4, .trigger = 1, .stale_failure = false },
+        .{ .total = 504, .trigger = 500, .stale_failure = true },
+    }) |sample| {
+        var palette: Palette = .{};
+        var probe: Probe = .{ .palette = &palette, .stale_failure = sample.stale_failure };
+        const host = win.CreateWindowExW(0, wc.lpszClassName, windows.wide(""), 0, 0, 0, 1, 1, null, null, wc.hInstance, &probe) orelse
+            return error.CreateReentrantSearchTestHost;
+        defer _ = win.DestroyWindow(host);
+        defer palette.close();
+        try palette.open(host);
+        try expect(win.SetWindowSubclass(palette.list, Probe.observeList, 63, @intFromPtr(&probe)) != 0);
+        defer _ = win.RemoveWindowSubclass(palette.list, Probe.observeList, 63);
+        var ids = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer ids.deinit();
+        var items: [504]storage.Item = undefined;
+        for (items[0..sample.total], 0..) |*item, index| item.* = .{
+            .id = try std.fmt.allocPrint(ids.allocator(), "old-{d}", .{index}),
+            .name = "earlier",
+            .text = "same body",
+        };
+        items[0] = .{ .id = "previous-id", .name = "prior", .text = "prior body" };
+        items[sample.total - 2] = .{ .id = "pending-id", .name = "intermediate", .text = "same body" };
+        items[sample.total - 1] = .{ .id = "latest-id", .name = "latest", .text = "same body" };
+        var replacement: [4]storage.Item = undefined;
+        if (sample.total == replacement.len) {
+            @memcpy(&replacement, items[0..sample.total]);
+            items[sample.total - 1].id = "retired-latest-id";
+            probe.replacement = .{ .shared_items = &replacement };
+        }
+        palette.refresh(.{ .shared_items = items[0..sample.total] });
+        try std.testing.expectEqual(@min(sample.total, 500), palette.count);
+        try std.testing.expectEqual(@as(win.LRESULT, @intCast(palette.count)), win.SendMessageW(palette.list, win.LB_GETCOUNT, 0, 0));
+        windows.setText(palette.search, "prior");
+        palette.flushSearch();
+        try expect(Probe.textMatches(palette.preview, "prior body"));
+        probe.trigger = sample.trigger;
+        windows.setText(palette.search, "earlier");
+        palette.flushSearch();
+        try std.testing.expectEqual(@as(usize, 1), probe.calls);
+        try expect(probe.updating and !probe.selected_during and probe.preview_unchanged);
+        try expect(probe.count_before == 1 and probe.count_after == 1);
+        try expect(probe.inputs == 0 and probe.edits == 0);
+        try expect(!palette.refresh_failed and !palette.refreshing and palette.search_due == null);
+        try std.testing.expectEqual(@as(usize, 1), palette.count);
+        try std.testing.expectEqual(@as(win.LRESULT, 1), win.SendMessageW(palette.list, win.LB_GETCOUNT, 0, 0));
+        var label: [80]u16 = undefined;
+        const length = win.SendMessageW(palette.list, win.LB_GETTEXT, 0, @bitCast(@intFromPtr(&label)));
+        try expect(length > 0 and length < label.len);
+        try std.testing.expectEqualSlices(u16, windows.wide("共通　latest"), label[0..@intCast(length)]);
+        try std.testing.expectEqualStrings("latest-id", palette.selectedRow().?.item.id);
+        try expect(Probe.textMatches(palette.preview, "same body"));
+        Probe.command(&palette, .insert, win.BN_CLICKED);
+        Probe.command(&palette, .manage, win.BN_CLICKED);
+        try expect(probe.inputs == 1 and probe.edits == 1);
+        try std.testing.expectEqualStrings("latest-id", probe.input_id);
+        try std.testing.expectEqualStrings("latest-id", probe.edit_id);
+
+        probe.reject = true;
+        windows.setText(palette.search, "earlier");
+        palette.flushSearch();
+        try expect(palette.refresh_failed and !palette.refreshing and palette.selectedRow() == null);
+        try std.testing.expectEqual(@as(win.LRESULT, 0), win.SendMessageW(palette.list, win.LB_GETCOUNT, 0, 0));
+        Probe.command(&palette, .insert, win.BN_CLICKED);
+        try std.testing.expectEqual(@as(usize, 1), probe.inputs);
+        probe.reject = false;
+        windows.setText(palette.search, "latest");
+        palette.flushSearch();
+        try expect(!palette.refresh_failed and win.IsWindowEnabled(palette.insert_button) != 0);
+        Probe.command(&palette, .insert, win.BN_CLICKED);
+        try std.testing.expectEqual(@as(usize, 2), probe.inputs);
+        try std.testing.expectEqualStrings("latest-id", probe.input_id);
+    }
 }
 
 test "resetting the imported library clears the native search and drops the old selection" {
