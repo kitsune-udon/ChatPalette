@@ -449,7 +449,13 @@ pub const Management = struct {
             return error.UpdateManagementListCount;
         }
         if (replacement != null) {
-            if (previous) |content| content.release();
+            if (previous) |content| {
+                // Returning to a populated list is distinct from clearing a selection in it.
+                if (self.selection == null and content.rows.len == 0 and rows.len != 0 and
+                    std.mem.eql(u8, content.scope_id, scope))
+                    setIdentity(&self.selection, rows[0].id) catch {};
+                content.release();
+            }
         }
         self.paintSelection(rows);
     }
@@ -2054,6 +2060,13 @@ test "management stores list changes, restores selection by ID, and keeps the in
     try testing.expect(view.selectedIndex() == null and view.selection == null);
     try view.selectForEditing("", "item-1");
     snap.data.shared_items = &.{};
+    view.refresh();
+    try testing.expect(view.selectedIndex() == null and view.selection == null);
+    snap.data.shared_items = &.{.{ .id = "restored", .name = "Restored", .text = "body" }};
+    view.refresh();
+    try testing.expectEqual(@as(?usize, 0), view.selectedIndex());
+    try testing.expectEqualStrings("restored", view.selection.?);
+    try view.selectForEditing("", "");
     view.refresh();
     try testing.expect(view.selectedIndex() == null and view.selection == null);
     try testing.expectEqualStrings("b", snap.data.preferences.input_profile_id);
