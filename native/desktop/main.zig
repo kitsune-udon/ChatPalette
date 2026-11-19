@@ -248,6 +248,7 @@ const App = struct {
     // New attempts and results can take ownership without changing the timer generation.
     reaction_revision: u64 = 0,
     reaction_timer: ?ReactionTimer = null,
+    pending_reaction_start: ?ReactionStart = null,
     next_reaction_timer_id: win.UINT_PTR = first_reaction_timer_id,
     reaction_progress: feedback.Overlay = .{},
     pending_reaction_progress: ?ReactionProgressUpdate = null,
@@ -259,6 +260,7 @@ const App = struct {
     reaction_render_at: u64 = 0,
     target: win.HWND = null,
     library_revision: u64 = 0,
+    input_settings_revision: u64 = 0,
     quitting: bool = false,
     restarting: bool = false,
     modal: bool = false,
@@ -379,10 +381,16 @@ const App = struct {
     }
 
     fn show(self: *App, target_source: PaletteTarget) void {
-        if (self.quitting or self.modal) return;
+        if (self.quitting) return;
         if (target_source == .shortcut) {
             const command = target_source.shortcut;
             if (!self.commandCurrent(command) or command.library != self.library_revision) return;
+        }
+        if (self.modal) {
+            if (target_source == .active_window) {
+                if (support.shortcutEditorAwayFrom(win.GetForegroundWindow())) |editor| windows.recallOwnedWindow(editor);
+            }
+            return;
         }
         if (self.manager.isEditing()) {
             self.manager.show();
@@ -524,6 +532,7 @@ const App = struct {
         self.snapshot.data.preferences = next;
         switch (change) {
             .user_setting => {
+                self.input_settings_revision +%= 1;
                 if (!std.meta.eql(self.keyboard.tracker.bindings, bindings))
                     self.keyboard.tracker.replace(bindings);
                 self.libraryChanged();
@@ -577,9 +586,12 @@ const App = struct {
         return .{ .target = self.target, .generation = self.queue.generation, .library = self.library_revision };
     }
 
+    fn paletteTargetCurrent(self: *const App, context: PaletteContext) bool {
+        return !self.quitting and self.target == context.target and self.queue.generation == context.generation;
+    }
+
     fn paletteContextCurrent(self: *const App, context: PaletteContext) bool {
-        return !self.quitting and self.target == context.target and
-            self.queue.generation == context.generation and self.library_revision == context.library;
+        return self.paletteTargetCurrent(context) and self.library_revision == context.library;
     }
 
     fn detectProfile(self: *App, context: PaletteContext, origin: win.HWND) void {
@@ -736,6 +748,7 @@ const App = struct {
     // On success the app owns the incoming snapshot even if a view fails to refresh.
     fn commitImportedData(self: *App, incoming: storage.Snapshot, bindings: shortcuts.Bindings, backup: []const u8) ![]const u8 {
         try self.db.replaceFromBackup(incoming.data, backup);
+        self.input_settings_revision +%= 1;
         var previous = self.snapshot;
         self.snapshot = incoming;
         previous.deinit();
@@ -1264,6 +1277,52 @@ const App = struct {
         return false;
     }
 
+    const InputPlan = struct {
+        arena: std.heap.ArenaAllocator,
+        scope: []const u8,
+        id: []const u8,
+        text: []const u8,
+        channel: []const u8,
+        settings_revision: u64,
+
+        fn capture(app: *const App, scope: []const u8, item: storage.Item) !InputPlan {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            errdefer arena.deinit();
+            const owned = arena.allocator();
+            const channel = if (scope.len != 0)
+                (app.snapshot.data.findProfile(scope) orelse return error.ProfileChanged).channel
+            else
+                "";
+            const owned_scope = try owned.dupe(u8, scope);
+            const owned_id = try owned.dupe(u8, item.id);
+            const owned_text = try owned.dupe(u8, item.text);
+            const owned_channel = try owned.dupe(u8, channel);
+            return .{
+                .arena = arena,
+                .scope = owned_scope,
+                .id = owned_id,
+                .text = owned_text,
+                .channel = owned_channel,
+                .settings_revision = app.input_settings_revision,
+            };
+        }
+
+        fn current(self: *const InputPlan, app: *const App) bool {
+            if (app.input_settings_revision != self.settings_revision) return false;
+            const data = app.snapshot.data;
+            if (self.scope.len != 0) {
+                const profile = data.findProfile(self.scope) orelse return false;
+                if (!std.mem.eql(u8, self.channel, profile.channel)) return false;
+                if (!data.preferences.auto_mode and !std.mem.eql(u8, self.scope, data.preferences.input_profile_id)) return false;
+            }
+            const items = data.itemsFor(self.scope) catch return false;
+            for (items) |item| {
+                if (std.mem.eql(u8, self.id, item.id)) return std.mem.eql(u8, self.text, item.text);
+            }
+            return false;
+        }
+    };
+
     fn slot(self: *App, command: operations.Command, video: operations.VideoId, page_token: operations.PageToken) !bool {
         const target = command.event.window;
         const action = command.event.action;
@@ -1301,11 +1360,13 @@ const App = struct {
             self.report("このキーに弾幕が割り当てられていません。");
             return false;
         };
+        var plan = try InputPlan.capture(self, profile_id, item);
+        defer plan.arena.deinit();
         const verification = try self.verifyShortcutInput(target, video, page_token);
         defer verification.deinit();
-        if (!self.commandCurrent(command) or command.library != self.library_revision) return false;
+        if (!self.commandCurrent(command) or !plan.current(self)) return false;
         if (!self.pageReplySucceeded(verification, video, .ok)) return false;
-        const outcome = try self.commitInput(.input_insert, target, video, page_token, item.text);
+        const outcome = try self.commitInput(.input_insert, target, video, page_token, plan.text);
         if (self.shortcutSuperseded(command.generation)) return false;
         if (outcome != .inserted) return self.rejectPage(outcome);
         self.report("弾幕を入力しました。");
@@ -1350,11 +1411,9 @@ const App = struct {
         const target = owner.target;
         if (input.browser(target) == null) return self.report("unavailable");
         const row = self.palette.rows[index];
-        const text = try allocator.dupe(u8, row.item.text);
-        defer allocator.free(text);
-        const profile_id = try allocator.dupe(u8, row.profile_id);
-        defer allocator.free(profile_id);
-        const auto_profile = profile_id.len != 0 and self.snapshot.data.preferences.auto_mode;
+        var plan = try InputPlan.capture(self, row.profile_id, row.item);
+        defer plan.arena.deinit();
+        const auto_profile = plan.scope.len != 0 and self.snapshot.data.preferences.auto_mode;
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
         _ = win.SetForegroundWindow(target);
         const hwnd = windows.number(target);
@@ -1362,7 +1421,8 @@ const App = struct {
         if (auto_profile) self.palette.detected_profile = false;
         const context = try self.requestOnPage(if (auto_profile) .resolve else .browser_context, hwnd, "", "bind", &.{});
         defer context.deinit();
-        if (!self.foreground(hwnd) or !self.paletteContextCurrent(owner)) return error.TargetChanged;
+        if (self.modal or self.manager.isEditing()) return;
+        if (!self.foreground(hwnd) or !self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
         if (!context.is("ok")) return if (auto_profile and context.is("unavailable"))
             error.ProfileLookupFailed
         else
@@ -1370,23 +1430,24 @@ const App = struct {
         const video = operations.videoId(context.field("Video")) orelse return error.VideoUnavailable;
         const page_token = operations.pageToken(context.field("PageToken")) orelse return error.TargetChanged;
         if (auto_profile) {
-            const profile = (self.selectDetectedProfile(context.field("Channel")) catch return error.ProfileSelectionNotSaved) orelse
+            _ = (self.selectDetectedProfile(context.field("Channel")) catch return error.ProfileSelectionNotSaved) orelse
                 return error.ProfileChanged;
-            if (!std.mem.eql(u8, profile.id, profile_id)) return error.ProfileChanged;
-        } else if (profile_id.len != 0 and !std.mem.eql(u8, self.snapshot.data.preferences.input_profile_id, profile_id)) {
-            return error.ProfileChanged;
+            if (!self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
+            if (!std.mem.eql(u8, context.field("Channel"), plan.channel)) return error.ProfileChanged;
         }
         const checked = try self.requestOnPage(.verify_input, hwnd, &video, &page_token, &.{});
         defer checked.deinit();
         if (self.modal or self.manager.isEditing()) return;
-        if (!self.foreground(hwnd) or !self.paletteContextCurrent(owner)) return error.TargetChanged;
+        if (!self.foreground(hwnd) or !self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
         if (!checked.is("ok") or !std.mem.eql(u8, checked.field("Video"), &video)) {
             self.report(checked.field("State"));
             self.palette.show();
             return;
         }
-        const outcome = try self.commitInput(.input_insert, hwnd, video, page_token, text);
-        if (outcome != .inserted and self.paletteContextCurrent(owner) and self.foreground(hwnd)) {
+        const outcome = try self.commitInput(.input_insert, hwnd, video, page_token, plan.text);
+        if (outcome != .inserted and !self.modal and !self.manager.isEditing() and
+            self.paletteTargetCurrent(owner) and self.foreground(hwnd) and plan.current(self))
+        {
             _ = self.rejectPage(outcome);
             self.palette.show();
         }
@@ -1421,14 +1482,13 @@ const App = struct {
         if (self.reaction_generation != before_open or (job.shortcut == null and self.reaction_revision != revision)) return false;
         if (job.shortcut) |command| if (!self.checkCommandTarget(command)) return false;
         const generation = before_open +% 1;
-        if (!self.scheduleReactionAdvance(generation, @min(delay, 1000)))
-            return self.reactionSetupFailed(job, "リアクションのタイマーを開始できませんでした。");
         self.reaction_generation = generation;
         self.reaction_revision +%= 1;
         self.starting_reaction = null;
         self.reaction = job;
         self.reaction.?.due_ns = @as(u64, delay) * std.time.ns_per_ms;
         self.reaction_clock = clock;
+        self.pending_reaction_start = .{ .generation = generation, .kind = .send, .wait_ms = @min(delay, 1000) };
         if (self.queue.target == job.target) {
             _ = self.queue.bindVideo(job.video);
             _ = self.queue.bindPage(job.page);
@@ -1439,7 +1499,6 @@ const App = struct {
         if (delay == 0) {
             self.showReactionCounts("標準設定で実行します。", job, .running);
         } else self.showReactionCountdown(job, delay);
-        if (self.reaction_generation == generation and self.reaction != null) self.reaction_progress.show();
         return true;
     }
 
@@ -1471,6 +1530,40 @@ const App = struct {
         id: win.UINT_PTR,
         kind: Kind,
     };
+
+    const ReactionStart = struct {
+        generation: u64,
+        kind: ReactionTimer.Kind,
+        wait_ms: u32,
+    };
+
+    fn currentReactionStart(self: *const App, generation: u64) bool {
+        return !self.quitting and self.pending_reaction_start != null and self.reaction_generation == generation;
+    }
+
+    fn completeReactionStart(self: *App, generation: u64, text_updated: bool) void {
+        if (!self.currentReactionStart(generation)) return;
+        const shown = text_updated and self.reaction_progress.showChecked();
+        if (!self.currentReactionStart(generation)) return;
+        const kind = self.pending_reaction_start.?.kind;
+        const wait_ms = self.pending_reaction_start.?.wait_ms;
+        self.pending_reaction_start = null;
+        if (!shown) {
+            switch (kind) {
+                .send => self.finishReaction(.unavailable, "ShowReactionProgress"),
+                .preparation => self.finishPreparation(.unavailable, "ShowReactionProgress"),
+            }
+            return;
+        }
+        switch (kind) {
+            .send => if (!self.scheduleReactionAdvance(generation, wait_ms)) {
+                self.finishReaction(.unavailable, "リアクションのタイマーを開始できませんでした。");
+            },
+            .preparation => if (!self.setReactionTimer(.preparation, wait_ms)) {
+                self.finishPreparation(.unavailable, "リアクションの登録・確認のタイマーを開始できませんでした。");
+            },
+        }
+    }
 
     fn setReactionTimer(self: *App, kind: ReactionTimer.Kind, wait_ms: u32) bool {
         self.cancelReactionTimer();
@@ -1513,11 +1606,17 @@ const App = struct {
             self.pending_reaction_progress = null;
             const terminal = current_update.phase == .finished;
             if (terminal and current_update.revision != self.reaction_revision) continue;
+            const start_generation = if (current_update.phase == .running and self.pending_reaction_start != null)
+                self.pending_reaction_start.?.generation
+            else
+                null;
             const text = current_update.text[0..current_update.len];
-            self.palette.status(text);
+            const status_updated = self.palette.message == null or windows.setTextChecked(self.palette.message, text);
             if (self.pending_reaction_progress != null or (terminal and current_update.revision != self.reaction_revision)) continue;
-            self.reaction_progress.update(text, self.keyboard.tracker.bindings, current_update.phase);
+            const overlay_updated = self.reaction_progress.update(text, self.keyboard.tracker.bindings, current_update.phase);
             self.reaction_render_at = win.GetTickCount64();
+            // Only the first visible update may arm this operation. Either Win32 call can reenter and stop it.
+            if (start_generation) |generation| self.completeReactionStart(generation, status_updated and overlay_updated);
         }
     }
 
@@ -1657,13 +1756,10 @@ const App = struct {
             return;
         };
         if (!self.reactionContextCurrent(origin)) return;
-        if (!self.setReactionTimer(.preparation, 1000)) {
-            self.publishReactionResult(.unavailable, null, "リアクションの登録・確認のタイマーを開始できませんでした。");
-            return;
-        }
         const delay: u32 = if (mode == .reaction_capture) 1000 else 5000;
         self.reaction_generation +%= 1;
         self.reaction_revision +%= 1;
+        self.pending_reaction_start = .{ .generation = self.reaction_generation, .kind = .preparation, .wait_ms = 1000 };
         self.preparation = .{
             .mode = mode,
             .target = target,
@@ -1683,7 +1779,6 @@ const App = struct {
         if (mode == .reaction_capture) {
             self.updateReactionProgress("登録を待っています。♡のメニューを開き、マウスをメニューに重ねてください。", .running);
         } else self.showPreparationCountdown(delay);
-        if (self.preparationCurrent(pending)) self.reaction_progress.show();
     }
 
     fn preparationCurrent(self: *const App, pending: Preparation) bool {
@@ -1698,6 +1793,7 @@ const App = struct {
     }
 
     fn prepareNow(self: *App) void {
+        if (self.pending_reaction_start != null) return;
         if (self.worker.active) return;
         const pending = self.preparation orelse return;
         if (!self.foreground(pending.target)) return self.finishPreparation(.wrong_window, "");
@@ -1733,6 +1829,7 @@ const App = struct {
         const pending = self.preparation orelse return;
         const revision = self.reaction_revision;
         self.preparation = null;
+        self.pending_reaction_start = null;
         self.cancelReactionTimer();
         self.updateReactionButtons();
         // A committed registration still needs its confirmation even if another key is waiting.
@@ -1806,6 +1903,7 @@ const App = struct {
     }
 
     fn advanceReaction(self: *App) void {
+        if (self.pending_reaction_start != null) return;
         if (self.worker.active) return;
         const job = if (self.reaction) |*job| job else return;
         if (job.active_request) return;
@@ -1885,6 +1983,7 @@ const App = struct {
             if (job.shortcut) |command| command.generation != self.queue.generation else false;
         self.reaction = null;
         self.reaction_clock = null;
+        self.pending_reaction_start = null;
         self.cancelReactionTimer();
         if (job.shortcut) |command| self.queue.finish(command, job.succeeded());
         self.updateReactionButtons();
@@ -2928,8 +3027,8 @@ fn keyboardContext() input.ShortcutContext {
     return .{
         .window = windows.number(target),
         .browser = !app.modal and input.browser(target) != null,
-        .stoppable = app.queue.busy() or app.reaction != null or app.preparation != null or app.worker.active,
-        .suspended = app.modal,
+        .stoppable = !app.modal and (app.queue.busy() or app.reaction != null or app.preparation != null or app.worker.active),
+        .suspended = app.modal and (app.quitting or support.shortcutEditorAwayFrom(target) == null),
     };
 }
 
@@ -2940,7 +3039,13 @@ fn shortcut(event: shortcuts.Event) void {
         return;
     }
     // The hook owns a captured key's release even after its window loses foreground.
-    if (app.modal or !app.foreground(event.window)) return;
+    if (!app.foreground(event.window)) return;
+    if (app.modal) {
+        if (event.action == .palette) {
+            if (support.shortcutEditorAwayFrom(@ptrFromInt(event.window))) |editor| windows.recallOwnedWindow(editor);
+        }
+        return;
+    }
     if (app.manager.isEditing()) {
         if (event.action == .palette) app.manager.show();
         return;

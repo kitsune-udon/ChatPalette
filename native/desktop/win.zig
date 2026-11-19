@@ -21,6 +21,22 @@ pub fn wide(comptime value: []const u8) [:0]const u16 {
     return std.unicode.utf8ToUtf16LeStringLiteral(value);
 }
 
+pub fn recallOwnedWindow(window: api.HWND) void {
+    if (window == null or api.IsWindow(window) == 0) return;
+    var target = window;
+    while (api.IsWindowEnabled(target) == 0) {
+        const popup = api.GetWindow(target, api.GW_ENABLEDPOPUP);
+        if (popup == null or popup == target or api.GetWindow(popup, api.GW_OWNER) != target or api.IsWindowVisible(popup) == 0) return;
+        target = popup;
+    }
+    if (api.IsIconic(target) != 0) {
+        _ = api.ShowWindow(target, api.SW_RESTORE);
+    } else if (api.IsWindowVisible(target) == 0) {
+        _ = api.ShowWindow(target, api.SW_SHOWNOACTIVATE);
+    }
+    _ = api.SetForegroundWindow(target);
+}
+
 /// Match the legacy desktop: draw at system DPI and let Windows scale across monitors.
 pub fn enableSystemDpi() !void {
     const context = api.DPI_AWARENESS_CONTEXT_SYSTEM_AWARE;
@@ -92,6 +108,14 @@ pub fn setText(hwnd: api.HWND, value: []const u8) void {
     const buffer = std.unicode.utf8ToUtf16LeAllocZ(allocator, value) catch return;
     defer allocator.free(buffer);
     _ = api.SetWindowTextW(hwnd, buffer);
+}
+
+pub fn setTextChecked(hwnd: api.HWND, value: []const u8) bool {
+    const allocator = std.heap.page_allocator;
+    const buffer = std.unicode.utf8ToUtf16LeAllocZ(allocator, value) catch return false;
+    defer allocator.free(buffer);
+    // These controls are owned by this thread. Use their acknowledgement of the text update.
+    return api.SendMessageW(hwnd, api.WM_SETTEXT, 0, @bitCast(@intFromPtr(buffer.ptr))) > 0;
 }
 
 pub fn text(hwnd: api.HWND, allocator: std.mem.Allocator) ![]const u8 {

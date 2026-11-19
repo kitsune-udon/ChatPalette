@@ -138,8 +138,8 @@ pub const Overlay = struct {
         self.* = .{};
     }
 
-    pub fn update(self: Overlay, message: []const u8, keys: shortcuts.Bindings, state: Phase) void {
-        if (self.window == null) return;
+    pub fn update(self: Overlay, message: []const u8, keys: shortcuts.Bindings, state: Phase) bool {
+        if (self.window == null) return false;
         var stop_buffer: [30]u8 = undefined;
         var palette_buffer: [30]u8 = undefined;
         var hint_buffer: [240]u8 = undefined;
@@ -150,15 +150,21 @@ pub const Overlay = struct {
             .stopping => "現在の操作結果を確認しています。",
             .finished => "4秒後に閉じます。結果は「管理・ヘルプ」から確認できます。",
         };
-        windows.setText(self.summary, message);
-        windows.setText(self.hint, hint);
+        const summary_updated = windows.setTextChecked(self.summary, message);
+        const hint_updated = windows.setTextChecked(self.hint, hint);
         _ = win.EnableWindow(self.stop, @intFromBool(state == .running));
         _ = win.ShowWindow(self.stop, if (state == .finished) win.SW_HIDE else win.SW_SHOWNA);
+        return summary_updated and hint_updated;
     }
 
     pub fn show(self: Overlay) void {
-        if (self.window == null) return;
-        _ = win.SetWindowPos(self.window, win.HWND_TOPMOST, 0, 0, 0, 0, win.SWP_NOMOVE | win.SWP_NOSIZE | win.SWP_NOACTIVATE | win.SWP_SHOWWINDOW);
+        _ = self.showChecked();
+    }
+
+    pub fn showChecked(self: Overlay) bool {
+        if (self.window == null) return false;
+        const shown = win.SetWindowPos(self.window, win.HWND_TOPMOST, 0, 0, 0, 0, win.SWP_NOMOVE | win.SWP_NOSIZE | win.SWP_NOACTIVATE | win.SWP_SHOWWINDOW);
+        return shown != 0 and win.IsWindowVisible(self.window) != 0;
     }
 
     pub fn hide(self: Overlay) void {

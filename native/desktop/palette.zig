@@ -21,8 +21,8 @@ pub const wm_link = win.WM_APP + 25;
 const Id = enum(u16) { search = 101, list, insert, stop, manage, support, auto_mode, profile, start, reaction_kind, reaction_count, reaction_interval, save_defaults, load_defaults, link };
 
 pub const ReactionOptions = struct { kind: u8, count: u32, interval: u32 };
-pub const reaction_counts = [_]u32{ 1, 10, 100, 1000, 10000 };
-pub const reaction_intervals = [_]u32{ 0, 25, 50, 100, 150, 200, 250, 500, 1000 };
+pub const reaction_counts = storage.Preferences.reaction_counts;
+pub const reaction_intervals = storage.Preferences.reaction_intervals;
 
 pub const Palette = struct {
     const Row = struct { item: storage.Item, profile_id: []const u8 };

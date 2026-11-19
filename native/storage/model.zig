@@ -28,6 +28,9 @@ pub const Profile = struct {
 };
 
 pub const Preferences = struct {
+    pub const reaction_counts = [_]u32{ 1, 10, 100, 1_000, 10_000 };
+    pub const reaction_intervals = [_]u32{ 0, 25, 50, 100, 150, 200, 250, 500, 1000 };
+
     input_profile_id: []const u8 = "",
     auto_mode: bool = true,
     reaction_kind: u8 = 1,
@@ -167,11 +170,9 @@ fn copyItems(allocator: std.mem.Allocator, items: []const Item) ![]Item {
 }
 
 pub fn validatePreferences(prefs: Preferences) !shortcuts.Bindings {
-    const allowed_count = [_]u32{ 1, 10, 100, 1_000, 10_000 };
-    const allowed_interval = [_]u32{ 0, 25, 50, 100, 150, 200, 250, 500, 1000 };
     if (prefs.reaction_kind < 1 or prefs.reaction_kind > 6 or
-        std.mem.indexOfScalar(u32, &allowed_count, prefs.reaction_count) == null or
-        std.mem.indexOfScalar(u32, &allowed_interval, prefs.reaction_interval_ms) == null)
+        std.mem.indexOfScalar(u32, &Preferences.reaction_counts, prefs.reaction_count) == null or
+        std.mem.indexOfScalar(u32, &Preferences.reaction_intervals, prefs.reaction_interval_ms) == null)
         return error.InvalidPreferences;
     if (prefs.input_profile_id.len != 0 and !validIdentity(prefs.input_profile_id)) return error.InvalidProfileId;
     return shortcuts.validate(prefs.shortcut_keys);

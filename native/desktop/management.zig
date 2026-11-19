@@ -301,9 +301,8 @@ pub const Management = struct {
     }
 
     fn raiseEditor(self: Management) bool {
-        if (self.dialog.window == null) return false;
-        _ = win.ShowWindow(self.dialog.window, win.SW_SHOWNORMAL);
-        _ = win.SetForegroundWindow(self.dialog.window);
+        const owner = self.dialog.window orelse if (self.confirming) self.window else return false;
+        windows.recallOwnedWindow(owner);
         return true;
     }
 
@@ -570,6 +569,8 @@ pub const Management = struct {
         if (self.opening_editor or self.confirming or self.raiseEditor() or !self.editAllowed() or self.refreshFailed() or self.refreshing) return;
         const selected = self.selectedIndex();
         const row: ?storage.Item = if (selected) |i| self.items()[i] else null;
+        if (id >= @intFromEnum(Id.add) and id <= @intFromEnum(Id.assignment))
+            _ = try self.snapshot.data.itemsFor(self.editingId());
         switch (id) {
             @intFromEnum(Id.add) => try self.openDialog(.add_item, null),
             @intFromEnum(Id.edit) => if (row) |item| try self.openDialog(.edit_item, item),

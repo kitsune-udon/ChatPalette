@@ -18,6 +18,18 @@ const save_items_id = 203;
 const key_status_id = 204;
 const item_status_id = 205;
 
+var shortcut_editor: win.HWND = null;
+
+pub fn shortcutEditorAwayFrom(foreground: win.HWND) win.HWND {
+    const editor = shortcut_editor orelse return null;
+    if (foreground == null or win.IsWindowVisible(editor) == 0) return null;
+    var owner = foreground;
+    while (owner != null) : (owner = win.GetWindow(owner, win.GW_OWNER)) {
+        if (owner == editor) return null;
+    }
+    return editor;
+}
+
 const action_labels = [_][]const u8{
     "パレットを開く",             "配信者の弾幕 1",        "配信者の弾幕 2",          "共通の弾幕 1",           "共通の弾幕 2",
     "チャット欄へフォーカス", "チャット欄をクリア", "リアクションUIを表示", "リアクションを実行", "チャット送信",
@@ -224,13 +236,20 @@ const Dialog = struct {
         editor.baseline.deinit();
         editor.baseline = pending;
         published = true;
-        for (self.edits, pending.keys) |field, key| windows.setText(field, key);
-        self.updateKeys();
+        for (self.edits, pending.keys) |field, key| {
+            const shown = windows.text(field, allocator) catch continue;
+            defer allocator.free(shown);
+            if (!std.mem.eql(u8, shown, key) and sameKey(shown, key)) windows.setText(field, key);
+        }
+        self.refreshKeyStatus(true);
         self.updateSlotLabels();
-        windows.setText(self.key_status, "キー設定を保存し、反映しました。");
     }
 
     fn updateKeys(self: *Dialog) void {
+        self.refreshKeyStatus(false);
+    }
+
+    fn refreshKeyStatus(self: *Dialog, just_saved: bool) void {
         const editor = self.editor orelse return;
         if (self.key_status == null or self.edits[self.edits.len - 1] == null) return;
         const pending = self.draft() catch return self.readFailure();
@@ -256,7 +275,7 @@ const Dialog = struct {
             return;
         };
         _ = win.EnableWindow(self.save, @intFromBool(dirty));
-        windows.setText(self.key_status, if (dirty) "未保存のキー変更があります。" else "キー設定に未保存の変更はありません。");
+        windows.setText(self.key_status, if (dirty) "未保存のキー変更があります。" else if (just_saved) "キー設定を保存し、反映しました。" else "キー設定に未保存の変更はありません。");
     }
 
     fn updateSlotLabels(self: *Dialog) void {
@@ -349,7 +368,7 @@ const Dialog = struct {
         }
         choices.baseline = selected;
         self.updateItems();
-        windows.setText(self.item_status, "弾幕の割当を保存しました。");
+        if (!self.itemsDirty()) windows.setText(self.item_status, "弾幕の割当を保存しました。");
     }
 
     fn place(self: Dialog, hwnd: win.HWND, x: c_int, y: c_int, width: c_int, height: c_int) void {
@@ -428,6 +447,10 @@ const Dialog = struct {
         _ = win.ShowWindow(self.window, win.SW_SHOW);
         if (self.close_requested) return;
         if (win.IsWindowVisible(self.window) == 0) return error.ShowSupportWindow;
+        if (self.editor != null) shortcut_editor = self.window;
+        defer if (shortcut_editor == self.window) {
+            shortcut_editor = null;
+        };
         _ = win.SetForegroundWindow(self.window);
         _ = win.SetFocus(if (self.document != null) self.document else self.edits[0]);
         var message: win.MSG = undefined;
