@@ -1467,6 +1467,7 @@ fn findFileEntry(parent: win.HWND, depth: usize) ?win.HWND {
     var previous: win.HWND = null;
     while (win.FindWindowExW(parent, previous, null, null)) |child| {
         previous = child;
+        if (win.IsWindowVisible(child) == 0) continue;
         // The shell's Explorer view uses a native Edit with ID 1001. The
         // breadcrumb toolbar can have the same ID, so require the Edit class.
         const id = win.GetDlgCtrlID(child);
@@ -1483,10 +1484,11 @@ fn findFileEntry(parent: win.HWND, depth: usize) ?win.HWND {
 
 fn firstEdit(parent: win.HWND, depth: usize) ?win.HWND {
     if (depth >= 5) return null;
-    if (win.FindWindowExW(parent, null, windows.wide("Edit"), null)) |edit| return edit;
     var previous: win.HWND = null;
     while (win.FindWindowExW(parent, previous, null, null)) |child| {
         previous = child;
+        if (win.IsWindowVisible(child) == 0) continue;
+        if (isEdit(child)) return child;
         if (firstEdit(child, depth + 1)) |edit| return edit;
     }
     return null;
@@ -1507,6 +1509,17 @@ fn keyStroke(code: u16, scan: u16, flags: win.DWORD) win.INPUT {
     return event;
 }
 
+fn pickerFilenamePoint(edit: win.HWND) ?win.POINT {
+    var rect: win.RECT = undefined;
+    if (win.IsWindowVisible(edit) == 0 or win.GetWindowRect(edit, &rect) == 0 or
+        rect.right <= rect.left or rect.bottom <= rect.top) return null;
+    const point: win.POINT = .{
+        .x = @divTrunc(rect.left + rect.right, 2),
+        .y = @divTrunc(rect.top + rect.bottom, 2),
+    };
+    return if (win.WindowFromPhysicalPoint(point) == edit) point else null;
+}
+
 // Explorer can display a WM_SETTEXT value without using it as the selected filename.
 fn typePickerFilename(scratch: std.mem.Allocator, picker: Picker, path: []const u8, pid: u32) !void {
     const edit = picker.filename;
@@ -1515,16 +1528,20 @@ fn typePickerFilename(scratch: std.mem.Allocator, picker: Picker, path: []const 
         return error.ForeignProductProcess;
     if (win.GetForegroundWindow() != picker.window) _ = win.SetForegroundWindow(picker.window);
     if (win.GetForegroundWindow() != picker.window) return error.FilePickerNotForeground;
-    var rect: win.RECT = undefined;
-    if (win.GetWindowRect(edit, &rect) == 0) return error.FilePickerEditNotVisible;
-    const point: win.POINT = .{
-        .x = @divTrunc(rect.left + rect.right, 2),
-        .y = @divTrunc(rect.top + rect.bottom, 2),
+    // The dialog can be foreground before Explorer finishes laying out the edit.
+    const placement_deadline = win.GetTickCount64() + step_timeout_ms;
+    const point: win.POINT = while (true) {
+        if (win.GetForegroundWindow() != picker.window) return error.FilePickerNotForeground;
+        if (ui.windowPid(edit) != pid or win.GetAncestor(edit, win.GA_ROOT) != picker.window)
+            return error.ForeignProductProcess;
+        if (pickerFilenamePoint(edit)) |ready| break ready;
+        if (win.GetTickCount64() >= placement_deadline) return error.FilePickerEditNotVisible;
+        win.Sleep(20);
     };
-    if (win.WindowFromPhysicalPoint(point) != edit or win.GetAsyncKeyState(win.VK_LBUTTON) < 0 or
-        win.SetPhysicalCursorPos(point.x, point.y) == 0)
-        return error.FilePickerEditNotVisible;
+    if (win.GetAsyncKeyState(win.VK_LBUTTON) < 0 or win.SetPhysicalCursorPos(point.x, point.y) == 0)
+        return error.FilePickerCursorUnavailable;
     if (win.GetForegroundWindow() != picker.window) return error.FilePickerNotForeground;
+    if (win.WindowFromPhysicalPoint(point) != edit) return error.FilePickerEditNotVisible;
     var mouse = std.mem.zeroes([2]win.INPUT);
     mouse[0].type = win.INPUT_MOUSE;
     mouse[0].u.mi.dwFlags = win.MOUSEEVENTF_LEFTDOWN;

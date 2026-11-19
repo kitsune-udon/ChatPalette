@@ -18,7 +18,19 @@ pub const Token = struct {
 };
 
 pub const Registration = struct { browser: []const u8, tokens: [5]Token };
-const Snapshot = struct { version: u8, profiles: []Registration };
+const Snapshot = struct {
+    version: u8,
+    profiles: []struct {
+        browser: []const u8,
+        tokens: [5]struct {
+            name: []const u8,
+            id: []const u8,
+            class: []const u8,
+            // Typed integer decoding also accepts JSON strings and integral floats.
+            type: std.json.Value,
+        },
+    },
+};
 const Group = [5]*win.Element;
 
 fn validTokens(tokens: [5]Token) bool {
@@ -52,17 +64,27 @@ pub const Registry = struct {
     pub fn configure(self: *Registry, json: []const u8) !void {
         var candidate = std.heap.ArenaAllocator.init(self.allocator);
         errdefer candidate.deinit();
-        const value = try std.json.parseFromSliceLeaky(Snapshot, candidate.allocator(), json, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+        const arena = candidate.allocator();
+        const value = try std.json.parseFromSliceLeaky(Snapshot, arena, json, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
         if (value.version != 1) return error.InvalidRegistrationSnapshot;
+        const profiles = try arena.alloc(Registration, value.profiles.len);
         for (value.profiles, 0..) |profile, i| {
-            if (!validBrowser(profile.browser) or !validTokens(profile.tokens)) return error.InvalidRegistrationEntry;
+            if (!validBrowser(profile.browser)) return error.InvalidRegistrationEntry;
+            var tokens: [5]Token = undefined;
+            for (profile.tokens, &tokens) |raw, *token| {
+                if (raw.type != .integer) return error.InvalidRegistrationEntry;
+                const kind = std.math.cast(i32, raw.type.integer) orelse return error.InvalidRegistrationEntry;
+                token.* = .{ .name = raw.name, .id = raw.id, .class = raw.class, .type = kind };
+            }
+            if (!validTokens(tokens)) return error.InvalidRegistrationEntry;
             for (value.profiles[0..i]) |p| {
                 if (eq(u8, p.browser, profile.browser)) return error.DuplicateBrowser;
             }
+            profiles[i] = .{ .browser = profile.browser, .tokens = tokens };
         }
         self.deinit();
         self.arena = candidate;
-        self.profiles = value.profiles;
+        self.profiles = profiles;
     }
 
     pub fn registration(self: Registry, browser: []const u8) ?Registration {
@@ -505,4 +527,31 @@ test "a bad registration cannot replace live selectors and aliases cover all fiv
     const saved = registry.registration("brave").?;
     for (saved.tokens, 0..) |token, kind| try std.testing.expect(aliasMatches(token, kind));
     try std.testing.expect(registry.registration("Brave") == null);
+}
+
+test "registration requires a JSON integer control type and preserves empty class names" {
+    const allocator = std.testing.allocator;
+    const registration =
+        \\{"version":1,"profiles":[{"browser":"firefox","tokens":[
+        \\{"name":"Heart","id":"","class":"","type":50000,"extension":{"keep":true}},
+        \\{"name":"Smile","id":"","class":"","type":50000},
+        \\{"name":"Party","id":"","class":"","type":50000},
+        \\{"name":"Surprise","id":"","class":"","type":50000},
+        \\{"name":"100 points","id":"","class":"","type":50000}]}]}
+    ;
+    var registry: Registry = .{ .allocator = allocator };
+    defer registry.deinit();
+    try registry.configure(registration);
+
+    const changed = try std.mem.replaceOwned(u8, allocator, registration, "Heart", "Rejected");
+    defer allocator.free(changed);
+    for ([_][]const u8{ "\"50000\"", "50000.0", "5e4", "true", "null", "2147483648" }) |invalid_type| {
+        const payload = try std.mem.replaceOwned(u8, allocator, changed, "50000", invalid_type);
+        defer allocator.free(payload);
+        try std.testing.expectError(error.InvalidRegistrationEntry, registry.configure(payload));
+        const token = registry.registration("firefox").?.tokens[0];
+        try std.testing.expectEqualStrings("Heart", token.name);
+        try std.testing.expectEqualStrings("", token.class);
+        try std.testing.expectEqual(@as(i32, 50000), token.type);
+    }
 }

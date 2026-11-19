@@ -109,19 +109,25 @@ fn openSettings(path: []const u8, mode: Startup) !Settings {
     while (true) {
         var rejected: ?storage.RejectedClose = null;
         if (readSettingsReporting(path, &rejected)) |settings| return settings else |failure| {
+            const reason = settingsReadReason(failure);
             if (rejected) |report| {
-                var buffer: [300]u8 = undefined;
-                const details = std.fmt.bufPrint(&buffer, "設定を読み込めませんでした。原因: {s} (SQLite {d})\r\n接続の終了を確認できませんでした (SQLite {d})。", .{ @errorName(report.cause), report.sqlite_code, report.close_code }) catch unreachable;
+                var buffer: [512]u8 = undefined;
+                const details = std.fmt.bufPrint(&buffer, "{s}\r\n原因: {s} (SQLite {d})\r\n接続の終了を確認できませんでした (SQLite {d})。", .{ reason, @errorName(report.cause), report.sqlite_code, report.close_code }) catch unreachable;
                 std.debug.print("{s}\n", .{details});
                 if (mode != .smoke) messageBox(null, details, windows.wide("設定の読み込み失敗"), win.MB_ICONERROR);
                 // Returning terminates this startup. Do not move the DB or retry an uncertain handle.
                 return failure;
             }
             if (mode == .smoke) {
-                std.debug.print("設定の読み込み失敗: {s}\n", .{@errorName(failure)});
+                std.debug.print("設定の読み込み失敗: {s}\n{s}\n", .{ @errorName(failure), reason });
                 return failure;
             }
-            const choice = win.MessageBoxW(null, windows.wide("設定を読み込めませんでした。再試行で読み直し、無視で元の設定を退避して新規起動します。"), windows.wide("設定の復旧"), win.MB_ABORTRETRYIGNORE | win.MB_ICONERROR | win.MB_DEFBUTTON1);
+            var buffer: [640]u8 = undefined;
+            const details = std.fmt.bufPrint(&buffer, "{s}\r\n原因: {s}\r\n\r\n再試行で読み直し、無視で元の設定を退避して新規起動します。", .{ reason, @errorName(failure) }) catch unreachable;
+            var wide: [buffer.len + 1]u16 = undefined;
+            const len = std.unicode.utf8ToUtf16Le(&wide, details) catch unreachable;
+            wide[len] = 0;
+            const choice = win.MessageBoxW(null, wide[0..len :0].ptr, windows.wide("設定の復旧"), win.MB_ABORTRETRYIGNORE | win.MB_ICONERROR | win.MB_DEFBUTTON1);
             if (choice == win.IDRETRY) continue;
             if (choice != win.IDIGNORE) return failure;
             if (win.MessageBoxW(null, windows.wide("DBと付随ファイルを退避し、空の設定で起動しますか？"), windows.wide("初期化の確認"), win.MB_YESNO | win.MB_ICONWARNING | win.MB_DEFBUTTON2) != win.IDYES) continue;
@@ -144,6 +150,17 @@ fn openSettings(path: []const u8, mode: Startup) !Settings {
             }
         }
     }
+}
+
+fn settingsReadReason(cause: anyerror) []const u8 {
+    return switch (cause) {
+        error.UnsupportedDatabaseVersion => "未対応の設定形式です。対応するChatPaletteで開いてください。",
+        error.WrongApplication => "ChatPaletteの設定データベースではありません。",
+        error.InvalidPreferences => "共通設定が見つからないか、保存されている設定値が不正です。",
+        error.InvalidDatabase => "設定データベースの形式または保存されている値が不正です。",
+        error.DatabaseLocked => "設定データベースが使用中です。",
+        else => "設定を読み込めませんでした。",
+    };
 }
 
 fn backupFailureReason(cause: anyerror) []const u8 {
@@ -691,11 +708,21 @@ const App = struct {
         return true;
     }
 
+    fn openShortcuts(self: *App, parent: win.HWND) !void {
+        try support.shortcuts(parent, &self.snapshot, self, saveShortcutDraft, saveShortcutItemsDraft);
+    }
+
+    fn openShortcutsFromHelp(context: *anyopaque, help: win.HWND) void {
+        const self: *App = @ptrCast(@alignCast(context));
+        if (self.quitting) return;
+        self.openShortcuts(help) catch |failure| self.saveFailure(help, failure);
+    }
+
     fn runDialog(self: *App, command: win.BOOL) !void {
         const parent = self.dialogParent();
         switch (command) {
-            menu_keys => try support.shortcuts(parent, &self.snapshot, self, saveShortcutDraft, saveShortcutItemsDraft),
-            menu_help => try support.document(parent, "使い方", support.help, false),
+            menu_keys => try self.openShortcuts(parent),
+            menu_help => try support.helpDocument(parent, .{ .context = self, .open = openShortcutsFromHelp }),
             menu_reaction_result => {
                 self.reaction_progress.hide();
                 const result = self.reaction_result orelse return support.document(parent, "リアクションの実行結果", "まだ実行していません。", false);
@@ -1052,7 +1079,11 @@ const App = struct {
     }
 
     fn drain(self: *App) void {
-        if (self.worker.active or self.reaction != null or self.preparation != null or self.modal or self.quitting) return;
+        if (self.worker.active or self.reaction != null or self.preparation != null or self.quitting) return;
+        if (self.modal) {
+            if (!self.queue.active and self.queue.pending.items.len != 0) self.queue.cancel();
+            return;
+        }
         const command = self.queue.next() orelse return;
         const quick = command.event.action == .reaction;
         if (quick) {
@@ -1083,7 +1114,8 @@ const App = struct {
     }
 
     fn commandCurrent(self: *App, command: operations.Command) bool {
-        return self.shortcutAllowed(command.event.action) and self.foreground(command.event.window) and
+        return self.reaction == null and self.preparation == null and
+            self.shortcutAllowed(command.event.action) and self.foreground(command.event.window) and
             self.queue.accepts(command, command.event.window);
     }
 
@@ -2926,15 +2958,21 @@ test "saved library edits and imports report view failures and recover without r
         try testing.expectEqualStrings("保存済みです。管理画面を更新できませんでした。管理画面を開き直してください。", scope_notice);
         try testing.expect(app.manager.refreshFailed() and !app.manager.list_update_failed and !app.palette.refresh_failed);
         try testing.expect(win.IsWindowEnabled(app.manager.scope) == 0);
-        try testing.expect(win.IsWindowEnabled(duplicate) == 0);
+        try testing.expect(win.IsWindowEnabled(duplicate) != 0);
+        // A row button may retry the failed view, but the stale row cannot trigger another write.
+        _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, duplicate_id, @bitCast(@intFromPtr(duplicate)));
+        try testing.expect(app.manager.refreshFailed() and !app.manager.isEditing());
         try testing.expectEqual(@as(usize, 2), app.palette.count);
         var saved = try db.load(heap);
         defer saved.deinit();
         try testing.expectEqual(@as(usize, 2), saved.data.shared_items.len);
+        try testing.expectEqual(@as(usize, 1), app.history.length);
     }
-    app.manager.refresh();
+    _ = win.SendMessageW(app.manager.window, win.WM_COMMAND, duplicate_id, @bitCast(@intFromPtr(duplicate)));
     try testing.expect(!app.manager.refreshFailed() and win.IsWindowEnabled(app.manager.scope) != 0);
     try testing.expectEqual(@as(win.LRESULT, 1), win.SendMessageW(app.manager.scope, win.CB_GETCOUNT, 0, 0));
+    try testing.expectEqual(@as(win.LRESULT, -1), win.SendMessageW(app.manager.list, win.LVM_GETNEXTITEM, std.math.maxInt(usize), win.LVNI_SELECTED));
+    try testing.expectEqual(@as(usize, 1), app.history.length);
     try testing.expectEqual(@as(u64, 3), app.library_revision);
 
     const backup_path = try std.fs.path.join(heap, &.{ root, "before-import.json" });

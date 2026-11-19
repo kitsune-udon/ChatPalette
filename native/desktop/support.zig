@@ -12,6 +12,7 @@ const ok_id = 1;
 const cancel_id = 2;
 const reset_id = 3;
 const refresh_document_id = 4;
+const help_shortcuts_id = 5;
 const scope_id = 200;
 const first_slot_id = 201;
 const second_slot_id = 202;
@@ -41,6 +42,10 @@ const action_labels = [_][]const u8{
 /// caller can display its error using the still-open editor as the owner.
 pub const ShortcutSaver = *const fn (context: *anyopaque, dialog: win.HWND, keys: [storage.action_count][]const u8) bool;
 pub const ShortcutItemSaver = *const fn (context: *anyopaque, dialog: win.HWND, scope: []const u8, first: []const u8, second: []const u8) bool;
+pub const HelpShortcuts = struct {
+    context: *anyopaque,
+    open: *const fn (*anyopaque, win.HWND) void,
+};
 
 pub const DiagnosticSource = struct {
     context: *const anyopaque,
@@ -149,6 +154,8 @@ const Dialog = struct {
     diagnostic: ?DiagnosticDocument = null,
     refresh_document: win.HWND = null,
     document_status: win.HWND = null,
+    help_shortcuts: ?HelpShortcuts = null,
+    shortcut_button: win.HWND = null,
     instructions: win.HWND = null,
     reset: win.HWND = null,
     save: win.HWND = null,
@@ -193,6 +200,8 @@ const Dialog = struct {
             self.reset = try control(self.window, "BUTTON", "表示中の診断情報をコピー", reset_id, win.WS_TABSTOP);
             _ = win.EnableWindow(self.reset, 0);
         }
+        if (self.help_shortcuts != null)
+            self.shortcut_button = try control(self.window, "BUTTON", "ショートカットを管理…", help_shortcuts_id, win.WS_TABSTOP);
         self.cancel = try control(self.window, "BUTTON", "閉じる", cancel_id, win.WS_TABSTOP | win.BS_DEFPUSHBUTTON);
     }
 
@@ -217,6 +226,14 @@ const Dialog = struct {
         const snapshot = config.source.read(config.source.context);
         try self.paintDocument(try snapshot.format(&buffer, config.version));
         windows.setText(self.document_status, "");
+    }
+
+    fn openHelpShortcuts(self: *Dialog) void {
+        const routes = self.help_shortcuts orelse return;
+        if (self.finishing or self.close_requested) return;
+        self.finishing = true;
+        defer self.finishing = false;
+        routes.open(routes.context, self.window);
     }
 
     fn draft(self: *const Dialog) !ShortcutDraft {
@@ -448,6 +465,7 @@ const Dialog = struct {
                 self.place(self.document_status, 168, footer - refresh_height, width - 180, 34);
             }
             self.place(self.reset, 12, footer, 213, 30);
+            self.place(self.shortcut_button, 12, footer, 213, 30);
             self.place(self.cancel, width - 104, footer, 92, 30);
             return;
         }
@@ -633,6 +651,7 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
             },
             refresh_document_id => dialog.updateDiagnostic() catch
                 windows.setText(dialog.document_status, "診断情報を更新できませんでした。"),
+            help_shortcuts_id => if (notification == win.BN_CLICKED) dialog.openHelpShortcuts(),
             100...(100 + storage.action_count - 1) => if (notification == win.EN_CHANGE and !dialog.finishing) dialog.updateKeys(),
             scope_id => if (notification == win.CBN_SELCHANGE) dialog.changeScope(),
             first_slot_id, second_slot_id => if (notification == win.CBN_SELCHANGE and !dialog.finishing) dialog.updateItems(),
@@ -706,7 +725,15 @@ pub fn diagnosticDocument(parent: win.HWND, source: DiagnosticSource, version: [
     try dialog.run(parent);
 }
 
-pub const help =
+pub fn helpDocument(parent: win.HWND, shortcut_route: HelpShortcuts) !void {
+    var dialog: Dialog = .{ .help_shortcuts = shortcut_route };
+    defer dialog.close();
+    try dialog.openDocument(parent, "使い方", false);
+    try dialog.paintDocument(help);
+    try dialog.run(parent);
+}
+
+const help =
     "弾幕を使う\r\nYouTubeのチャット・コメント欄を選んでパレットを開き、弾幕を選びます。弾幕は入力のみです。\r\n\r\n" ++
     "弾幕と配信者の管理\r\n「弾幕を追加・編集」から登録、並べ替え、配信者連携、キー割当を行います。\r\n\r\n" ++
     "リアクション\r\n管理・ヘルプから5種類のボタンを登録し、「送らずに確認」を実行します。開始後の停止には停止キーか停止ボタンを使います。\r\n\r\n" ++

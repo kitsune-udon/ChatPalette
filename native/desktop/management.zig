@@ -186,6 +186,7 @@ pub const Management = struct {
     scope_update_failed: bool = false,
     refreshing: bool = false,
     refresh_pending: bool = false,
+    publishing_change: bool = false,
     viewport: Viewport = .{},
     opening_editor: bool = false,
     saving_editor: bool = false,
@@ -282,7 +283,7 @@ pub const Management = struct {
     }
 
     pub fn isEditing(self: *const Management) bool {
-        return self.dialog.window != null or self.opening_editor or self.confirming;
+        return self.dialog.window != null or self.opening_editor or self.confirming or self.saving_editor;
     }
 
     pub fn filterMessage(self: *Management, message: *win.MSG) bool {
@@ -431,6 +432,10 @@ pub const Management = struct {
         if (replacement != null) {
             if (previous) |content| content.release();
         }
+        self.paintSelection(rows);
+    }
+
+    fn paintSelection(self: *Management, rows: []const storage.Item) void {
         var state = std.mem.zeroes(win.LVITEMW);
         state.stateMask = win.LVIS_SELECTED | win.LVIS_FOCUSED;
         _ = win.SendMessageW(self.list, win.LVM_SETITEMSTATE, std.math.maxInt(usize), pointerParam(&state));
@@ -451,14 +456,25 @@ pub const Management = struct {
         _ = win.SendMessageW(self.list, win.LVM_ENSUREVISIBLE, index, 0);
     }
 
+    fn reconcileSelection(self: *Management) void {
+        if (self.refreshFailed()) return;
+        const display = (self.published_list orelse return).retain();
+        defer display.release();
+        const selected = self.selectedIndex();
+        if (self.published_list != display or self.refreshFailed()) return;
+        const displayed = if (selected) |index| display.rows[index].id else "";
+        if (!std.mem.eql(u8, self.selection orelse "", displayed)) self.paintSelection(display.rows);
+    }
+
     pub fn updateActions(self: *Management) void {
         if (self.list == null or self.refreshing) return;
-        const permission = self.editAllowed() and !self.isEditing() and !self.refreshFailed();
+        const permission = self.editAllowed() and !self.isEditing();
+        const ready = permission and !self.refreshFailed();
         const selected = self.selectedIndex();
         const count = self.items().len;
         for (buttons, self.item_buttons) |button, hwnd| {
             const enabled = permission and switch (button.id) {
-                .add => true,
+                .add => ready,
                 .up => selected != null and selected.? > 0,
                 .down => selected != null and selected.? + 1 < count,
                 .move => selected != null and (self.editingId().len != 0 or self.snapshot.data.profiles.len != 0),
@@ -466,9 +482,9 @@ pub const Management = struct {
             };
             _ = win.EnableWindow(hwnd, @intFromBool(enabled));
         }
-        _ = win.EnableWindow(self.undo_button, @intFromBool(permission and self.history.length != 0));
-        _ = win.EnableWindow(self.profile_add, @intFromBool(permission));
-        _ = win.EnableWindow(self.profile_menu, @intFromBool(permission));
+        _ = win.EnableWindow(self.undo_button, @intFromBool(ready and self.history.length != 0));
+        _ = win.EnableWindow(self.profile_add, @intFromBool(ready));
+        _ = win.EnableWindow(self.profile_menu, @intFromBool(ready));
     }
 
     fn selectScope(self: *Management) !void {
@@ -503,9 +519,30 @@ pub const Management = struct {
 
     fn changedWithNotice(self: *Management, new_selection: ?[]const u8, success: []const u8) void {
         setIdentity(&self.selection, new_selection orelse "") catch {};
+        self.publishChange(success);
+    }
+
+    fn publishChange(self: *Management, success: []const u8) void {
+        self.publishing_change = true;
+        defer self.publishing_change = false;
         self.refresh();
         const palette_failed = win.SendMessageW(self.host, wm_changed, 0, 0) != 0;
         windows.setText(self.notice, savedViewWarning(self.refreshFailed(), palette_failed) orelse success);
+        // A synchronous callback can change the control even when its notification is ignored.
+        self.reconcileSelection();
+    }
+
+    fn recoverSelection(self: *Management) void {
+        self.publishing_change = true;
+        defer self.publishing_change = false;
+        setIdentity(&self.selection, "") catch unreachable;
+        self.refresh();
+        if (!self.refreshFailed()) windows.setText(self.notice, "一覧を更新しました。対象を選び直してください。");
+        self.reconcileSelection();
+    }
+
+    fn restoreEditing(self: *Management, scope: []const u8) void {
+        if (!std.mem.eql(u8, self.editingId(), scope)) setIdentity(&self.editing, scope) catch {};
     }
 
     fn showError(self: Management, err: anyerror) void {
@@ -544,6 +581,7 @@ pub const Management = struct {
     }
 
     fn command(self: *Management, id: u16, notification: u16) !void {
+        if (self.refreshing or self.publishing_change or self.saving_editor) return;
         if (id == @intFromEnum(Id.scope) and notification == win.CBN_SELCHANGE) {
             if (!self.isEditing() and self.editAllowed() and !self.scope_update_failed) {
                 self.selectScope() catch |failure| {
@@ -566,25 +604,38 @@ pub const Management = struct {
             if (!self.raiseEditor()) _ = win.SendMessageW(self.host, wm_support, 0, 0);
             return;
         }
-        if (self.opening_editor or self.confirming or self.raiseEditor() or !self.editAllowed() or self.refreshFailed() or self.refreshing) return;
+        if (self.opening_editor or self.confirming or self.raiseEditor() or !self.editAllowed()) return;
+        const row_command = id >= @intFromEnum(Id.edit) and id <= @intFromEnum(Id.assignment);
+        if (self.refreshFailed()) {
+            if (row_command) self.recoverSelection();
+            return;
+        }
+        const display = if (self.published_list) |view| view.retain() else null;
+        defer if (display) |view| view.release();
         const selected = self.selectedIndex();
-        const row: ?storage.Item = if (selected) |i| self.items()[i] else null;
-        if (id >= @intFromEnum(Id.add) and id <= @intFromEnum(Id.assignment))
+        if (row_command) {
+            if (self.refreshFailed()) return self.recoverSelection();
+            if (self.published_list != display) return;
+        }
+        const row = if (display) |view| if (selected) |i| view.rows[i] else null else null;
+        const scope = if (display) |view| view.scope_id else "";
+        if (row_command) {
+            _ = try self.snapshot.data.itemsFor(scope);
+        } else if (id == @intFromEnum(Id.add)) {
             _ = try self.snapshot.data.itemsFor(self.editingId());
+        }
         switch (id) {
             @intFromEnum(Id.add) => try self.openDialog(.add_item, null),
-            @intFromEnum(Id.edit) => if (row) |item| try self.openDialog(.edit_item, item),
-            @intFromEnum(Id.move) => if (row) |item| try self.openDialog(.move_item, item),
-            @intFromEnum(Id.duplicate) => if (row) |item| try self.runItemCommand(.{ .duplicate = item.id }),
-            @intFromEnum(Id.up) => if (row) |item| try self.runItemCommand(.{ .up = item.id }),
-            @intFromEnum(Id.down) => if (row) |item| try self.runItemCommand(.{ .down = item.id }),
+            @intFromEnum(Id.edit) => if (row) |item| try self.openDialogAt(.edit_item, item, scope),
+            @intFromEnum(Id.move) => if (row) |item| try self.openDialogAt(.move_item, item, scope),
+            @intFromEnum(Id.duplicate) => if (row) |item| try self.runItemCommand(scope, .{ .duplicate = item.id }),
+            @intFromEnum(Id.up) => if (row) |item| try self.runItemCommand(scope, .{ .up = item.id }),
+            @intFromEnum(Id.down) => if (row) |item| try self.runItemCommand(scope, .{ .down = item.id }),
             @intFromEnum(Id.delete) => if (row) |item| {
-                const id_copy = try allocator.dupe(u8, item.id);
-                defer allocator.free(id_copy);
                 if (self.confirm(self.window, "選んだ弾幕を削除します。元に戻すことができます。", "弾幕を削除") and self.editAllowed())
-                    try self.runItemCommand(.{ .delete = id_copy });
+                    try self.runItemCommand(scope, .{ .delete = item.id });
             },
-            @intFromEnum(Id.assignment) => if (row) |item| try self.assignmentMenu(item),
+            @intFromEnum(Id.assignment) => if (row) |item| try self.assignmentMenu(scope, item.id),
             @intFromEnum(Id.add_profile) => try self.openDialog(.add_profile, null),
             @intFromEnum(Id.profile_menu) => try self.profileMenu(),
             @intFromEnum(Id.undo) => {
@@ -596,9 +647,10 @@ pub const Management = struct {
         }
     }
 
-    fn runItemCommand(self: *Management, value: storage.ItemCommand) !void {
-        const selected = try self.history.item(self.db, self.snapshot, self.editingId(), value);
+    fn runItemCommand(self: *Management, scope: []const u8, value: storage.ItemCommand) !void {
+        const selected = try self.history.item(self.db, self.snapshot, scope, value);
         if (selected == null and (value == .up or value == .down)) return;
+        self.restoreEditing(scope);
         self.changedWithNotice(selected, if (value == .delete) "削除しました。" else "保存しました。");
     }
 
@@ -629,9 +681,7 @@ pub const Management = struct {
         self.openDialogAt(.link_profile, null, "") catch |failure| self.showError(failure);
     }
 
-    fn assignmentMenu(self: *Management, item: storage.Item) !void {
-        const selected = try allocator.dupe(u8, item.id);
-        defer allocator.free(selected);
+    fn assignmentMenu(self: *Management, scope: []const u8, selected: []const u8) !void {
         const menu = win.CreatePopupMenu() orelse return error.ManagementMenu;
         defer _ = win.DestroyMenu(menu);
         _ = win.AppendMenuW(menu, win.MF_STRING, 1, wide("弾幕キー 1 に割当"));
@@ -640,11 +690,20 @@ pub const Management = struct {
         const choice = popup(self.window, self.item_buttons[7], menu);
         if (choice == 0 or !self.editAllowed()) return;
         var ids: [2][]const u8 = .{ "", "" };
-        for (self.items()) |row| {
-            if (row.slot != 0 and !std.mem.eql(u8, row.id, selected)) ids[row.slot - 1] = row.id;
+        var found = false;
+        for (try self.snapshot.data.itemsFor(scope)) |row| {
+            if (std.mem.eql(u8, row.id, selected)) {
+                found = true;
+            } else if (row.slot != 0) {
+                ids[row.slot - 1] = row.id;
+            }
         }
+        if (!found) return error.ItemMissing;
         if (choice <= 2) ids[choice - 1] = selected;
-        if (try self.history.assign(self.db, self.snapshot, self.editingId(), ids[0], ids[1])) self.changed(selected);
+        if (try self.history.assign(self.db, self.snapshot, scope, ids[0], ids[1])) {
+            self.restoreEditing(scope);
+            self.changed(selected);
+        }
     }
 
     fn resolveChannel(self: Management, on: std.mem.Allocator) !ChannelRequest {
@@ -953,7 +1012,7 @@ pub const Management = struct {
         self.saving_editor = true;
         defer {
             self.saving_editor = false;
-            if (mode == .link_profile) self.updateActions();
+            self.updateActions();
         }
         const request_window = self.dialog.window;
         const request_generation = self.editor_generation;
@@ -976,6 +1035,8 @@ pub const Management = struct {
             .move_item => {
                 const destination = try scopeAt(self.snapshot.data, selected orelse return error.ProfileMissing);
                 _ = try self.history.item(self.db, self.snapshot, self.dialog.origin, .{ .move = .{ .id = self.dialog.id, .destination = destination } });
+                const remaining = self.snapshot.data.itemsFor(self.dialog.origin) catch &.{};
+                if (remaining.len != 0) item_selection = remaining[0].id;
             },
             .add_profile, .rename_profile => {
                 const value: storage.ProfileCommand = if (mode == .add_profile)
@@ -1004,11 +1065,19 @@ pub const Management = struct {
                 else
                     .{ .bind = .{ .id = target, .channel = channel } };
                 const id = try self.history.profile(self.db, self.snapshot, value);
-                if (id) |profile_id| setIdentity(&self.editing, profile_id) catch {};
+                if (id) |profile_id| {
+                    if (std.mem.eql(u8, self.editingId(), profile_id)) item_selection = self.selection;
+                    self.restoreEditing(profile_id);
+                }
             },
         }
+        switch (mode) {
+            .add_item, .edit_item, .move_item => self.restoreEditing(self.dialog.origin),
+            else => {},
+        }
+        setIdentity(&self.selection, item_selection orelse "") catch {};
         self.closeDialog();
-        self.changed(item_selection);
+        self.publishChange("保存しました。");
     }
 
     fn resize(self: *Management) void {
@@ -1059,7 +1128,7 @@ pub const Management = struct {
             -177 => self.provideText(@ptrCast(@constCast(header))), // LVN_GETDISPINFOW
             -179 => return self.findName(@ptrCast(header)), // LVN_ODFINDITEMW
             -101 => { // LVN_ITEMCHANGED
-                if (!self.refreshing) {
+                if (!self.refreshing and !self.saving_editor and !self.publishing_change) {
                     const selection = self.selectedIndex();
                     const id = if (selection) |index| self.items()[index].id else "";
                     setIdentity(&self.selection, id) catch {};
