@@ -107,6 +107,7 @@ const Dialog = struct {
     window: win.HWND = null,
     disabled_parent: win.HWND = null,
     original_focus: win.HWND = null,
+    close_requested: bool = false,
     dpi: windows.Dpi = .{},
     font: windows.GuiFont = .{},
     labels: [storage.action_count]win.HWND = @splat(null),
@@ -197,6 +198,7 @@ const Dialog = struct {
             if ((self.itemsDirty() or !sameKeys(editor.baseline.keys, pending.keys)) and
                 !self.askDiscard("未保存の変更を破棄して閉じますか？")) return;
         }
+        self.close_requested = true;
         self.releaseParent();
         _ = win.ShowWindow(self.window, win.SW_HIDE);
     }
@@ -424,6 +426,8 @@ const Dialog = struct {
         }
         defer self.releaseParent();
         _ = win.ShowWindow(self.window, win.SW_SHOW);
+        if (self.close_requested) return;
+        if (win.IsWindowVisible(self.window) == 0) return error.ShowSupportWindow;
         _ = win.SetForegroundWindow(self.window);
         _ = win.SetFocus(if (self.document != null) self.document else self.edits[0]);
         var message: win.MSG = undefined;

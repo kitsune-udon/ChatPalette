@@ -15,6 +15,7 @@ pub const Preferences = model.Preferences;
 pub const Profile = model.Profile;
 pub const Registration = model.Registration;
 pub const Snapshot = model.Snapshot;
+pub const RejectedClose = sqlite.RejectedClose;
 pub const action_count = model.action_count;
 pub const default_shortcut_keys = model.default_shortcut_keys;
 pub const validatePreferences = model.validatePreferences;
@@ -54,9 +55,13 @@ pub const Store = struct {
 
     /// The caller creates the parent directory and handles any explicit recovery prompt.
     pub fn open(allocator: Allocator, path: []const u8) !Store {
+        return openReporting(allocator, path, null);
+    }
+
+    pub fn openReporting(allocator: Allocator, path: []const u8, rejected: ?*?RejectedClose) !Store {
         try checkSize(path, true);
-        var db = try sqlite.Connection.open(allocator, path, .read_write);
-        errdefer db.close();
+        var db = try sqlite.Connection.openReporting(allocator, path, .read_write, rejected);
+        errdefer |cause| db.finish(cause, rejected);
         try db.preserveWalOnClose();
         try verifyFormat(&db);
         const owned_path = try allocator.dupe(u8, path);
@@ -64,8 +69,12 @@ pub const Store = struct {
     }
 
     pub fn close(self: *Store) void {
+        self.finish(null, null);
+    }
+
+    pub fn finish(self: *Store, cause: ?anyerror, rejected: ?*?RejectedClose) void {
         self.discardLibraryCache();
-        self.db.close();
+        self.db.finish(cause, rejected);
         self.allocator.free(self.path);
         self.* = undefined;
     }

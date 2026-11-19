@@ -29,6 +29,16 @@ pub const OpenMode = enum(c_int) { read_only = 1, read_write = 2, create = 6 };
 
 pub const Value = union(enum) { text: []const u8, int: i64 };
 
+/// The close result did not confirm whether the handle is still live.
+/// Pin the DLL and keep the identity for diagnosis. Never retry or query this handle implicitly.
+pub const RejectedClose = struct {
+    cause: anyerror,
+    sqlite_code: c_int,
+    close_code: c_int,
+    module: std.DynLib,
+    handle: *Database,
+};
+
 pub const Connection = struct {
     dll: std.DynLib,
     handle: *Database,
@@ -40,6 +50,10 @@ pub const Connection = struct {
     recovery_close_code: ?c_int = null,
 
     pub fn open(allocator: std.mem.Allocator, path: []const u8, mode: OpenMode) !Connection {
+        return openReporting(allocator, path, mode, null);
+    }
+
+    pub fn openReporting(allocator: std.mem.Allocator, path: []const u8, mode: OpenMode, rejected: ?*?RejectedClose) !Connection {
         if (std.mem.indexOfScalar(u8, path, 0) != null or !std.unicode.utf8ValidateSlice(path))
             return error.InvalidPath;
         const path_z = try allocator.dupeZ(u8, path);
@@ -49,27 +63,44 @@ pub const Connection = struct {
             std.unicode.utf8ToUtf16LeStringLiteral("winsqlite3.dll"),
             .load_library_search_system32,
         ) };
-        errdefer dll.close();
+        var owns_module = true;
+        errdefer if (owns_module) dll.close();
         var api: Api = undefined;
         inline for (std.meta.fields(Api)) |field| {
             @field(api, field.name) = dll.lookup(field.type, field.name) orelse return error.IncompatibleSqlite;
         }
         var handle: ?*Database = null;
         const code = api.sqlite3_open_v2(path_z, &handle, @intFromEnum(mode), null);
-        errdefer if (handle) |opened| {
-            _ = api.sqlite3_close_v2(opened);
+        const opened = handle orelse {
+            try checkCode(code);
+            return error.SqliteFailure;
         };
-        try checkCode(code);
-        var connection = Connection{ .dll = dll, .api = api, .handle = handle orelse return error.SqliteFailure };
+        var connection = Connection{ .dll = dll, .api = api, .handle = opened };
+        owns_module = false;
+        errdefer |cause| connection.finish(cause, rejected);
+        try connection.check(code);
         try connection.exec("PRAGMA busy_timeout=100");
         return connection;
     }
 
     pub fn close(self: *Connection) void {
+        self.finish(null, null);
+    }
+
+    pub fn finish(self: *Connection, cause: ?anyerror, rejected: ?*?RejectedClose) void {
         // Every prepared statement is finalized before this call.
         if (!self.closed) {
             const code = self.api.sqlite3_close_v2(self.handle);
-            std.debug.assert(code == 0);
+            if (code != 0) {
+                const primary = cause orelse error.CloseDatabaseFailed;
+                if (rejected) |slot| {
+                    std.debug.assert(slot.* == null);
+                    slot.* = .{ .cause = primary, .sqlite_code = self.last_code, .close_code = code, .module = self.dll, .handle = self.handle };
+                    self.* = undefined;
+                    return;
+                }
+                std.debug.panic("SQLite {s} (code {d}), close failed ({d})", .{ @errorName(primary), self.last_code, code });
+            }
         }
         self.dll.close();
         self.* = undefined;

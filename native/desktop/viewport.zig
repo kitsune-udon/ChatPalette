@@ -46,8 +46,10 @@ pub const Viewport = struct {
     updating: bool = false,
     repaint: bool = false,
     follow_focus: bool = false,
+    pending_scroll: ?Position = null,
     posted: bool = false,
     scroll_revision: u64 = 0,
+    const Position = struct { x: i32, y: i32 };
 
     pub fn arrange(self: *Viewport, window: win.HWND, owner: anytype, comptime draw: fn (@TypeOf(owner)) void) void {
         if (self.owner != window) self.* = .{ .owner = window };
@@ -58,6 +60,11 @@ pub const Viewport = struct {
         self.updating = true;
         for (0..2) |_| {
             self.repaint = false;
+            if (self.pending_scroll) |position| {
+                self.x = position.x;
+                self.y = position.y;
+                self.pending_scroll = null;
+            }
             var before: win.RECT = undefined;
             const measured = win.GetWindowRect(window, &before) != 0;
             draw(owner);
@@ -86,10 +93,21 @@ pub const Viewport = struct {
         return self.repaint;
     }
 
-    fn acceptScroll(self: *Viewport, changed: bool) bool {
+    fn acceptScroll(self: *Viewport, destination: Position, changed: bool) bool {
         self.scroll_revision +%= 1;
         self.follow_focus = false;
+        if (self.updating) {
+            if (changed) self.pending_scroll = destination;
+        } else {
+            self.pending_scroll = null;
+            self.x = destination.x;
+            self.y = destination.y;
+        }
         return changed;
+    }
+
+    fn scrollPosition(self: Viewport) Position {
+        return self.pending_scroll orelse .{ .x = self.x, .y = self.y };
     }
 
     pub const Size = struct { width: i32, height: i32 };
@@ -120,7 +138,8 @@ pub const Viewport = struct {
 
     pub fn scroll(self: *Viewport, window: win.HWND, bar: c_int, wparam: win.WPARAM, dpi: windows.Dpi) bool {
         const info = scrollInfo(window, bar) orelse return false;
-        const offset = if (bar == win.SB_HORZ) &self.x else &self.y;
+        var destination = self.scrollPosition();
+        const offset = if (bar == win.SB_HORZ) &destination.x else &destination.y;
         const page: i32 = @intCast(info.nPage);
         const line = dpi.pixels(24);
         const next = switch (windows.low(wparam)) {
@@ -134,19 +153,23 @@ pub const Viewport = struct {
             win.SB_THUMBPOSITION => if (info.nMax <= std.math.maxInt(u16)) @as(i32, windows.high(wparam)) else offset.*,
             else => return false,
         };
-        return self.acceptScroll(moveOffset(offset, info, next));
+        const changed = moveOffset(offset, info, next);
+        return self.acceptScroll(destination, changed);
     }
 
     pub fn wheel(self: *Viewport, window: win.HWND, wparam: win.WPARAM) bool {
         const info = scrollInfo(window, win.SB_VERT) orelse return false;
         // Match the legacy viewport: one wheel notch is 96 client pixels.
         const delta: i16 = @bitCast(windows.high(wparam));
-        return self.acceptScroll(moveOffset(&self.y, info, self.y - win.MulDiv(delta, 96, win.WHEEL_DELTA)));
+        var destination = self.scrollPosition();
+        const changed = moveOffset(&destination.y, info, destination.y - win.MulDiv(delta, 96, win.WHEEL_DELTA));
+        return self.acceptScroll(destination, changed);
     }
 
     pub fn revealFocus(self: *Viewport, window: win.HWND) bool {
         if (self.owner != window or window == null) return false;
         if (self.updating or self.repaint) {
+            self.pending_scroll = null;
             self.follow_focus = true;
             return false;
         }

@@ -547,7 +547,10 @@ pub const Worker = struct {
 
     fn reactionPageCurrent(self: *Worker, window: *uia.Window, page: ?*win.Element, reply: *Reply) !bool {
         if (page) |doc| {
-            if (!try self.client.documentIsActive(window, doc)) {
+            if (!requireForeground(window, reply)) return false;
+            const active = try self.client.documentIsActive(window, doc);
+            if (!requireForeground(window, reply)) return false;
+            if (!active) {
                 reply.state = "changed";
                 return false;
             }

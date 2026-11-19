@@ -708,17 +708,24 @@ pub const Management = struct {
         dialog.window = win.CreateWindowExW(ex_style, editor_class, title, styles, win.CW_USEDEFAULT, win.CW_USEDEFAULT, self.dpi.pixels(500), self.dpi.pixels(height), dialog.parent, null, win.GetModuleHandleW(null), self) orelse return error.CreateEditorWindow;
         self.dialog = dialog;
         self.editor_generation +%= 1;
+        const generation = self.editor_generation;
+        const editor_window = dialog.window;
         // The local arena no longer owns the content after publishing the editor.
         dialog.arena = std.heap.ArenaAllocator.init(allocator);
-        errdefer self.closeDialog();
+        errdefer if (self.editor_generation == generation and self.dialog.window == editor_window) self.closeDialog();
         try self.editorControls();
         self.font.applyChildren(self.dialog.window);
         windows.fitWindow(self.dialog.window, self.dialog.parent);
         self.resizeEditor();
+        if (self.editor_generation != generation or self.dialog.window != editor_window) return;
         self.dialog.parent_was_enabled = win.IsWindowEnabled(self.dialog.parent) != 0;
         if (self.dialog.parent_was_enabled) _ = win.EnableWindow(self.dialog.parent, 0);
-        _ = win.ShowWindow(self.dialog.window, win.SW_SHOWNORMAL);
-        _ = win.SetForegroundWindow(self.dialog.window);
+        if (self.editor_generation != generation or self.dialog.window != editor_window) return;
+        _ = win.ShowWindow(editor_window, win.SW_SHOWNORMAL);
+        if (self.editor_generation != generation or self.dialog.window != editor_window) return;
+        if (win.IsWindowVisible(editor_window) == 0) return error.ShowEditorWindow;
+        _ = win.SetForegroundWindow(editor_window);
+        if (self.editor_generation != generation or self.dialog.window != editor_window) return;
         _ = win.SetFocus(switch (mode) {
             .move_item, .link_profile => self.dialog.choice,
             else => self.dialog.name,
@@ -923,13 +930,15 @@ pub const Management = struct {
 
     fn closeDialog(self: *Management) void {
         const editor = self.dialog.window orelse return;
-        const was_foreground = win.GetForegroundWindow() == editor;
-        const parent = self.dialog.parent;
-        if (self.dialog.parent_was_enabled and win.IsWindow(parent) != 0) _ = win.EnableWindow(parent, 1);
-        self.dialog.window = null;
-        _ = win.DestroyWindow(editor);
-        self.dialog.arena.deinit();
+        var closing = self.dialog;
+        const generation = self.editor_generation;
         self.dialog = .{};
+        defer closing.arena.deinit();
+        const was_foreground = win.GetForegroundWindow() == editor;
+        const parent = closing.parent;
+        if (closing.parent_was_enabled and win.IsWindow(parent) != 0) _ = win.EnableWindow(parent, 1);
+        _ = win.DestroyWindow(editor);
+        if (self.editor_generation != generation or self.dialog.window != null) return;
         if (was_foreground and parent == self.window and win.IsWindowVisible(parent) != 0 and win.IsWindowEnabled(parent) != 0) {
             _ = win.SetForegroundWindow(parent);
             _ = win.SetFocus(self.list);
@@ -1250,6 +1259,7 @@ fn viewProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: 
 
 fn editorProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
     const self = dataFromWindow(hwnd, message, lparam) orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
+    if (self.dialog.window != hwnd) return win.DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
         win.WM_SIZE => if (!self.dialog.viewport.updating and wparam != win.SIZE_MINIMIZED) {
             const revision = self.dialog.viewport.scroll_revision;

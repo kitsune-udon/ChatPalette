@@ -107,7 +107,16 @@ const Settings = struct { db: storage.Store, snapshot: storage.Snapshot };
 
 fn openSettings(path: []const u8, mode: Startup) !Settings {
     while (true) {
-        if (readSettings(path)) |settings| return settings else |failure| {
+        var rejected: ?storage.RejectedClose = null;
+        if (readSettingsReporting(path, &rejected)) |settings| return settings else |failure| {
+            if (rejected) |report| {
+                var buffer: [300]u8 = undefined;
+                const details = std.fmt.bufPrint(&buffer, "設定を読み込めませんでした。原因: {s} (SQLite {d})\r\n接続の終了を確認できませんでした (SQLite {d})。", .{ @errorName(report.cause), report.sqlite_code, report.close_code }) catch unreachable;
+                std.debug.print("{s}\n", .{details});
+                if (mode != .smoke) messageBox(null, details, windows.wide("設定の読み込み失敗"), win.MB_ICONERROR);
+                // Returning terminates this startup. Do not move the DB or retry an uncertain handle.
+                return failure;
+            }
             if (mode == .smoke) {
                 std.debug.print("設定の読み込み失敗: {s}\n", .{@errorName(failure)});
                 return failure;
@@ -153,8 +162,12 @@ fn reportBackupFailure(source: []const u8, cause: anyerror) void {
 }
 
 fn readSettings(path: []const u8) !Settings {
-    var db = try storage.Store.open(allocator, path);
-    errdefer db.close();
+    return readSettingsReporting(path, null);
+}
+
+fn readSettingsReporting(path: []const u8, rejected: ?*?storage.RejectedClose) !Settings {
+    var db = try storage.Store.openReporting(allocator, path, rejected);
+    errdefer |cause| db.finish(cause, rejected);
     const snapshot = try db.load(allocator);
     return .{ .db = db, .snapshot = snapshot };
 }
@@ -1332,6 +1345,7 @@ const App = struct {
     }
 
     fn deliverPaletteItem(self: *App, index: usize, owner: PaletteContext) !void {
+        if (self.modal or self.manager.isEditing()) return;
         if (self.quitting or self.queue.active or self.worker.active or self.reaction != null or index >= self.palette.count) return;
         const target = owner.target;
         if (input.browser(target) == null) return self.report("unavailable");
@@ -1364,6 +1378,7 @@ const App = struct {
         }
         const checked = try self.requestOnPage(.verify_input, hwnd, &video, &page_token, &.{});
         defer checked.deinit();
+        if (self.modal or self.manager.isEditing()) return;
         if (!self.foreground(hwnd) or !self.paletteContextCurrent(owner)) return error.TargetChanged;
         if (!checked.is("ok") or !std.mem.eql(u8, checked.field("Video"), &video)) {
             self.report(checked.field("State"));
