@@ -671,7 +671,11 @@ const App = struct {
                     self.keyboard.tracker.replace(bindings);
                 self.libraryChanged();
             },
-            .automatic_profile => self.palette.detected_profile = true,
+            .automatic_profile => {
+                // The palette borrows the preferences even while row publication is deferred.
+                self.palette.data.preferences = next;
+                self.palette.detected_profile = true;
+            },
         }
         previous.deinit();
     }
@@ -3553,6 +3557,7 @@ test "automatic profile selection persists the match before exposing its input a
     try testing.expectEqualStrings("profile-b", selection.id);
     try testing.expectEqualStrings("body B", selection.items[0].text);
     try testing.expectEqual(displayed, app.palette.items_revision);
+    try testing.expectEqualStrings("profile-b", app.palette.data.preferences.input_profile_id);
     app.refreshPalette();
     try testing.expectEqual(displayed + 1, app.palette.items_revision);
     try testing.expectEqualStrings(selection.id, app.palette.visibleProfileId());
