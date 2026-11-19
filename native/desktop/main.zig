@@ -211,15 +211,19 @@ const App = struct {
     queue: operations.Queue = .{},
     worker: transport.Client = .{},
     input_cancellation: ?struct { target: usize, signal: keyboard.Cancellation } = null,
+    starting_reaction: ?operations.Command = null,
     reaction: ?operations.Reaction = null,
     reaction_clock: ?std.time.Timer = null,
     preparation: ?Preparation = null,
     reaction_generation: u64 = 0,
+    // New attempts and results can take ownership without changing the timer generation.
+    reaction_revision: u64 = 0,
     reaction_timer: ?ReactionTimer = null,
     next_reaction_timer_id: win.UINT_PTR = first_reaction_timer_id,
     reaction_progress: feedback.Overlay = .{},
     pending_reaction_progress: ?ReactionProgressUpdate = null,
     rendering_reaction_progress: bool = false,
+    updating_reaction_buttons: bool = false,
     status_tip: StatusTip = .{},
     reaction_result: ?feedback.Result = null,
     reaction_hide_at: ?u64 = null,
@@ -262,7 +266,7 @@ const App = struct {
         try self.palette.open(self.window);
         self.palette.refresh(self.snapshot.data);
         self.palette.resetReaction(self.snapshot.data.preferences);
-        self.palette.reactionButtons(false);
+        self.updateReactionButtons();
         try self.keyboard.install(try shortcuts.validate(self.snapshot.data.preferences.shortcut_keys));
         self.installTray();
     }
@@ -745,10 +749,21 @@ const App = struct {
             if (pending.generation != self.reaction_generation) return .stopping;
             return if (!self.worker.active and now < pending.due) .waiting else .running;
         }
-        for (self.queue.pending.items) |command| {
-            if (command.event.action == .reaction) return .queued;
-        }
+        if (self.quickReactionStarting()) return .running;
+        if (self.reactionQueued()) return .queued;
         return if (self.reaction_result != null) .finished else .idle;
+    }
+
+    fn quickReactionStarting(self: *const App) bool {
+        const command = self.starting_reaction orelse return false;
+        return self.queue.active and command.generation == self.queue.generation;
+    }
+
+    fn reactionQueued(self: *const App) bool {
+        for (self.queue.pending.items) |command| {
+            if (command.event.action == .reaction) return true;
+        }
+        return false;
     }
 
     fn quit(self: *App, restarting: bool) void {
@@ -780,6 +795,8 @@ const App = struct {
     }
 
     fn stop(self: *App) void {
+        const stop_quick_start = self.preparation == null and self.reaction == null and
+            (self.quickReactionStarting() or self.reactionQueued());
         if (self.input_cancellation) |pending| pending.signal.cancel();
         self.queue.cancel();
         self.reaction_generation +%= 1;
@@ -787,12 +804,18 @@ const App = struct {
             if (pending.committed) {
                 if (!self.quitting) self.updateReactionProgress("登録は保存済みです。ワーカーへの反映を確認しています。", .stopping);
             } else self.finishPreparation(.stopped, "");
+            return;
         }
         if (self.reaction) |*job| {
             job.stop();
             if (job.active_request) {
                 if (!self.quitting) self.showReactionCounts("停止を受け付けました。", job.*, .stopping);
             } else self.finishReaction(.stopped, "");
+            return;
+        }
+        if (stop_quick_start) {
+            _ = self.failReactionStart(.stopped, "");
+            self.updateReactionButtons();
         }
     }
 
@@ -944,10 +967,12 @@ const App = struct {
     fn drain(self: *App) void {
         if (self.worker.active or self.reaction != null or self.preparation != null or self.modal or self.quitting) return;
         const command = self.queue.next() orelse return;
+        if (command.event.action == .reaction) self.starting_reaction = command;
         const success = self.execute(command) catch |failure| result: {
             if (command.event.action == .reaction) {
                 var detail: [256]u8 = undefined;
-                if (self.queue.accepts(command, command.event.window)) self.publishReactionResult(.unavailable, null, self.workerFailureDetail(failure, &detail));
+                if (!self.quitting and self.quickReactionStarting())
+                    _ = self.failReactionStart(self.workerFailureReason(failure), self.workerFailureDetail(failure, &detail));
             } else {
                 const page_recorded = if (self.last_page) |page_operation| page_operation.latest else false;
                 const state = if (page_recorded) self.last_state else @tagName(self.workerFailureReason(failure));
@@ -955,9 +980,11 @@ const App = struct {
             }
             break :result false;
         };
+        self.starting_reaction = null;
         // The timer job owns this command until the last requested operation is acknowledged.
         if (success and command.event.action == .reaction) return;
         self.queue.finish(command, success);
+        self.updateReactionButtons();
         self.finishQuit();
         if (!self.quitting and self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
@@ -966,15 +993,23 @@ const App = struct {
         return self.foreground(command.event.window) and self.queue.accepts(command, command.event.window);
     }
 
+    fn checkCommandTarget(self: *App, command: operations.Command) bool {
+        if (self.commandCurrent(command)) return true;
+        if (command.event.action == .reaction and !self.quitting and self.queue.active and command.generation == self.queue.generation)
+            return self.failReactionStart(.wrong_window, "");
+        return false;
+    }
+
     fn execute(self: *App, command: operations.Command) !bool {
         const target = command.event.window;
-        if (!self.commandCurrent(command)) return false;
+        if (!self.checkCommandTarget(command)) return false;
         const action = command.event.action;
         if (action == .palette) {
             self.show(.{ .shortcut = command });
             return true;
         }
-        const browser = input.browser(@ptrFromInt(target)) orelse return false;
+        const browser = input.browser(@ptrFromInt(target)) orelse
+            return if (action == .reaction) self.failReactionStart(.wrong_window, "") else false;
         const scope_page = switch (action) {
             .chat_focus, .chat_clear, .chat_send, .reactions_show, .profile1, .profile2, .shared1, .shared2, .reaction => true,
             else => false,
@@ -985,24 +1020,26 @@ const App = struct {
         else
             try self.request(.browser_context, target, "", &.{});
         defer context.deinit();
-        if (!self.commandCurrent(command)) return false;
+        if (!self.checkCommandTarget(command)) return false;
         if (!context.is("ok")) {
-            if (action == .reaction) {
-                self.publishReactionResult(feedback.Reason.fromReply(context.field("State")), null, context.field("Detail"));
-            } else self.report(context.field("State"));
+            if (action == .reaction) return self.failReactionStart(feedback.Reason.fromReply(context.field("State")), context.field("Detail"));
+            self.report(context.field("State"));
             return false;
         }
         const video = operations.videoId(context.field("Video")) orelse {
-            if (action == .reaction) self.publishReactionResult(.unavailable, null, context.field("Detail")) else self.report("unavailable");
+            if (action == .reaction) return self.failReactionStart(.unavailable, context.field("Detail"));
+            self.report("unavailable");
             return false;
         };
         if (!self.queue.bindVideo(video)) {
-            if (action == .reaction) self.publishReactionResult(.changed, null, context.field("Detail")) else self.report("changed");
+            if (action == .reaction) return self.failReactionStart(.changed, context.field("Detail"));
+            self.report("changed");
             return false;
         }
         const page_token = if (scope_page) operations.pageToken(context.field("PageToken")) orelse return false else null;
         if (page_token) |token| {
             if (!self.queue.bindPage(token)) {
+                if (action == .reaction) return self.failReactionStart(.changed, context.field("Detail"));
                 self.report("changed");
                 return false;
             }
@@ -1278,22 +1315,36 @@ const App = struct {
         }
     }
 
+    fn failReactionStart(self: *App, reason: feedback.Reason, detail: []const u8) bool {
+        self.starting_reaction = null;
+        self.showReactionResult(feedback.Result.quickStart(reason, detail));
+        return false;
+    }
+
+    fn reactionSetupFailed(self: *App, job: operations.Reaction, detail: []const u8) bool {
+        if (job.shortcut != null) return self.failReactionStart(.unavailable, detail);
+        self.publishReactionResult(.unavailable, null, detail);
+        return false;
+    }
+
     fn startReaction(self: *App, job: operations.Reaction, delay: u32) bool {
         if (self.reaction != null or self.quitting or job.count == 0) return false;
-        const clock = std.time.Timer.start() catch |failure| {
-            self.publishReactionResult(.unavailable, null, @errorName(failure));
-            return false;
-        };
+        const before_open = self.reaction_generation;
+        const revision = self.reaction_revision;
+        const clock = std.time.Timer.start() catch |failure| return self.reactionSetupFailed(job, @errorName(failure));
         self.openReactionProgress() catch |failure| {
-            self.publishReactionResult(.unavailable, null, @errorName(failure));
-            return false;
+            if (self.reaction_generation != before_open or (job.shortcut == null and self.reaction_revision != revision)) return false;
+            if (job.shortcut) |command| if (!self.checkCommandTarget(command)) return false;
+            return self.reactionSetupFailed(job, @errorName(failure));
         };
-        const generation = self.reaction_generation +% 1;
-        if (!self.scheduleReactionAdvance(generation, @min(delay, 1000))) {
-            self.publishReactionResult(.unavailable, null, "リアクションのタイマーを開始できませんでした。");
-            return false;
-        }
+        if (self.reaction_generation != before_open or (job.shortcut == null and self.reaction_revision != revision)) return false;
+        if (job.shortcut) |command| if (!self.checkCommandTarget(command)) return false;
+        const generation = before_open +% 1;
+        if (!self.scheduleReactionAdvance(generation, @min(delay, 1000)))
+            return self.reactionSetupFailed(job, "リアクションのタイマーを開始できませんでした。");
         self.reaction_generation = generation;
+        self.reaction_revision +%= 1;
+        self.starting_reaction = null;
         self.reaction = job;
         self.reaction.?.due_ns = @as(u64, delay) * std.time.ns_per_ms;
         self.reaction_clock = clock;
@@ -1301,12 +1352,29 @@ const App = struct {
             _ = self.queue.bindVideo(job.video);
             _ = self.queue.bindPage(job.page);
         }
-        self.palette.reactionButtons(true);
+        self.updateReactionButtons();
+        // EnableWindow can dispatch a stop before control returns here.
+        if (self.reaction_generation != generation or self.reaction == null) return true;
         if (delay == 0) {
             self.showReactionCounts("標準設定で実行します。", job, .running);
         } else self.showReactionCountdown(job, delay);
-        self.reaction_progress.show();
+        if (self.reaction_generation == generation and self.reaction != null) self.reaction_progress.show();
         return true;
+    }
+
+    fn reactionButtonsActive(self: *const App) bool {
+        return self.reaction != null or self.preparation != null or self.reactionQueued();
+    }
+
+    fn updateReactionButtons(self: *App) void {
+        if (self.updating_reaction_buttons) return;
+        self.updating_reaction_buttons = true;
+        defer self.updating_reaction_buttons = false;
+        while (true) {
+            const active = self.reactionButtonsActive();
+            self.palette.reactionButtons(active);
+            if (active == self.reactionButtonsActive()) return;
+        }
     }
 
     fn scheduleReactionAdvance(self: *App, generation: u64, wait_ms: u32) bool {
@@ -1347,10 +1415,11 @@ const App = struct {
         text: [reaction_summary_capacity]u8 = undefined,
         len: usize,
         phase: feedback.Phase,
+        revision: u64,
     };
 
     fn updateReactionProgress(self: *App, message: []const u8, phase: feedback.Phase) void {
-        var update: ReactionProgressUpdate = .{ .len = message.len, .phase = phase };
+        var update: ReactionProgressUpdate = .{ .len = message.len, .phase = phase, .revision = self.reaction_revision };
         @memcpy(update.text[0..update.len], message);
         self.pending_reaction_progress = update;
         // Win32 control updates are synchronous. A newer, nested update takes precedence.
@@ -1359,9 +1428,11 @@ const App = struct {
         defer self.rendering_reaction_progress = false;
         while (self.pending_reaction_progress) |current_update| {
             self.pending_reaction_progress = null;
+            const terminal = current_update.phase == .finished;
+            if (terminal and current_update.revision != self.reaction_revision) continue;
             const text = current_update.text[0..current_update.len];
             self.palette.status(text);
-            if (self.pending_reaction_progress != null) continue;
+            if (self.pending_reaction_progress != null or (terminal and current_update.revision != self.reaction_revision)) continue;
             self.reaction_progress.update(text, self.keyboard.tracker.bindings, current_update.phase);
             self.reaction_render_at = win.GetTickCount64();
         }
@@ -1385,14 +1456,20 @@ const App = struct {
     }
 
     fn publishReactionResult(self: *App, reason: feedback.Reason, counts: ?feedback.Counts, detail: []const u8) void {
-        if (self.reaction_result) |result| result.deinit();
-        const result = feedback.Result.init(reason, counts, detail);
+        self.showReactionResult(feedback.Result.init(reason, counts, detail));
+    }
+
+    fn showReactionResult(self: *App, result: feedback.Result) void {
+        self.reaction_revision +%= 1;
+        const revision = self.reaction_revision;
+        if (self.reaction_result) |previous| previous.deinit();
         self.reaction_result = result;
         if (self.quitting) return;
         self.reaction_progress.open(self.window) catch {};
+        if (self.reaction_revision != revision) return;
         var summary: [reaction_summary_capacity]u8 = undefined;
         self.updateReactionProgress(result.summary(&summary), .finished);
-        if (self.quitting or self.reaction != null or self.preparation != null or self.reaction_progress.window == null) return;
+        if (self.reaction_revision != revision or self.quitting or self.reaction != null or self.preparation != null or self.reaction_progress.window == null) return;
         self.reaction_hide_at = win.GetTickCount64() + 4000;
         if (win.SetTimer(self.window, timer_reaction_feedback, 4000, null) == 0) {
             self.reaction_progress.hide();
@@ -1412,14 +1489,20 @@ const App = struct {
         self.reaction_progress.hide();
     }
 
-    fn reactionContextCurrent(self: *const App, target: win.HWND, generation: u64) bool {
-        return !self.quitting and self.target == target and self.reaction_generation == generation;
+    const ReactionContext = struct { video: operations.VideoId, page: operations.PageToken };
+    const ReactionOrigin = struct { target: win.HWND, foreground: win.HWND, generation: u64, revision: u64 };
+
+    fn reactionOrigin(self: *const App) ReactionOrigin {
+        return .{ .target = self.target, .foreground = win.GetForegroundWindow(), .generation = self.reaction_generation, .revision = self.reaction_revision };
     }
 
-    const ReactionContext = struct { video: operations.VideoId, page: operations.PageToken };
+    fn reactionContextCurrent(self: *const App, origin: ReactionOrigin) bool {
+        return !self.quitting and self.target == origin.target and self.reaction_generation == origin.generation and
+            self.reaction_revision == origin.revision;
+    }
 
-    fn reactionContext(self: *App, target: win.HWND, generation: u64, origin: win.HWND) ?ReactionContext {
-        if (origin == null or win.GetForegroundWindow() != origin or input.browser(target) == null) {
+    fn reactionContext(self: *App, origin: ReactionOrigin) ?ReactionContext {
+        if (origin.foreground == null or win.GetForegroundWindow() != origin.foreground or input.browser(origin.target) == null) {
             self.publishReactionResult(.wrong_window, null, "");
             return null;
         }
@@ -1427,14 +1510,14 @@ const App = struct {
             self.finishQuit();
             if (!self.quitting and self.queue.busy()) _ = win.PostMessageW(self.window, drain_message, 0, 0);
         }
-        const response = self.requestOnPage(.browser_context, windows.number(target), "", "bind", &.{}) catch |failure| {
+        const response = self.requestOnPage(.browser_context, windows.number(origin.target), "", "bind", &.{}) catch |failure| {
             var detail: [256]u8 = undefined;
-            if (self.reactionContextCurrent(target, generation)) self.publishReactionResult(.unavailable, null, self.workerFailureDetail(failure, &detail));
+            if (self.reactionContextCurrent(origin)) self.publishReactionResult(.unavailable, null, self.workerFailureDetail(failure, &detail));
             return null;
         };
         defer response.deinit();
-        if (!self.reactionContextCurrent(target, generation)) return null;
-        if (win.GetForegroundWindow() != origin) {
+        if (!self.reactionContextCurrent(origin)) return null;
+        if (win.GetForegroundWindow() != origin.foreground) {
             self.publishReactionResult(.wrong_window, null, "");
             return null;
         }
@@ -1460,17 +1543,15 @@ const App = struct {
             self.writePreferences(prefs) catch return self.report("標準設定を保存できませんでした。");
             return self.report("リアクションの標準設定を保存しました。");
         }
-        const target = self.target;
-        const generation = self.reaction_generation;
-        const origin = win.GetForegroundWindow();
-        if (origin != self.palette.window) return self.publishReactionResult(.wrong_window, null, "");
-        const context = self.reactionContext(target, generation, origin) orelse return;
+        const origin = self.reactionOrigin();
+        if (origin.foreground != self.palette.window) return self.publishReactionResult(.wrong_window, null, "");
+        const context = self.reactionContext(origin) orelse return;
         const delay = 3000;
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
-        _ = win.SetForegroundWindow(target);
-        if (!self.reactionContextCurrent(target, generation)) return;
+        _ = win.SetForegroundWindow(origin.target);
+        if (!self.reactionContextCurrent(origin)) return;
         _ = self.startReaction(.{
-            .target = windows.number(target),
+            .target = windows.number(origin.target),
             .video = context.video,
             .page = context.page,
             .kind = options.kind,
@@ -1481,31 +1562,37 @@ const App = struct {
 
     fn startPreparation(self: *App, mode: transport.Mode) void {
         if (!self.canEdit() or self.manager.isEditing()) return;
-        const target = self.target;
-        const generation = self.reaction_generation;
-        const context = self.reactionContext(target, generation, win.GetForegroundWindow()) orelse return;
+        const origin = self.reactionOrigin();
+        const target = windows.number(origin.target);
+        const context = self.reactionContext(origin) orelse return;
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
         if (self.manager.window != null) _ = win.ShowWindow(self.manager.window, win.SW_HIDE);
-        _ = win.SetForegroundWindow(target);
-        if (!self.reactionContextCurrent(target, generation)) return;
-        self.openReactionProgress() catch |failure| return self.publishReactionResult(.unavailable, null, @errorName(failure));
-        if (!self.reactionContextCurrent(target, generation)) return;
+        _ = win.SetForegroundWindow(origin.target);
+        if (!self.reactionContextCurrent(origin)) return;
+        self.openReactionProgress() catch |failure| {
+            if (self.reactionContextCurrent(origin)) self.publishReactionResult(.unavailable, null, @errorName(failure));
+            return;
+        };
+        if (!self.reactionContextCurrent(origin)) return;
         if (!self.setReactionTimer(.preparation, 1000)) {
             self.publishReactionResult(.unavailable, null, "リアクションの登録・確認のタイマーを開始できませんでした。");
             return;
         }
         const delay: u32 = if (mode == .reaction_capture) 1000 else 5000;
         self.reaction_generation +%= 1;
-        self.preparation = .{ .mode = mode, .target = windows.number(target), .video = context.video, .page = context.page, .generation = self.reaction_generation, .due = win.GetTickCount64() + delay };
-        if (self.queue.target == windows.number(target)) {
+        self.reaction_revision +%= 1;
+        self.preparation = .{ .mode = mode, .target = target, .video = context.video, .page = context.page, .generation = self.reaction_generation, .due = win.GetTickCount64() + delay };
+        const pending = self.preparation.?;
+        if (self.queue.target == target) {
             _ = self.queue.bindVideo(context.video);
             _ = self.queue.bindPage(context.page);
         }
-        self.palette.reactionButtons(true);
+        self.updateReactionButtons();
+        if (!self.preparationCurrent(pending)) return;
         if (mode == .reaction_capture) {
             self.updateReactionProgress("登録を待っています。♡のメニューを開き、マウスをメニューに重ねてください。", .running);
         } else self.showPreparationCountdown(delay);
-        self.reaction_progress.show();
+        if (self.preparationCurrent(pending)) self.reaction_progress.show();
     }
 
     fn preparationCurrent(self: *const App, pending: Preparation) bool {
@@ -1551,10 +1638,14 @@ const App = struct {
     }
 
     fn finishPreparation(self: *App, reason: feedback.Reason, detail: []const u8) void {
+        const pending = self.preparation orelse return;
+        const revision = self.reaction_revision;
         self.preparation = null;
         self.cancelReactionTimer();
-        self.palette.reactionButtons(false);
-        self.publishReactionResult(reason, null, detail);
+        self.updateReactionButtons();
+        // A committed registration still needs its confirmation even if another key is waiting.
+        if (self.reaction_revision == revision and (pending.committed or !self.reactionQueued() or self.queue.target == pending.target))
+            self.publishReactionResult(reason, null, detail);
         if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
 
@@ -1683,12 +1774,17 @@ const App = struct {
 
     fn finishReaction(self: *App, reason: feedback.Reason, detail: []const u8) void {
         const job = self.reaction orelse return;
+        const revision = self.reaction_revision;
+        const superseded = job.stop_requested or self.queue.target != job.target or
+            if (job.shortcut) |command| command.generation != self.queue.generation else false;
         self.reaction = null;
         self.reaction_clock = null;
         self.cancelReactionTimer();
-        self.palette.reactionButtons(false);
         if (job.shortcut) |command| self.queue.finish(command, job.succeeded());
-        self.publishReactionResult(reason, reactionCounts(job), detail);
+        self.updateReactionButtons();
+        // A replacement queued during the old request owns the next result and progress display.
+        if (self.reaction_revision == revision and !(superseded and self.reactionQueued()))
+            self.publishReactionResult(reason, reactionCounts(job), detail);
         if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
 };
@@ -1980,12 +2076,17 @@ test "stop invalidates a reaction context even before a preparation or send job 
         .running_digest = null,
         .target = @ptrFromInt(42),
     };
-    const old = app.reaction_generation;
-    try std.testing.expect(app.reactionContextCurrent(app.target, old));
+    const old = app.reactionOrigin();
+    try std.testing.expect(app.reactionContextCurrent(old));
     app.stop();
-    try std.testing.expect(!app.reactionContextCurrent(app.target, old));
-    try std.testing.expect(app.reactionContextCurrent(app.target, app.reaction_generation));
-    try std.testing.expect(!app.reactionContextCurrent(@ptrFromInt(43), app.reaction_generation));
+    try std.testing.expect(!app.reactionContextCurrent(old));
+    const next = app.reactionOrigin();
+    try std.testing.expect(app.reactionContextCurrent(next));
+    app.target = @ptrFromInt(43);
+    try std.testing.expect(!app.reactionContextCurrent(next));
+    app.target = next.target;
+    app.reaction_revision +%= 1;
+    try std.testing.expect(!app.reactionContextCurrent(next));
 }
 
 test "a due reaction posts an immediate continuation to the current generation" {
@@ -2122,6 +2223,64 @@ test "a stop reentered from progress rendering leaves the terminal controls and 
     try testing.expect(app.preparation == null and app.reaction_timer == null);
     try testing.expect(!app.schedulePreparation(pending, 1000));
     try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
+}
+
+test "reaction buttons reconcile a stop while starting and a replacement while releasing" {
+    const testing = std.testing;
+    const Reentry = struct {
+        app: *App,
+        replacement: ?operations.Reaction = null,
+        replacement_started: bool = false,
+
+        fn duringEnable(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, id: win.UINT_PTR, data: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
+            if (message == win.WM_ENABLE) {
+                _ = win.RemoveWindowSubclass(hwnd, duringEnable, id);
+                const probe: *@This() = @ptrFromInt(data);
+                if (probe.replacement) |job| probe.replacement_started = probe.app.startReaction(job, 1000);
+                probe.app.stop();
+            }
+            return win.DefSubclassProc(hwnd, message, wparam, lparam);
+        }
+    };
+
+    const module = win.GetModuleHandleW(null);
+    const host = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 40, 40, null, null, module, null) orelse
+        return error.TestReactionWindow;
+    defer _ = win.DestroyWindow(host);
+    const start = win.CreateWindowExW(0, windows.wide("BUTTON"), windows.wide(""), win.WS_CHILD, 0, 0, 20, 20, host, null, module, null) orelse
+        return error.TestReactionStartControl;
+    const stop_button = win.CreateWindowExW(0, windows.wide("BUTTON"), windows.wide(""), win.WS_CHILD, 0, 0, 20, 20, host, null, module, null) orelse
+        return error.TestReactionStopControl;
+    var app: App = .{ .executable = undefined, .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null, .window = host };
+    defer app.reaction_progress.close();
+    defer app.cancelReactionTimer();
+    defer if (app.reaction_result) |result| result.deinit();
+    app.palette.start_button = start;
+    app.palette.stop_button = stop_button;
+    app.updateReactionButtons();
+    var probe: Reentry = .{ .app = &app };
+    const job: operations.Reaction = .{ .target = 1, .video = "Fixture0001".*, .page = @splat(0), .kind = 1, .count = 10, .interval = 200 };
+
+    try testing.expect(win.SetWindowSubclass(start, Reentry.duringEnable, 1, @intFromPtr(&probe)) != 0);
+    defer _ = win.RemoveWindowSubclass(start, Reentry.duringEnable, 1);
+    try testing.expect(app.startReaction(job, 1000));
+    try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
+    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
+    try testing.expect(win.IsWindowEnabled(start) != 0 and win.IsWindowEnabled(stop_button) == 0);
+    const summary = try windows.text(app.reaction_progress.summary, testing.allocator);
+    defer testing.allocator.free(summary);
+    try testing.expect(std.mem.indexOf(u8, summary, "中止しました。") != null);
+
+    try testing.expect(app.startReaction(job, 1000));
+    probe.replacement = job;
+    probe.replacement.?.count = 5;
+    try testing.expect(win.SetWindowSubclass(start, Reentry.duringEnable, 1, @intFromPtr(&probe)) != 0);
+    app.finishReaction(.completed, "obsolete result");
+    try testing.expect(probe.replacement_started);
+    try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
+    try testing.expectEqual(@as(u32, 5), app.reaction_result.?.counts.?.total);
+    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
+    try testing.expect(win.IsWindowEnabled(start) != 0 and win.IsWindowEnabled(stop_button) == 0);
 }
 
 test "registration display reads only the selected browser and preserves operation state on read failure" {
@@ -2629,6 +2788,7 @@ fn shortcut(event: shortcuts.Event) void {
         if (app.input_cancellation) |pending| pending.signal.cancel();
         return;
     };
+    if (event.action == .reaction) app.reaction_revision +%= 1;
     if (app.input_cancellation) |pending| {
         if (app.queue.generation != generation or pending.target != event.window) pending.signal.cancel();
     }

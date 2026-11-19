@@ -67,9 +67,16 @@ pub const Result = struct {
     reason: Reason,
     counts: ?Counts = null,
     detail: ?[]u8 = null,
+    stage: enum { queued, finished } = .finished,
 
     pub fn init(reason: Reason, counts: ?Counts, detail: []const u8) Result {
         return .{ .reason = reason, .counts = counts, .detail = if (detail.len == 0) null else allocator.dupe(u8, detail) catch null };
+    }
+
+    pub fn quickStart(reason: Reason, detail: []const u8) Result {
+        var result = init(reason, .{ .completed = 0, .total = 0, .mean_ms = null }, detail);
+        result.stage = .queued;
+        return result;
     }
 
     pub fn deinit(self: Result) void {
@@ -78,6 +85,8 @@ pub const Result = struct {
 
     pub fn summary(self: Result, buffer: []u8) []const u8 {
         const reason = self.reason.message();
+        if (self.stage == .queued)
+            return std.fmt.bufPrint(buffer, "{s}\r\nショートカットの開始前に終了しました。操作済み 0 回。", .{reason}) catch reason;
         const counts = self.counts orelse return reason;
         var count_buffer: [120]u8 = undefined;
         const count_text = counts.text(&count_buffer) catch return reason;
