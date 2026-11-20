@@ -1,4 +1,5 @@
 const std = @import("std");
+const framing = @import("../worker_frame.zig");
 const uia = @import("uia.zig");
 const win = @import("windows.zig");
 const pages = @import("pages.zig");
@@ -46,46 +47,13 @@ extern "kernel32" fn WriteFile(Handle, [*]const u8, u32, *u32, ?*anyopaque) call
 extern "kernel32" fn CloseHandle(Handle) callconv(.winapi) i32;
 extern "kernel32" fn GetLastError() callconv(.winapi) u32;
 
-const max_frame = 32768;
-
-pub const Mode = enum {
-    browser_context,
-    resolve,
-    verify_input,
-    verify_chat,
-    chat_focus,
-    reactions_show,
-    reaction_configure,
-    reaction_capture,
-    reaction_check,
-    reaction_send,
-    chat_enter,
-    chat_clear,
-    input_insert,
-    unsupported,
-
-    fn parse(value: []const u8) Mode {
-        inline for (std.meta.fields(Mode)) |field| {
-            if (std.ascii.eqlIgnoreCase(value, field.name)) return @enumFromInt(field.value);
-        }
-        return .unsupported;
-    }
-
-    fn inputOutcome(self: Mode) ?[]const u8 {
-        return switch (self) {
-            .chat_enter => "enter_sent",
-            .chat_clear => "cleared",
-            .input_insert => "inserted",
-            else => null,
-        };
-    }
-};
+pub const Mode = framing.Mode;
 
 pub const Request = struct {
     seq: []const u8 = "",
     window: []const u8 = "",
     hwnd: usize = 0,
-    mode: Mode = .unsupported,
+    mode: ?Mode = null,
     video: []const u8 = "",
     token: []const u8 = "",
     page: []const u8 = "",
@@ -99,7 +67,7 @@ pub const Request = struct {
 
     fn documentBinding(self: Request) ?uia.DocumentLookup {
         if (!eq(u8, self.page, "bind")) return null;
-        return switch (self.mode) {
+        return switch (self.mode orelse return null) {
             .browser_context => .browser_context,
             .resolve => .foreground,
             else => null,
@@ -169,10 +137,8 @@ fn readExactly(pipe: Handle, buffer: []u8) !void {
     }
 }
 
-fn frameSize(header: *const [4]u8) !usize {
-    const size = std.mem.readInt(u32, header, .little);
-    if (size == 0 or size > max_frame) return error.InvalidFrame;
-    return size;
+fn frameSize(header: *const framing.Header) !usize {
+    return framing.decodeLength(header) orelse error.InvalidFrame;
 }
 
 fn writeExactly(pipe: Handle, data: []const u8) !void {
@@ -242,21 +208,21 @@ pub const Worker = struct {
         const prepared_input = self.prepared_input;
         self.prepared_input = null;
         defer if (prepared_input) |prepared| win.release(prepared.element);
-        const committed_state = req.mode.inputOutcome();
         if (req.resolve_deadline) |deadline| try resolution.check(deadline);
-        if (req.mode == .unsupported) return;
-        if (req.mode == .reaction_configure) {
+        const mode = req.mode orelse return;
+        const committed_state = mode.inputOutcome();
+        if (mode == .reaction_configure) {
             try self.registry.configure(req.payload);
             reply.state = "configured";
             return;
         }
         var proof: ?FocusProof = null;
         defer if (proof) |value| win.release(value.element);
-        if (req.mode == .chat_focus or req.mode == .verify_chat) {
+        if (mode == .chat_focus or mode == .verify_chat) {
             proof = self.focus;
             self.focus = null;
         }
-        if (req.mode == .verify_chat) {
+        if (mode == .verify_chat) {
             const value = proof orelse {
                 reply.state = "wrong_input";
                 return;
@@ -266,7 +232,7 @@ pub const Worker = struct {
                 return;
             }
         }
-        const changes_page = req.mode == .chat_focus or req.mode == .reactions_show;
+        const changes_page = mode == .chat_focus or mode == .reactions_show;
         if (req.hwnd == 0) {
             if (changes_page) reply.state = "wrong_window";
             return;
@@ -305,8 +271,8 @@ pub const Worker = struct {
                 return;
             }
         }
-        const reaction_action = req.mode == .reaction_capture or req.mode == .reaction_check or req.mode == .reaction_send;
-        if (req.mode != .browser_context and req.mode != .resolve) {
+        const reaction_action = mode == .reaction_capture or mode == .reaction_check or mode == .reaction_send;
+        if (mode != .browser_context and mode != .resolve) {
             if ((reaction_action or committed_state != null or req.video.len != 0) and !eq(u8, &video, req.video)) {
                 reply.state = "changed";
                 return;
@@ -317,14 +283,14 @@ pub const Worker = struct {
                 reply.state = "changed";
                 return;
             }
-            if (!reaction_action and req.mode != .verify_input and req.mode != .verify_chat and committed_state == null and
+            if (!reaction_action and mode != .verify_input and mode != .verify_chat and committed_state == null and
                 !try self.client.documentMatches(window, doc, binding orelse .foreground))
             {
                 reply.state = "changed";
                 return;
             }
         }
-        switch (req.mode) {
+        switch (mode) {
             .browser_context => reply.state = "ok",
             .resolve => {
                 const value = try self.cache.resolve(video, req.resolve_deadline.?, ResolveTarget{
@@ -345,14 +311,14 @@ pub const Worker = struct {
                 return;
             },
             .verify_input, .verify_chat => {
-                const focus_proof = if (req.mode == .verify_chat) proof else null;
+                const focus_proof = if (mode == .verify_chat) proof else null;
                 if (focus_proof) |confirmed| {
                     if (!eq(u8, &confirmed.video, &video)) {
                         reply.state = "wrong_input";
                         return;
                     }
                 }
-                try self.verify(window, video, if (focus_proof) |confirmed| confirmed.element else null, req.mode == .verify_chat, page, if (existing) |saved| saved.token else null, reply);
+                try self.verify(window, video, if (focus_proof) |confirmed| confirmed.element else null, mode == .verify_chat, page, if (existing) |saved| saved.token else null, reply);
             },
             .chat_enter, .chat_clear, .input_insert => try self.commitInput(allocator, req, window, video, page.?, prepared_input.?, committed_state.?, reply),
             .chat_focus => try self.moveFocus(window, video, page, reply),
@@ -362,7 +328,7 @@ pub const Worker = struct {
                 .{ .document = saved.element, .token = saved.token }
             else
                 null, reply),
-            .reaction_configure, .unsupported => unreachable,
+            .reaction_configure => unreachable,
         }
         if (page) |doc| {
             if (eq(u8, reply.state, "ok") or eq(u8, reply.state, "focused") or eq(u8, reply.state, "hovered") or
@@ -460,7 +426,7 @@ pub const Worker = struct {
         else
             null;
         defer if (payload) |view| view.close();
-        const effect: keyboard.Effect = switch (req.mode) {
+        const effect: keyboard.Effect = switch (req.mode.?) {
             .chat_enter => .enter,
             .chat_clear => .clear,
             .input_insert => .{ .insert = payload.?.text },
@@ -684,9 +650,9 @@ fn serve(pipe: Handle, ready: Handle) !void {
     var worker = try Worker.init();
     defer worker.deinit();
     worker.input_pipe = pipe;
-    var frame: [max_frame]u8 = undefined;
+    var frame: [framing.max_body_bytes]u8 = undefined;
     while (true) {
-        var header: [4]u8 = undefined;
+        var header: framing.Header = undefined;
         // The legacy worker exits with code 1 when its owner closes the pipe.
         try readExactly(pipe, &header);
         const size = try frameSize(&header);
@@ -694,37 +660,45 @@ fn serve(pipe: Handle, ready: Handle) !void {
         const req = try parseRequest(frame[0..size]);
         var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
-        var result: Reply = .{};
-        worker.execute(arena.allocator(), req, &result) catch |failure| {
-            switch (req.mode) {
-                .chat_focus, .reactions_show, .reaction_capture, .reaction_check, .reaction_send, .chat_enter, .chat_clear, .input_insert => {},
-                else => result = .{},
-            }
-            result.detail = @errorName(failure);
-        };
-        if (req.resolve_deadline) |deadline| {
-            resolution.check(deadline) catch {
-                result = .{ .detail = "ResolveDeadlineExceeded" };
-            };
-        }
-        var reply: [4 + max_frame]u8 = undefined;
-        const body = serialize(&reply, req, &result) catch blk: {
-            // Preserve the outcome of an issued action even when diagnostic
-            // data is too large to send.
-            if (eq(u8, result.state, "captured") or eq(u8, result.state, "ok")) result.state = "unavailable";
-            result.detail = "ReplyTooLarge";
-            result.author = "";
-            result.channel = "";
-            result.page = null;
-            break :blk try serialize(&reply, req, &result);
-        };
-        try writeExactly(pipe, reply[0 .. 4 + body.len]);
+        const result = executeRequest(&worker, arena.allocator(), req);
+        var reply: framing.Buffer = undefined;
+        try writeExactly(pipe, try encodeReply(&reply, req, result));
         if (SetEvent(ready) == 0) return error.SignalFailed;
     }
 }
 
-fn serialize(reply: *[4 + max_frame]u8, req: Request, result: *const Reply) ![]const u8 {
-    var out: std.Io.Writer = .fixed(reply[4..]);
+fn executeRequest(worker: *Worker, allocator: std.mem.Allocator, req: Request) Reply {
+    var result: Reply = .{};
+    worker.execute(allocator, req, &result) catch |failure| {
+        const retain_outcome = if (req.mode) |mode| switch (mode) {
+            .chat_focus, .reactions_show, .reaction_capture, .reaction_check, .reaction_send, .chat_enter, .chat_clear, .input_insert => true,
+            else => false,
+        } else false;
+        if (!retain_outcome) result = .{};
+        result.detail = @errorName(failure);
+    };
+    if (req.resolve_deadline) |deadline| {
+        resolution.check(deadline) catch return .{ .detail = "ResolveDeadlineExceeded" };
+    }
+    return result;
+}
+
+fn encodeReply(buffer: *framing.Buffer, req: Request, result: Reply) ![]const u8 {
+    const body = serialize(buffer, req, &result) catch blk: {
+        // Preserve the outcome of an issued action when diagnostic data is too large.
+        var reduced = result;
+        if (eq(u8, result.state, "captured") or eq(u8, result.state, "ok")) reduced.state = "unavailable";
+        reduced.detail = "ReplyTooLarge";
+        reduced.author = "";
+        reduced.channel = "";
+        reduced.page = null;
+        break :blk try serialize(buffer, req, &reduced);
+    };
+    return buffer[0 .. framing.header_bytes + body.len];
+}
+
+fn serialize(reply: *framing.Buffer, req: Request, result: *const Reply) ![]const u8 {
+    var out: std.Io.Writer = .fixed(reply[framing.header_bytes..]);
     try out.print("Seq={s}\nState={s}\nAuthor=", .{ req.seq, result.state });
     try writeField(&out, result.author);
     try out.writeAll("\nChannel=");
@@ -735,7 +709,7 @@ fn serialize(reply: *[4 + max_frame]u8, req: Request, result: *const Reply) ![]c
     try writeField(&out, result.detail);
     if (result.page) |*token| try out.print("\nPageToken={s}", .{token});
     const body = out.buffered();
-    std.mem.writeInt(u32, reply[0..4], @intCast(body.len), .little);
+    framing.encodeLength(reply[0..framing.header_bytes], body.len);
     return body;
 }
 
@@ -785,7 +759,7 @@ test "production frames preserve identifiers and the expected video" {
     const req = try parseRequest("Seq=2\nWindow=1234\nMode=verify_input\nVideo=Abc-def_012\n");
     try std.testing.expectEqual(@as(usize, 1234), req.hwnd);
     try std.testing.expectEqualStrings("2", req.seq);
-    try std.testing.expectEqual(Mode.verify_input, req.mode);
+    try std.testing.expectEqual(Mode.verify_input, req.mode.?);
     try std.testing.expectEqualStrings("Abc-def_012", req.video);
     try std.testing.expectEqualStrings("", req.page);
     try std.testing.expectError(error.InvalidNumber, parseRequest("Seq=1\nWindow=+12\n"));
@@ -795,7 +769,7 @@ test "page proofs appear only in opted-in frames and a fresh worker rejects old 
     const proof = "0123456789abcdef0123456789abcdef";
     const bind = try parseRequest("Seq=1\nWindow=1234\nMode=browser_context\nPageToken=bind\n");
     try std.testing.expectEqualStrings("bind", bind.page);
-    var buffer: [4 + max_frame]u8 = undefined;
+    var buffer: framing.Buffer = undefined;
     const body = try serialize(&buffer, bind, &.{ .state = "ok", .video = "ZigTest0001".*, .page = proof.* });
     try std.testing.expect(std.mem.endsWith(u8, body, "\nPageToken=" ++ proof));
     const subsequent = try parseRequest("Seq=2\nWindow=1234\nMode=verify_input\nVideo=ZigTest0001\nPageToken=" ++ proof ++ "\n");
@@ -839,14 +813,14 @@ test "all scoped reaction modes reject missing page proof before accessibility l
 
 test "action request fields and framed replies cannot insert another field" {
     const request = try parseRequest("Seq=98\nWindow=4294967400\nMode=REACTION_SEND\nVideo=ZigTest0001\nReaction=5\nX=-12\nY=25\n");
-    try std.testing.expectEqual(Mode.reaction_send, request.mode);
+    try std.testing.expectEqual(Mode.reaction_send, request.mode.?);
     try std.testing.expectEqual(@as(usize, 4294967400), request.hwnd);
     try std.testing.expectEqual(@as(usize, 4), reactionIndex(request.reaction).?);
     try std.testing.expectEqual(@as(i32, -12), try signedCoordinate(request.x));
     try std.testing.expectEqual(@as(i32, 25), try signedCoordinate(request.y));
     try std.testing.expectError(error.InvalidNumber, signedCoordinate("0x20"));
     try std.testing.expectError(error.InvalidEncoding, parseRequest("Seq=1\nWindow=0\nDetail=\xff"));
-    var buffer: [4 + max_frame]u8 = undefined;
+    var buffer: framing.Buffer = undefined;
     const body = try serialize(&buffer, request, &.{
         .state = "unknown",
         .video = "ZigTest0001".*,
@@ -859,7 +833,23 @@ test "action request fields and framed replies cannot insert another field" {
     const limit = [4]u8{ 0, 0x80, 0, 0 };
     try std.testing.expectError(error.InvalidFrame, frameSize(&zero));
     try std.testing.expectError(error.InvalidFrame, frameSize(&oversized));
-    try std.testing.expectEqual(@as(usize, max_frame), try frameSize(&limit));
+    try std.testing.expectEqual(@as(usize, framing.max_body_bytes), try frameSize(&limit));
+}
+
+test "oversized worker replies keep an issued operation outcome" {
+    const request = try parseRequest("Seq=2\nWindow=42\nMode=reaction_send\n");
+    const large = [_]u8{'x'} ** framing.max_body_bytes;
+    var buffer: framing.Buffer = undefined;
+    const bytes = try encodeReply(&buffer, request, .{
+        .state = "operated",
+        .video = "ZigTest0001".*,
+        .author = &large,
+    });
+    try std.testing.expectEqual(bytes.len - framing.header_bytes, try frameSize(buffer[0..framing.header_bytes]));
+    try std.testing.expectEqualStrings(
+        "Seq=2\nState=operated\nAuthor=\nChannel=\nVideo=ZigTest0001\nWindow=42\nDetail=ReplyTooLarge",
+        bytes[framing.header_bytes..],
+    );
 }
 
 test "chat discovery skips invalid UIA candidates and stops after two valid targets" {

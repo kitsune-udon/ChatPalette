@@ -3,6 +3,7 @@ const windows = @import("chatpalette").windows;
 const management = @import("chatpalette").management;
 const win = windows.api;
 const ui = @import("clean_install_scenario.zig");
+const viewport = @import("transfer_viewport.zig");
 const files = @import("tool_support").files;
 const process = @import("tool_support").process;
 const storage = @import("chatpalette").storage;
@@ -30,13 +31,6 @@ const shortcut_save_items_id = 203;
 pub const shortcut_key_status_id = 204;
 const shortcut_item_status_id = 205;
 pub const ShortcutKeys = [storage.action_count][]const u8;
-const WindowSize = struct { width: i32, height: i32 };
-const TrackObservation = struct {
-    window_dpi: u32,
-    getminmaxinfo_px: WindowSize,
-    constrained_resize_px: WindowSize,
-};
-
 const PaletteKey = enum(u16) {
     initial = win.VK_F11,
     retry = win.VK_F12,
@@ -101,9 +95,9 @@ const Report = struct {
     management_native_typeahead_selected_identity: bool = false,
     link_without_browser_explains_failure: bool = false,
     palette_window_dpi: ?u32 = null,
-    palette_minimum_track: ?TrackObservation = null,
-    management_minimum_track: ?TrackObservation = null,
-    shortcut_minimum_track: ?TrackObservation = null,
+    palette_minimum_track: ?viewport.TrackObservation = null,
+    management_minimum_track: ?viewport.TrackObservation = null,
+    shortcut_minimum_track: ?viewport.TrackObservation = null,
     shortcut_wheel_pixels_per_notch: ?i32 = null,
     shortcut_focused_key_field_wheel_scrolled: bool = false,
     shortcut_wheel_reached_save_button: bool = false,
@@ -295,8 +289,8 @@ fn drive(scratch: std.mem.Allocator, output: []const u8, root: std.fs.Dir, insta
     const palette = try ui.waitWindow(windows.wide("ChatPalette.Palette"), null, pid);
     report.stage = "narrow-palette";
     report.palette_window_dpi = win.GetDpiForWindow(palette);
-    report.palette_minimum_track = try observeMinimumTrack(palette);
-    try verifyNarrowPalette(palette);
+    report.palette_minimum_track = try viewport.observeMinimumTrack(palette);
+    try viewport.verifyNarrowPalette(palette);
     report.narrow_palette_reveals_tab_focus = true;
     report.stage = "channel-link-without-browser";
     const before_link = try files.readDigest(installation, db_path);
@@ -312,8 +306,8 @@ fn drive(scratch: std.mem.Allocator, output: []const u8, root: std.fs.Dir, insta
     try expectDigest(installation, db_path, before_link);
     report.link_without_browser_explains_failure = true;
     report.stage = "narrow-management";
-    report.management_minimum_track = try observeMinimumTrack(manager);
-    try verifyNarrowManagement(manager);
+    report.management_minimum_track = try viewport.observeMinimumTrack(manager);
+    try viewport.verifyNarrowManagement(manager);
     report.narrow_management_scrolls_to_actions = true;
     try chooseShared(manager);
     report.stage = "editor-commit";
@@ -463,122 +457,6 @@ fn drive(scratch: std.mem.Allocator, output: []const u8, root: std.fs.Dir, insta
         report.stage = "decline-replacement-controls";
         return error.DeclinedTransferLeftUndoDisabled;
     }
-}
-
-fn resizeOwned(window: win.HWND, width: i32, height: i32) !void {
-    const flags = win.SWP_NOACTIVATE | win.SWP_NOZORDER | win.SWP_NOMOVE | win.SWP_NOSENDCHANGING;
-    if (win.SetWindowPos(window, null, 0, 0, width, height, flags) == 0) return error.CannotResizeProductWindow;
-    // Fence the owned UI thread after SetWindowPos sourced its WM_SIZE.
-    _ = try ui.message(window, win.WM_NULL, 0, 0);
-}
-
-fn windowExtent(window: win.HWND) !WindowSize {
-    var bounds: win.RECT = undefined;
-    if (win.GetWindowRect(window, &bounds) == 0) return error.CannotReadProductWindowBounds;
-    return .{ .width = bounds.right - bounds.left, .height = bounds.bottom - bounds.top };
-}
-
-fn resizeWithTrackLimits(window: win.HWND, size: WindowSize) !void {
-    const flags = win.SWP_NOACTIVATE | win.SWP_NOZORDER | win.SWP_NOMOVE;
-    if (win.SetWindowPos(window, null, 0, 0, size.width, size.height, flags) == 0) return error.CannotResizeProductWindow;
-    _ = try ui.message(window, win.WM_NULL, 0, 0);
-}
-
-fn observeMinimumTrack(window: win.HWND) !TrackObservation {
-    const dpi = win.GetDpiForWindow(window);
-    if (dpi == 0) return error.ProductWindowDpiMissing;
-    const previous = win.SetThreadDpiAwarenessContext(win.GetWindowDpiAwarenessContext(window)) orelse
-        return error.CannotMatchProductDpiCoordinates;
-    defer _ = win.SetThreadDpiAwarenessContext(previous);
-    const original = try windowExtent(window);
-    errdefer resizeWithTrackLimits(window, original) catch {};
-    const style: u32 = @bitCast(win.GetWindowLongW(window, win.GWL_STYLE));
-    if (style & win.WS_THICKFRAME == 0) return error.ProductWindowHasNoResizeFrame;
-    const ex_style: u32 = @bitCast(win.GetWindowLongW(window, win.GWL_EXSTYLE));
-    const system_min: win.POINT = .{
-        .x = win.GetSystemMetricsForDpi(win.SM_CXMINTRACK, dpi),
-        .y = win.GetSystemMetricsForDpi(win.SM_CYMINTRACK, dpi),
-    };
-    var limits = std.mem.zeroes(win.MINMAXINFO);
-    limits.ptMinTrackSize = system_min;
-    limits.ptMaxTrackSize = .{
-        .x = win.GetSystemMetricsForDpi(win.SM_CXMAXTRACK, dpi),
-        .y = win.GetSystemMetricsForDpi(win.SM_CYMAXTRACK, dpi),
-    };
-    _ = try ui.message(window, win.WM_GETMINMAXINFO, 0, @bitCast(@intFromPtr(&limits)));
-
-    const client = win.MulDiv(160, @intCast(dpi), 96);
-    var frame = win.RECT{ .left = 0, .top = 0, .right = client, .bottom = client };
-    if (win.AdjustWindowRectExForDpi(&frame, style & ~@as(u32, win.WS_VSCROLL | win.WS_HSCROLL), 0, ex_style, dpi) == 0)
-        return error.CannotCalculateExpectedTrackFrame;
-    const measured: WindowSize = .{ .width = limits.ptMinTrackSize.x, .height = limits.ptMinTrackSize.y };
-    if (measured.width != @max(system_min.x, frame.right - frame.left) or
-        measured.height != @max(system_min.y, frame.bottom - frame.top)) return error.ProductMinimumTrackMismatch;
-    const requested: WindowSize = .{ .width = 1, .height = 1 };
-    // Use normal window positioning so DefWindowProc applies WM_GETMINMAXINFO.
-    try resizeWithTrackLimits(window, requested);
-    const actual = try windowExtent(window);
-    try resizeWithTrackLimits(window, original);
-    if (!std.meta.eql(measured, actual)) return error.ProductResizeDidNotApplyMinimumTrack;
-    return .{ .window_dpi = dpi, .getminmaxinfo_px = measured, .constrained_resize_px = actual };
-}
-
-fn clientContains(window: win.HWND, child: win.HWND, allow_oversized: bool) !bool {
-    var rect: win.RECT = undefined;
-    var client: win.RECT = undefined;
-    if (win.GetWindowRect(child, &rect) == 0 or win.GetClientRect(window, &client) == 0) return error.CannotReadProductWindowBounds;
-    _ = win.MapWindowPoints(null, window, @ptrCast(&rect), 2);
-    return axisVisible(rect.left, rect.right, client.right, allow_oversized) and axisVisible(rect.top, rect.bottom, client.bottom, allow_oversized);
-}
-
-fn axisVisible(start: i32, end: i32, client: i32, allow_oversized: bool) bool {
-    if (allow_oversized and end - start > client) return start == 0;
-    return start >= 0 and end <= client;
-}
-
-fn verifyNarrowPalette(palette: win.HWND) !void {
-    const find_focus = struct {
-        fn get(window: win.HWND) !win.HWND {
-            const thread = win.GetWindowThreadProcessId(window, null);
-            var gui = std.mem.zeroes(win.GUITHREADINFO);
-            gui.cbSize = @sizeOf(win.GUITHREADINFO);
-            if (thread == 0 or win.GetGUIThreadInfo(thread, &gui) == 0 or gui.hwndFocus == null or win.IsChild(window, gui.hwndFocus) == 0)
-                return error.ProductPaletteHasNoKeyboardFocus;
-            return gui.hwndFocus;
-        }
-    }.get;
-    try resizeOwned(palette, 292, 248);
-    const defaults = try ui.control(palette, 114);
-    if (try clientContains(palette, defaults, false)) return error.PaletteViewportWasNotNarrowed;
-    var touched: usize = 0;
-    for (0..14) |_| {
-        const from = try find_focus(palette);
-        if (from == defaults) break;
-        if (win.PostMessageW(from, win.WM_KEYDOWN, win.VK_TAB, 1) == 0) return error.CannotQueuePaletteTab;
-        const start = win.GetTickCount64();
-        while (try find_focus(palette) == from) {
-            if (win.GetTickCount64() - start >= 1200) return error.PaletteTabDidNotAdvance;
-            std.Thread.sleep(10 * std.time.ns_per_ms);
-        }
-        _ = try ui.message(palette, win.WM_NULL, 0, 0);
-        if (!try clientContains(palette, try find_focus(palette), true)) return error.PaletteTabStoppedOutsideViewport;
-        touched += 1;
-    }
-    if (touched < 3 or try find_focus(palette) != defaults or !try clientContains(palette, defaults, false)) return error.PaletteDidNotRevealTabFocus;
-    try resizeOwned(palette, 580, 665);
-    try resizeOwned(palette, 292, 248);
-    if (try find_focus(palette) != defaults or !try clientContains(palette, defaults, false)) return error.PaletteResizeLostFocusVisibility;
-    try resizeOwned(palette, 580, 665);
-}
-
-fn verifyNarrowManagement(manager: win.HWND) !void {
-    try resizeOwned(manager, 310, 278);
-    const support = try ui.control(manager, 236);
-    if (try clientContains(manager, support, false)) return error.ManagementViewportWasNotNarrowed;
-    _ = try ui.message(manager, win.WM_VSCROLL, win.SB_BOTTOM, 0);
-    _ = try ui.message(manager, win.WM_HSCROLL, win.SB_RIGHT, 0);
-    if (!try clientContains(manager, support, false)) return error.ManagementActionsOutsideViewport;
-    try resizeOwned(manager, 760, 620);
 }
 
 fn waitUntilEnabled(window: win.HWND, pid: u32) bool {
@@ -1117,17 +995,17 @@ pub fn expectShortcutEditorClosed(app: OwnedProduct, parent: win.HWND, editor: w
 }
 
 fn verifyShortcutViewport(app: OwnedProduct, manager: win.HWND, editor: win.HWND, report: *Report) !void {
-    report.shortcut_minimum_track = try observeMinimumTrack(editor);
+    report.shortcut_minimum_track = try viewport.observeMinimumTrack(editor);
     const previous = win.SetThreadDpiAwarenessContext(win.GetWindowDpiAwarenessContext(editor)) orelse
         return error.CannotMatchProductDpiCoordinates;
     defer _ = win.SetThreadDpiAwarenessContext(previous);
-    const restore = try windowExtent(editor);
-    errdefer resizeWithTrackLimits(editor, restore) catch {};
+    const restore = try viewport.windowExtent(editor);
+    errdefer viewport.resizeWithTrackLimits(editor, restore) catch {};
     const dpi: windows.Dpi = .{ .value = report.shortcut_minimum_track.?.window_dpi };
-    try resizeWithTrackLimits(editor, .{ .width = dpi.pixels(380), .height = dpi.pixels(220) });
+    try viewport.resizeWithTrackLimits(editor, .{ .width = dpi.pixels(380), .height = dpi.pixels(220) });
     const save = try ui.control(editor, win.IDOK);
     _ = try ui.message(editor, win.WM_VSCROLL, win.SB_TOP, 0);
-    if (try clientContains(editor, save, false)) return error.ShortcutViewportWasNotNarrowed;
+    if (try viewport.clientContains(editor, save, false)) return error.ShortcutViewportWasNotNarrowed;
     const start = try shortcutScrollInfo(editor);
     const last = start.nMax + 1 - @as(i32, @intCast(start.nPage));
     if (start.nPos != 0 or last < 96) return error.ShortcutViewportHasNoWheelRange;
@@ -1138,11 +1016,11 @@ fn verifyShortcutViewport(app: OwnedProduct, manager: win.HWND, editor: win.HWND
     report.shortcut_wheel_pixels_per_notch = 96;
     try postShortcutWheel(editor, app, -3 * win.WHEEL_DELTA);
     try waitShortcutScroll(editor, 384);
-    if (!try clientContains(editor, save, false)) return error.ShortcutWheelDidNotRevealSave;
+    if (!try viewport.clientContains(editor, save, false)) return error.ShortcutWheelDidNotRevealSave;
     try postShortcutWheel(editor, app, -8 * win.WHEEL_DELTA);
     try waitShortcutScroll(editor, last);
-    if (!try clientContains(editor, try ui.control(editor, shortcut_save_items_id), false)) return error.ShortcutWheelDidNotRevealItemSave;
-    try resizeWithTrackLimits(editor, restore);
+    if (!try viewport.clientContains(editor, try ui.control(editor, shortcut_save_items_id), false)) return error.ShortcutWheelDidNotRevealItemSave;
+    try viewport.resizeWithTrackLimits(editor, restore);
     _ = try ui.message(editor, win.WM_VSCROLL, win.SB_TOP, 0);
     try expectShortcutEditorActive(app, manager, editor);
     report.shortcut_wheel_reached_save_button = true;
@@ -1339,7 +1217,17 @@ fn noInterferingKeys(key: PaletteKey) !void {
 
 fn activateShortcutTarget(app: OwnedProduct, window: win.HWND) !void {
     try app.checkWindow(window);
-    if (win.IsWindowVisible(window) == 0 or win.IsWindowEnabled(window) == 0) return error.ShortcutTargetNotReady;
+    activateOwnedWindow(window, app.pid) catch |failure| return switch (failure) {
+        error.WindowNotReady => error.ShortcutTargetNotReady,
+        error.WindowNotForeground => error.ShortcutTargetNotForeground,
+        else => failure,
+    };
+    try app.checkWindow(window);
+}
+
+fn activateOwnedWindow(window: win.HWND, pid: u32) !void {
+    if (pid == 0 or ui.windowPid(window) != pid) return error.ForeignProductProcess;
+    if (win.IsWindowVisible(window) == 0 or win.IsWindowEnabled(window) == 0) return error.WindowNotReady;
     if (win.GetForegroundWindow() == window) return;
     _ = win.SetForegroundWindow(window);
     if (win.GetForegroundWindow() == window) return;
@@ -1353,12 +1241,13 @@ fn activateShortcutTarget(app: OwnedProduct, window: win.HWND) !void {
     defer if (attached) {
         _ = win.AttachThreadInput(caller, foreground, 0);
     };
-    try app.checkWindow(window);
+    if (ui.windowPid(window) != pid) return error.ForeignProductProcess;
     _ = win.BringWindowToTop(window);
     _ = win.SetForegroundWindow(window);
     const started = win.GetTickCount64();
     while (win.GetForegroundWindow() != window) {
-        if (win.GetTickCount64() - started >= 600) return error.ShortcutTargetNotForeground;
+        if (ui.windowPid(window) != pid) return error.ForeignProductProcess;
+        if (win.GetTickCount64() - started >= 600) return error.WindowNotForeground;
         std.Thread.sleep(10 * std.time.ns_per_ms);
     }
 }
@@ -1530,8 +1419,10 @@ fn typePickerFilename(scratch: std.mem.Allocator, picker: Picker, path: []const 
     if (ui.windowPid(picker.window) != pid or ui.windowPid(edit) != pid or
         win.GetAncestor(edit, win.GA_ROOT) != picker.window)
         return error.ForeignProductProcess;
-    if (win.GetForegroundWindow() != picker.window) _ = win.SetForegroundWindow(picker.window);
-    if (win.GetForegroundWindow() != picker.window) return error.FilePickerNotForeground;
+    activateOwnedWindow(picker.window, pid) catch |failure| return switch (failure) {
+        error.WindowNotReady, error.WindowNotForeground => error.FilePickerNotForeground,
+        else => failure,
+    };
     // The dialog can be foreground before Explorer finishes laying out the edit.
     const placement_deadline = win.GetTickCount64() + step_timeout_ms;
     const point: win.POINT = while (true) {

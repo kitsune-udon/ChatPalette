@@ -103,7 +103,7 @@ fn command(allocator: std.mem.Allocator) !void {
     if (std.mem.eql(u8, action, "test-run") and args.len >= 5) {
         const passed = test_runner.run(allocator, args[2], args[3], args[4], args[5..]) catch |err| {
             if (err == error.DesktopSessionRequired)
-                std.debug.print("Use --session desktop for the current interactive desktop, or sandbox-browser for the isolated Brave fixture.\n", .{});
+                std.debug.print("Use --session desktop for the current interactive desktop, or sandbox-browser for the isolated browser fixture.\n", .{});
             return err;
         };
         try print("{s}\n", .{args[4]});
@@ -218,14 +218,14 @@ fn command(allocator: std.mem.Allocator) !void {
             \\chatpalette-tools verify <zip> <SHA256SUMS>
             \\chatpalette-tools extract <zip> <SHA256SUMS> <new-output-dir>
             \\chatpalette-tools source-check <project-root>
-            \\chatpalette-tools test-list [--name <native-test>]... [--session <headless|desktop>]
-            \\chatpalette-tools test-run <project-root> <build-bin-dir> <new-results-dir> [--name <native-test>]... [--session <headless|desktop>]
+            \\chatpalette-tools test-list [--name <native-test>]... [--session <headless|desktop>] [--browser-exe <path>]
+            \\chatpalette-tools test-run <project-root> <build-bin-dir> <new-results-dir> [--name <native-test>]... [--session <headless|desktop>] [--browser-exe <path>]
             \\chatpalette-tools compare <verified-0.8.0.zip> <native-exe> <decimal-HWND> <repeats-per-order> <new-output-dir> [--expect <json>]
             \\chatpalette-tools upgrade-rollback <baseline.zip> <candidate.zip> <new-output-dir> --session desktop
             \\chatpalette-tools run <new-output-dir> <timeout-ms> <exe> [args...]
             \\chatpalette-tools sandbox <exe> <new-output-dir> [--prepare-only] [-- args...]
             \\chatpalette-tools sandbox-watch <results-dir> <timeout-ms>
-            \\chatpalette-tools sandbox-browser <ChatPalette.exe> <chatpalette-browser-fixture.exe> <brave.exe> <new-output-dir> [--prepare-only]
+            \\chatpalette-tools sandbox-browser <ChatPalette.exe> <chatpalette-browser-fixture.exe> <browser-exe> <new-output-dir> [--prepare-only]
             \\chatpalette-tools sandbox-package <candidate.zip> <archive-sha256> <clean-install-test.exe> <new-output-dir> [--prepare-only]
             \\chatpalette-tools sandbox-package-guest <input-dir> <result-dir> <archive-sha256> <harness-sha256> <controller-sha256>
             \\chatpalette-tools benchmark <storage|load> <new-output-dir> <repeats> [counts...]
@@ -248,4 +248,5 @@ test {
     _ = comparator;
     _ = freeze;
     _ = test_runner;
+    _ = @import("fixture_browser.zig");
 }

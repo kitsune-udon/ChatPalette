@@ -114,6 +114,7 @@ pub const Result = struct {
 pub const Overlay = struct {
     lifecycle: enum { stable, opening, cancelling_open, closing } = .stable,
     window: win.HWND = null,
+    anchor: win.HWND = null,
     font: windows.GuiFont = .{},
     summary: win.HWND = null,
     hint: win.HWND = null,
@@ -169,6 +170,7 @@ pub const Overlay = struct {
 
     pub fn update(self: Overlay, message: []const u8, keys: shortcuts.Bindings, state: Phase) bool {
         if (self.window == null) return false;
+        if (!self.setPointerPassthrough(state == .finished)) return false;
         var stop_buffer: [30]u8 = undefined;
         var palette_buffer: [30]u8 = undefined;
         var hint_buffer: [240]u8 = undefined;
@@ -186,13 +188,36 @@ pub const Overlay = struct {
         return summary_updated and hint_updated;
     }
 
+    fn setPointerPassthrough(self: Overlay, enabled: bool) bool {
+        // A layered, transparent window passes mouse input to windows beneath it.
+        const flags = win.WS_EX_LAYERED | win.WS_EX_TRANSPARENT;
+        const before: u32 = @bitCast(win.GetWindowLongW(self.window, win.GWL_EXSTYLE));
+        if (before == 0) return false;
+        const after = if (enabled) before | flags else before & ~@as(u32, flags);
+        if (after == before) return true;
+        if (win.SetWindowLongW(self.window, win.GWL_EXSTYLE, @bitCast(after)) == 0) return false;
+        if (enabled and win.SetLayeredWindowAttributes(self.window, 0, 255, win.LWA_ALPHA) == 0) {
+            _ = win.SetWindowLongW(self.window, win.GWL_EXSTYLE, @bitCast(before));
+            return false;
+        }
+        return true;
+    }
+
     pub fn show(self: Overlay) void {
         _ = self.showChecked();
     }
 
     pub fn showChecked(self: Overlay) bool {
         if (self.window == null) return false;
-        const shown = win.SetWindowPos(self.window, win.HWND_TOPMOST, 0, 0, 0, 0, win.SWP_NOMOVE | win.SWP_NOSIZE | win.SWP_NOACTIVATE | win.SWP_SHOWWINDOW);
+        const anchor = if (win.IsWindow(self.anchor) != 0) self.anchor else win.GetForegroundWindow();
+        var position: win.POINT = .{ .x = 0, .y = 0 };
+        var flags: win.UINT = win.SWP_NOSIZE | win.SWP_NOACTIVATE | win.SWP_SHOWWINDOW;
+        if (windows.workArea(anchor) orelse windows.workArea(self.window)) |area| {
+            var bounds: win.RECT = undefined;
+            if (win.GetWindowRect(self.window, &bounds) == 0) return false;
+            position = positionInWorkArea(area, bounds, windows.Dpi.system().pixels(20));
+        } else flags |= win.SWP_NOMOVE;
+        const shown = win.SetWindowPos(self.window, win.HWND_TOPMOST, position.x, position.y, 0, 0, flags);
         return shown != 0 and win.IsWindowVisible(self.window) != 0;
     }
 
@@ -200,6 +225,21 @@ pub const Overlay = struct {
         if (self.window != null) _ = win.ShowWindow(self.window, win.SW_HIDE);
     }
 };
+
+fn positionInWorkArea(area: win.RECT, bounds: win.RECT, margin: i32) win.POINT {
+    return .{
+        .x = @min(area.left + margin, @max(area.left, area.right - (bounds.right - bounds.left))),
+        .y = @min(area.top + margin, @max(area.top, area.bottom - (bounds.bottom - bounds.top))),
+    };
+}
+
+test "reaction progress positions inside the browser monitor work area" {
+    const bounds: win.RECT = .{ .left = 0, .top = 0, .right = 400, .bottom = 228 };
+    const area: win.RECT = .{ .left = -1920, .top = -100, .right = 0, .bottom = 900 };
+    try std.testing.expectEqual(win.POINT{ .x = -1900, .y = -80 }, positionInWorkArea(area, bounds, 20));
+    const tight: win.RECT = .{ .left = 800, .top = 200, .right = 1210, .bottom = 428 };
+    try std.testing.expectEqual(win.POINT{ .x = 810, .y = 200 }, positionInWorkArea(tight, bounds, 20));
+}
 
 fn control(parent: win.HWND, dpi: windows.Dpi, comptime kind: []const u8, comptime text: []const u8, x: c_int, y: c_int, width: c_int, height: c_int, id: usize) !win.HWND {
     return win.CreateWindowExW(0, windows.wide(kind), windows.wide(text), win.WS_CHILD | win.WS_VISIBLE, dpi.pixels(x), dpi.pixels(y), dpi.pixels(width), dpi.pixels(height), parent, if (id != 0) @ptrFromInt(id) else null, win.GetModuleHandleW(null), null) orelse error.CreateReactionProgressControl;
@@ -245,6 +285,32 @@ test "reaction results distinguish an unknown operation from a stop and preserve
     try std.testing.expect(!std.mem.eql(u8, Reason.stopped.message(), Reason.unknown.message()));
     var key_buffer: [30]u8 = undefined;
     try std.testing.expectEqualStrings("Ctrl+Shift+F12", shortcuts.label(try shortcuts.parse("^+F12"), &key_buffer));
+}
+
+test "desktop: finished reaction applies pointer passthrough until the next run" {
+    try @import("test_mode.zig").requireDesktop();
+    const expect = std.testing.expect;
+    const host = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 1, 1, null, null, win.GetModuleHandleW(null), null) orelse
+        return error.CreateOverlayTestHost;
+    defer _ = win.DestroyWindow(host);
+    var overlay: Overlay = .{};
+    defer overlay.close();
+    try overlay.open(host);
+    const keys = try shortcuts.validate(shortcuts.default_keys);
+    const flags = win.WS_EX_LAYERED | win.WS_EX_TRANSPARENT;
+    try expect(overlay.update("進捗", keys, .running));
+    try expect(overlay.showChecked());
+    try expect(win.GetWindowLongW(overlay.window, win.GWL_EXSTYLE) & flags == 0);
+    try expect(win.IsWindowVisible(overlay.stop) != 0 and win.IsWindowEnabled(overlay.stop) != 0);
+
+    try expect(overlay.update("完了", keys, .finished));
+    try expect(win.IsWindowVisible(overlay.window) != 0);
+    try expect(win.GetWindowLongW(overlay.window, win.GWL_EXSTYLE) & flags == flags);
+    try expect(win.IsWindowVisible(overlay.stop) == 0);
+
+    try expect(overlay.update("進捗", keys, .running));
+    try expect(win.GetWindowLongW(overlay.window, win.GWL_EXSTYLE) & flags == 0);
+    try expect(win.IsWindowVisible(overlay.stop) != 0 and win.IsWindowEnabled(overlay.stop) != 0);
 }
 
 test "reaction results show the settings of the job that produced them" {

@@ -488,28 +488,40 @@ pub const Host = struct {
             host_failure = err;
             break :no_report null;
         };
-        var cleanup_failure: ?anyerror = null;
-        const cleanup: Cleanup = if (cli) |control|
-            control.cleanup(alloc, session_id.?, connector) catch |err| failed: {
-                cleanup_failure = err;
-                std.debug.print("Windows Sandbox の自動終了を確認できません。{s}。結果フォルダー {s}\n", .{ @errorName(err), layout.root });
-                break :failed .{ .status = .failed, .session_id = session_id, .failure = @errorName(err) };
-            }
-        else
-            .{ .status = .manual_cli_unavailable };
         const guest_passed = if (report) |value| value.passed else false;
-        writeCleanupReceipt(alloc, layout.root, cleanup, guest_passed, host_failure) catch |err| {
-            std.debug.print("Windows Sandbox の終了記録を書き込めません。{s}。結果フォルダー {s}\n", .{ @errorName(err), layout.root });
-            if (host_failure == null and guest_passed) return cleanup_failure orelse err;
-        };
+        try finishSession(alloc, layout.root, cli, session_id, connector, guest_passed, host_failure);
         if (host_failure) |err| return err;
-        // Preserve a failed guest report for the caller; cleanup failures have an independent receipt and diagnostic.
-        if (guest_passed) {
-            if (cleanup_failure) |err| return err;
-        }
         return report;
     }
 };
+
+fn finishSession(
+    alloc: std.mem.Allocator,
+    root: []const u8,
+    cli: ?SandboxCli,
+    session_id: ?[]const u8,
+    connector: ?process.SandboxConnector,
+    guest_passed: bool,
+    host_failure: ?anyerror,
+) !void {
+    var cleanup_failure: ?anyerror = null;
+    const cleanup: Cleanup = if (cli) |control|
+        control.cleanup(alloc, session_id.?, connector) catch |err| failed: {
+            cleanup_failure = err;
+            std.debug.print("Windows Sandbox の自動終了を確認できません。{s}。結果フォルダー {s}\n", .{ @errorName(err), root });
+            break :failed .{ .status = .failed, .session_id = session_id, .failure = @errorName(err) };
+        }
+    else
+        .{ .status = .manual_cli_unavailable };
+    writeCleanupReceipt(alloc, root, cleanup, guest_passed, host_failure) catch |err| {
+        std.debug.print("Windows Sandbox の終了記録を書き込めません。{s}。結果フォルダー {s}\n", .{ @errorName(err), root });
+        if (host_failure == null and guest_passed) return cleanup_failure orelse err;
+    };
+    // Keep failed guest reports available even when cleanup also fails.
+    if (guest_passed) {
+        if (cleanup_failure) |err| return err;
+    }
+}
 
 fn connectAndObserve(
     comptime Report: type,

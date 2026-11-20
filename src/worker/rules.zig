@@ -2,8 +2,36 @@ const std = @import("std");
 
 const equalFold = std.ascii.eqlIgnoreCase;
 
+pub const Browser = enum {
+    unselected,
+    chrome,
+    msedge,
+    firefox,
+    brave,
+    opera,
+    vivaldi,
+
+    pub fn fromName(name: ?[]const u8) Browser {
+        return std.meta.stringToEnum(Browser, name orelse return .unselected) orelse .unselected;
+    }
+
+    pub fn label(self: Browser) []const u8 {
+        return switch (self) {
+            .unselected => "未選択",
+            .chrome => "Chrome",
+            .msedge => "Edge",
+            .firefox => "Firefox",
+            .brave => "Brave",
+            .opera => "Opera",
+            .vivaldi => "Vivaldi",
+        };
+    }
+};
+
 pub fn supportedBrowser(name: []const u8) ?[]const u8 {
-    for ([_][]const u8{ "chrome", "msedge", "firefox", "brave", "opera", "vivaldi" }) |canonical| {
+    for (std.meta.tags(Browser)) |browser| {
+        if (browser == .unselected) continue;
+        const canonical = @tagName(browser);
         if (equalFold(name, canonical)) return canonical;
     }
     return null;

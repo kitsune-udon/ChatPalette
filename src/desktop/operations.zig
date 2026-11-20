@@ -20,6 +20,58 @@ pub fn videoId(value: []const u8) ?VideoId {
     return value[0..max_video_id].*;
 }
 
+pub const InputPlan = struct {
+    arena: std.heap.ArenaAllocator,
+    scope: []const u8,
+    id: []const u8,
+    text: []const u8,
+    channel: []const u8,
+    settings_revision: u64,
+
+    pub fn capture(allocator: std.mem.Allocator, data: model.Data, settings_revision: u64, scope: []const u8, item: model.Item) !InputPlan {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+        const owned = arena.allocator();
+        const channel = if (scope.len != 0)
+            (data.findProfile(scope) orelse return error.ProfileChanged).channel
+        else
+            "";
+        const owned_scope = try owned.dupe(u8, scope);
+        const owned_id = try owned.dupe(u8, item.id);
+        const owned_text = try owned.dupe(u8, item.text);
+        const owned_channel = try owned.dupe(u8, channel);
+        return .{
+            .arena = arena,
+            .scope = owned_scope,
+            .id = owned_id,
+            .text = owned_text,
+            .channel = owned_channel,
+            .settings_revision = settings_revision,
+        };
+    }
+
+    pub fn deinit(self: *InputPlan) void {
+        self.arena.deinit();
+    }
+
+    pub fn current(self: *const InputPlan, data: model.Data, settings_revision: u64) bool {
+        return settings_revision == self.settings_revision and self.itemCurrent(data);
+    }
+
+    pub fn itemCurrent(self: *const InputPlan, data: model.Data) bool {
+        if (self.scope.len != 0) {
+            const profile = data.findProfile(self.scope) orelse return false;
+            if (!std.mem.eql(u8, self.channel, profile.channel)) return false;
+            if (!data.preferences.auto_mode and !std.mem.eql(u8, self.scope, data.preferences.input_profile_id)) return false;
+        }
+        const items = data.itemsFor(self.scope) catch return false;
+        for (items) |item| {
+            if (std.mem.eql(u8, self.id, item.id)) return std.mem.eql(u8, self.text, item.text);
+        }
+        return false;
+    }
+};
+
 pub const FocusProof = struct {
     text: [64]u8 = undefined,
     len: usize = 0,
@@ -94,6 +146,25 @@ pub const Queue = struct {
         try self.enqueueWithSlot(allocator, event, library, operation_video, null);
     }
 
+    pub fn enqueueShortcut(self: *Queue, allocator: std.mem.Allocator, snapshot: *model.Snapshot, library_revision: u64, event: shortcuts.Event, video: ?VideoId) !void {
+        const scope: SlotSource.Scope = switch (event.action) {
+            .shared1, .shared2 => .shared,
+            .profile1, .profile2 => scope: {
+                const data = snapshot.data;
+                if (data.preferences.auto_mode) break :scope .automatic;
+                const selected = data.findProfile(data.preferences.input_profile_id);
+                break :scope .{ .manual = if (selected) |profile| profile.id else "" };
+            },
+            else => return self.enqueue(allocator, event, library_revision, video),
+        };
+        const library = try snapshot.retainLibrary();
+        errdefer library.release();
+        try self.enqueueWithSlot(allocator, event, library_revision, video, .{
+            .library = library,
+            .scope = scope,
+        });
+    }
+
     /// On success the queue owns the slot source until the operation finishes or is discarded.
     pub fn enqueueWithSlot(self: *Queue, allocator: std.mem.Allocator, event: shortcuts.Event, library: u64, operation_video: ?VideoId, source: ?SlotSource) !void {
         if (self.target != 0 and self.target != event.window) self.cancel();
@@ -153,12 +224,7 @@ test "cancelling queued slots keeps only the running command's library alive" {
         });
         defer snapshot.deinit();
         for (0..2) |_| {
-            const library = try snapshot.retainLibrary();
-            errdefer library.release();
-            try queue.enqueueWithSlot(allocator, .{ .action = .shared1, .window = 2 }, 1, null, .{
-                .library = library,
-                .scope = .shared,
-            });
+            try queue.enqueueShortcut(allocator, &snapshot, 1, .{ .action = .shared1, .window = 2 }, null);
         }
     }
 
@@ -166,6 +232,7 @@ test "cancelling queued slots keeps only the running command's library alive" {
     defer queue.finish(running, false);
     try queue.enqueue(allocator, .{ .action = .chat_focus, .window = 3 }, 2, null);
     try std.testing.expectEqual(@as(usize, 1), queue.pending.items.len);
+    try std.testing.expect(running.slot.?.scope == .shared);
     try std.testing.expectEqualStrings("original", running.slot.?.library.read().shared_items[0].text);
     try std.testing.expect(!queue.accepts(running, 2));
 }

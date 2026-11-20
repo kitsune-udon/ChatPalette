@@ -18,31 +18,7 @@ pub const Distribution = enum {
     }
 };
 
-pub const Browser = enum {
-    unselected,
-    chrome,
-    msedge,
-    firefox,
-    brave,
-    opera,
-    vivaldi,
-
-    pub fn fromName(name: ?[]const u8) Browser {
-        return std.meta.stringToEnum(Browser, name orelse return .unselected) orelse .unselected;
-    }
-
-    fn label(self: Browser) []const u8 {
-        return switch (self) {
-            .unselected => "未選択",
-            .chrome => "Chrome",
-            .msedge => "Edge",
-            .firefox => "Firefox",
-            .brave => "Brave",
-            .opera => "Opera",
-            .vivaldi => "Vivaldi",
-        };
-    }
-};
+pub const Browser = @import("../worker/rules.zig").Browser;
 
 pub const State = enum {
     ok,
@@ -83,7 +59,7 @@ pub const State = enum {
         };
     }
 
-    fn label(self: State) []const u8 {
+    pub fn label(self: State) []const u8 {
         return switch (self) {
             .ok => "確認できました",
             .focused => "チャット欄へ移動しました",

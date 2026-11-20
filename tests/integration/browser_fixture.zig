@@ -3,6 +3,7 @@ const files = @import("tool_support").files;
 const process = @import("tool_support").process;
 const storage = @import("chatpalette").storage;
 const sqlite = @import("chatpalette").sqlite;
+const fixture_browser = @import("tool_support").fixture_browser;
 const cdp = @import("browser_fixture/cdp.zig");
 const driver = @import("browser_fixture/win.zig");
 const sdk = driver.sdk;
@@ -11,6 +12,15 @@ const automation = @import("chatpalette").worker.win_api;
 const transport = @import("chatpalette").worker_client;
 const keyboard_io = @import("chatpalette").keyboard;
 const operations = @import("chatpalette").operations;
+
+const observations = @import("browser_fixture/observations.zig");
+const Event = observations.Event;
+const State = observations.State;
+const Observation = observations.Observation;
+const Modifiers = observations.Modifiers;
+const Case = observations.Case;
+const PageDiagnostic = observations.PageDiagnostic;
+const Report = observations.Report;
 
 const allocator = std.heap.page_allocator;
 const browser_class = driver.wide("Chrome_WidgetWin_1");
@@ -49,7 +59,7 @@ const context_completion_ms = 8250;
 const Arguments = struct {
     candidate: []const u8,
     output: []const u8,
-    brave: ?[]const u8,
+    browser_exe: ?[]const u8,
     ime_only: bool,
 };
 
@@ -58,16 +68,18 @@ fn arguments(args: []const []const u8) !Arguments {
     const paths = args[0 .. args.len - @intFromBool(ime_only)];
     if (paths.len < 2 or paths.len > 3 or paths[1].len == 0) return error.FixtureUsage;
     if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(args[0]), "ChatPalette.exe")) return error.ExpectedChatPaletteExecutable;
-    if (paths.len == 3 and (!std.fs.path.isAbsolute(paths[2]) or !std.ascii.eqlIgnoreCase(std.fs.path.basename(paths[2]), "brave.exe")))
-        return error.ExpectedAbsoluteBraveExecutable;
-    return .{ .candidate = paths[0], .output = paths[1], .brave = if (paths.len == 3) paths[2] else null, .ime_only = ime_only };
+    if (paths.len == 3) {
+        if (!std.fs.path.isAbsolute(paths[2])) return error.ExpectedAbsoluteBrowserExecutable;
+        _ = try fixture_browser.Browser.fromPath(paths[2]);
+    }
+    return .{ .candidate = paths[0], .output = paths[1], .browser_exe = if (paths.len == 3) paths[2] else null, .ime_only = ime_only };
 }
 
 pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     const config = arguments(args[1..]) catch |failure| {
-        std.debug.print("chatpalette-browser-fixture <ChatPalette.exe> <新規結果フォルダー> [<Braveの絶対パス>] [--ime-only]\n{s}\n", .{@errorName(failure)});
+        std.debug.print("chatpalette-browser-fixture <ChatPalette.exe> <新規結果フォルダー> [<ブラウザーEXEの絶対パス>] [--ime-only]\n{s}\n", .{@errorName(failure)});
         std.process.exit(2);
     };
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -75,12 +87,12 @@ pub fn main() !void {
     const alloc = arena.allocator();
     const cwd = std.fs.cwd();
     const source = try cwd.realpathAlloc(alloc, config.candidate);
-    const brave = try installedBrave(alloc, config.brave);
+    const browser_exe = try fixture_browser.installed(alloc, config.browser_exe);
     try cwd.makeDir(config.output);
     const output = try cwd.realpathAlloc(alloc, config.output);
     var report: Report = .{};
     const selected: []const Scenario = if (config.ime_only) &ime_cases else &cases;
-    verify(alloc, source, brave, output, selected, &report) catch |failure| {
+    verify(alloc, source, browser_exe, output, selected, &report) catch |failure| {
         report.failure = @errorName(failure);
     };
     report.passed = report.failure == null and report.cleanup_error == null and report.cases.items.len == selected.len;
@@ -93,163 +105,7 @@ pub fn main() !void {
     try std.fs.File.stdout().writeAll(try std.fmt.bufPrint(&summary, "合成ブラウザー試験 {d}件成功\n", .{report.cases.items.len}));
 }
 
-fn installedBrave(alloc: std.mem.Allocator, explicit: ?[]const u8) ![]const u8 {
-    if (explicit) |value| return std.fs.cwd().realpathAlloc(alloc, value);
-    for ([_][]const u8{ "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA" }) |name| {
-        const folder = std.process.getEnvVarOwned(alloc, name) catch continue;
-        const path = try std.fs.path.join(alloc, &.{ folder, "BraveSoftware", "Brave-Browser", "Application", "brave.exe" });
-        if (std.fs.cwd().realpathAlloc(alloc, path)) |exe| return exe else |_| continue;
-    }
-    return error.BraveUnavailable;
-}
-
-const Event = struct {
-    type: []const u8,
-    id: []const u8,
-    value: ?[]const u8 = null,
-    key: ?[]const u8 = null,
-    ctrl: ?bool = null,
-    alt: ?bool = null,
-    shift: ?bool = null,
-    meta: ?bool = null,
-};
-const Reaction = struct { id: []const u8, ms: f64, click_count: u32 };
-const Pointer = struct { type: []const u8, id: []const u8, ms: f64, x: f64, y: f64 };
-const State = struct {
-    active: []const u8,
-    chat: []const u8,
-    search: []const u8,
-    comment: []const u8 = "",
-    second_chat: ?[]const u8 = null,
-    video: []const u8,
-    url: []const u8 = "",
-    visible: bool = false,
-    focused: bool = false,
-    retired_chat: ?[]const u8,
-    events: []Event,
-    reactions: []Reaction,
-    pointers: []Pointer,
-
-    fn count(self: State, event: []const u8) usize {
-        var result: usize = 0;
-        for (self.events) |item| if (equal(item.type, event)) {
-            result += 1;
-        };
-        return result;
-    }
-
-    fn noDelivery(self: State) bool {
-        return self.count("input") == 0 and self.noEnter();
-    }
-
-    fn noEnter(self: State) bool {
-        for (self.events) |event| {
-            if (equal(event.type, "Enter") or
-                (equal(event.type, "keyup") and equal(event.key orelse "", "Enter"))) return false;
-        }
-        return true;
-    }
-};
-
-const Observation = struct {
-    at_ms: u64 = 0,
-    label: []const u8 = "",
-    foreground: usize = 0,
-    hwnd: ?usize = null,
-    pid: ?u32 = null,
-    keys: ?[]const i16 = null,
-    modifiers: ?Modifiers = null,
-    pointer: ?driver.MouseProof = null,
-    text: ?[]const u8 = null,
-    state: ?State = null,
-};
-const Modifiers = struct {
-    ctrl: bool,
-    alt: bool,
-    left_ctrl: bool,
-    left_alt: bool,
-
-    fn all(self: Modifiers, expected: bool) bool {
-        return self.ctrl == expected and self.alt == expected and self.left_ctrl == expected and self.left_alt == expected;
-    }
-};
-const Case = struct {
-    name: []const u8,
-    passed: bool = false,
-    failure: ?[]const u8 = null,
-    observations: std.ArrayList(Observation) = .empty,
-
-    fn serial(value: Case) Serialized {
-        return .{ .name = value.name, .passed = value.passed, .failure = value.failure, .observations = value.observations.items };
-    }
-    const Serialized = struct { name: []const u8, passed: bool, failure: ?[]const u8, observations: []Observation };
-};
-
-const PageDiagnostic = struct {
-    action: []const u8,
-    stage: []const u8,
-    state: []const u8,
-    worker: []const u8,
-};
-const Report = struct {
-    passed: bool = false,
-    failure: ?[]const u8 = null,
-    cleanup_error: ?[]const u8 = null,
-    sha256: ?files.HexDigest = null,
-    browser_pid: ?u32 = null,
-    browser_hwnd: ?usize = null,
-    devtools_page_attempts: u32 = 0,
-    app_pid: ?u32 = null,
-    restarted_app_pid: ?u32 = null,
-    browser_exit: ?u32 = null,
-    second_browser_exit: ?u32 = null,
-    app_exit: ?u32 = null,
-    restarted_app_exit: ?u32 = null,
-    previous_worker_exit: ?u32 = null,
-    cases: std.ArrayList(Case) = .empty,
-
-    fn serialized(self: Report, alloc: std.mem.Allocator) !Serialized {
-        const run = try alloc.alloc(Case.Serialized, self.cases.items.len);
-        for (self.cases.items, run) |item, *slot| slot.* = item.serial();
-        return .{
-            .passed = self.passed,
-            .failure = self.failure,
-            .cleanup_error = self.cleanup_error,
-            .sha256 = self.sha256,
-            .browser_pid = self.browser_pid,
-            .browser_hwnd = self.browser_hwnd,
-            .devtools_page_attempts = self.devtools_page_attempts,
-            .app_pid = self.app_pid,
-            .restarted_app_pid = self.restarted_app_pid,
-            .browser_exit = self.browser_exit,
-            .second_browser_exit = self.second_browser_exit,
-            .app_exit = self.app_exit,
-            .restarted_app_exit = self.restarted_app_exit,
-            .previous_worker_exit = self.previous_worker_exit,
-            .run = run,
-        };
-    }
-
-    const Serialized = struct {
-        passed: bool,
-        failure: ?[]const u8,
-        cleanup_error: ?[]const u8,
-        sha256: ?files.HexDigest,
-        browser_pid: ?u32,
-        browser_hwnd: ?usize,
-        devtools_page_attempts: u32,
-        app_pid: ?u32,
-        restarted_app_pid: ?u32,
-        browser_exit: ?u32,
-        second_browser_exit: ?u32,
-        app_exit: ?u32,
-        restarted_app_exit: ?u32,
-        previous_worker_exit: ?u32,
-        run: []const Case.Serialized,
-    };
-};
-
-fn verify(alloc: std.mem.Allocator, source: []const u8, brave: []const u8, output: []const u8, selected: []const Scenario, report: *Report) !void {
+fn verify(alloc: std.mem.Allocator, source: []const u8, browser_exe: []const u8, output: []const u8, selected: []const Scenario, report: *Report) !void {
     var dir = try std.fs.cwd().openDir(output, .{});
     defer dir.close();
     const archived = try files.openImmutable(alloc, source);
@@ -273,7 +129,7 @@ fn verify(alloc: std.mem.Allocator, source: []const u8, brave: []const u8, outpu
     var sink = try (try std.net.Address.parseIp4("127.0.0.1", 0)).listen(.{});
     defer sink.deinit();
     const proxy_arg = try std.fmt.allocPrint(alloc, "--proxy-server=http://127.0.0.1:{d}", .{sink.listen_address.getPort()});
-    const browser = try startBrowser(alloc, brave, output, profile, proxy_arg);
+    const browser = try startBrowser(alloc, browser_exe, output, profile, proxy_arg);
     defer browser.deinit();
     defer closeChild(browser, browser_class, &report.browser_exit, report);
     report.browser_pid = browser.pid;
@@ -294,7 +150,7 @@ fn verify(alloc: std.mem.Allocator, source: []const u8, brave: []const u8, outpu
     try app.waitForDispatch(host, host_class);
     var runner = Runner{
         .alloc = alloc,
-        .brave = brave,
+        .browser_exe = browser_exe,
         .output = output,
         .proxy_arg = proxy_arg,
         .report = report,
@@ -342,10 +198,10 @@ fn verify(alloc: std.mem.Allocator, source: []const u8, brave: []const u8, outpu
     }
 }
 
-fn startBrowser(alloc: std.mem.Allocator, brave: []const u8, directory: []const u8, profile: []const u8, proxy_arg: []const u8) !driver.Child {
+fn startBrowser(alloc: std.mem.Allocator, browser_exe: []const u8, directory: []const u8, profile: []const u8, proxy_arg: []const u8) !driver.Child {
     const profile_arg = try std.fmt.allocPrint(alloc, "--user-data-dir={s}", .{profile});
     return driver.Child.start(&.{
-        brave,                                  profile_arg,                             proxy_arg,
+        browser_exe,                            profile_arg,                             proxy_arg,
         "--proxy-bypass-list=<-loopback>",      "--host-resolver-rules=MAP * ~NOTFOUND", "--remote-debugging-port=0",
         "--remote-debugging-address=127.0.0.1", "--disable-background-networking",       "--disable-sync",
         "--disable-component-update",           "--disable-background-mode",             "--disable-extensions",
@@ -454,7 +310,7 @@ const Want = union(enum) {
 
 const Runner = struct {
     alloc: std.mem.Allocator,
-    brave: []const u8,
+    browser_exe: []const u8,
     output: []const u8,
     proxy_arg: []const u8,
     report: *Report,
@@ -676,8 +532,8 @@ const Runner = struct {
         try self.waitUntilEditable();
         try self.app.post(self.host, host_class, sdk.WM_COMMAND, diagnostics_command, 0);
         const document = try self.readSupportDocument(label);
-        const lines = try std.fmt.allocPrint(self.alloc, "ブラウザー Brave\r\n直近の操作 {s}\r\n結果 {s}\r\n処理段階 {s}\r\n補助プロセスの要求 {s}\r\n", .{
-            expected.action, expected.state, expected.stage, expected.worker,
+        const lines = try std.fmt.allocPrint(self.alloc, "ブラウザー {s}\r\n直近の操作 {s}\r\n結果 {s}\r\n処理段階 {s}\r\n補助プロセスの要求 {s}\r\n", .{
+            (try fixture_browser.Browser.fromPath(self.browser_exe)).label(), expected.action, expected.state, expected.stage, expected.worker,
         });
         try require(std.mem.indexOf(u8, document, lines) != null);
     }
@@ -784,13 +640,33 @@ const Runner = struct {
     }
 
     fn pointToButton(self: *Runner, name: []const u8) !void {
-        const point = try self.visibleElementCenter(name);
-        try self.record("verified browser pointer", .{
-            .hwnd = driver.number(self.browser_hwnd),
-            .pid = self.browser.pid,
-            .text = try std.fmt.allocPrint(self.alloc, "{s} at {d},{d}", .{ name, point.x, point.y }),
-        });
-        try driver.placePointer(self.browser, self.browser_hwnd, browser_class, point);
+        const deadline = sdk.GetTickCount64() + 5000;
+        var reported_hit = false;
+        while (true) {
+            const point = try self.visibleElementCenter(name);
+            driver.placePointer(self.browser, self.browser_hwnd, browser_class, point) catch |failure| {
+                if (failure != error.FixturePointerTarget or self.progress() == null or sdk.GetTickCount64() >= deadline)
+                    return failure;
+                if (!reported_hit) {
+                    const hit = sdk.GetAncestor(sdk.WindowFromPhysicalPoint(point), sdk.GA_ROOT);
+                    try self.record("pointer hit while the reaction overlay is visible", .{
+                        .hwnd = driver.number(hit),
+                        .pid = driver.windowPid(hit),
+                        .text = if (hit == self.progress()) "reaction overlay" else "other target",
+                    });
+                    reported_hit = true;
+                }
+                // An interactive overlay can temporarily occupy the page element's position.
+                sdk.Sleep(50);
+                continue;
+            };
+            try self.record("verified browser pointer", .{
+                .hwnd = driver.number(self.browser_hwnd),
+                .pid = self.browser.pid,
+                .text = try std.fmt.allocPrint(self.alloc, "{s} at {d},{d}", .{ name, point.x, point.y }),
+            });
+            return;
+        }
     }
 
     fn visibleElementCenter(self: *Runner, name: []const u8) !sdk.POINT {
@@ -1090,7 +966,7 @@ fn browserIme(self: *Runner) !void {
     try self.front();
     const thread = sdk.GetWindowThreadProcessId(self.browser_hwnd, null);
     const layout = sdk.GetKeyboardLayout(thread) orelse return error.BrowserKeyboardLayoutUnavailable;
-    try self.record("owned Brave keyboard layout", .{
+    try self.record("owned browser keyboard layout", .{
         .pid = self.browser.pid,
         .hwnd = driver.number(self.browser_hwnd),
         .text = try std.fmt.allocPrint(self.alloc, "0x{x}", .{@intFromPtr(layout)}),
@@ -1191,7 +1067,7 @@ fn changeWindow(self: *Runner) !void {
     try self.front();
     const profile = try std.fs.path.join(self.alloc, &.{ self.output, "profile-secondary" });
     try std.fs.cwd().makeDir(profile);
-    const other = try startBrowser(self.alloc, self.brave, self.output, profile, self.proxy_arg);
+    const other = try startBrowser(self.alloc, self.browser_exe, self.output, profile, self.proxy_arg);
     defer other.deinit();
     defer closeChild(other, browser_class, &self.report.second_browser_exit, self.report);
     defer if (other.owned(sdk.GetForegroundWindow(), browser_class)) {
@@ -1211,7 +1087,8 @@ fn changeWindow(self: *Runner) !void {
     try waitDocument(self.alloc, other, window, &other_page);
     const reset = try other_page.evaluate(self.alloc, "window.fixture.reset('input', 'DESTINATION_CHAT')");
     if (reset != .bool or !reset.bool) return error.BrowserFixtureDocumentChanged;
-    try self.record("verified second isolated Brave window", .{ .pid = other.pid, .hwnd = driver.number(window) });
+    try focusSecondaryChat(self, other, window, &other_page);
+    try self.record("verified second isolated browser window", .{ .pid = other.pid, .hwnd = driver.number(window) });
 
     try self.browser.activate(self.browser_hwnd, browser_class);
     try self.reset(.input, "SOURCE_CHAT");
@@ -1228,7 +1105,7 @@ fn changeWindow(self: *Runner) !void {
         try self.front();
         try other.activate(window, browser_class);
         try other.foreground(window, browser_class);
-        try self.record("second Brave foreground before worker resumes", .{ .pid = other.pid, .hwnd = driver.number(window) });
+        try self.record("second browser foreground before worker resumes", .{ .pid = other.pid, .hwnd = driver.number(window) });
     }
     sdk.Sleep(context_completion_ms);
     try other.foreground(window, browser_class);
@@ -1263,6 +1140,7 @@ fn rejectOldKeyRelease(self: *Runner, other: driver.Child, window: sdk.HWND, oth
         // W owns its release in the original window even if the modifiers go up first.
         try self.keys(&.{ sdk.VK_LCONTROL, sdk.VK_LMENU, 'W', -sdk.VK_LMENU, -sdk.VK_LCONTROL });
         try other.activate(window, browser_class);
+        try focusSecondaryChat(self, other, window, other_page);
         const keys: []const i16 = &.{ sdk.VK_LCONTROL, sdk.VK_LMENU, 'E', -'E', -sdk.VK_LMENU, -sdk.VK_LCONTROL, -'W' };
         try self.record("new window releases its Enter shortcut before the old window's held W", .{ .pid = other.pid, .hwnd = driver.number(window), .keys = keys });
         try self.keyboard.send(other, window, browser_class, keys);
@@ -1296,6 +1174,35 @@ fn rejectOldKeyRelease(self: *Runner, other: driver.Child, window: sdk.HWND, oth
     try require(reset == .bool and reset.bool);
     try self.browser.activate(self.browser_hwnd, browser_class);
     try self.reset(.input, "SOURCE_CHAT");
+}
+
+fn focusSecondaryChat(self: *Runner, other: driver.Child, window: sdk.HWND, page: *cdp.Page) !void {
+    try waitDocument(self.alloc, other, window, page);
+    try page.bringToFront();
+    const focused = "document.hasFocus() && document.activeElement?.id === 'input'";
+    const initial = try page.evaluate(self.alloc, focused);
+    if (initial == .bool and initial.bool) return;
+
+    // Foreground activation can leave keyboard focus in the browser chrome.
+    var client = try uia.Client.init();
+    defer client.deinit();
+    const condition = try automation.textCondition(client.automation, automation.sdk.UIA_NamePropertyId, "Chat");
+    defer automation.release(condition);
+    const deadline = sdk.GetTickCount64() + 3500;
+    while (sdk.GetTickCount64() < deadline) {
+        try other.foreground(window, browser_class);
+        const value = try page.evaluate(self.alloc, focused);
+        if (value == .bool and value.bool) return;
+        const root = try client.root(driver.number(window));
+        defer automation.release(root);
+        if (try automation.objectOrNull(automation.Element, "FindFirst", root, .{ automation.sdk.TreeScope_Descendants, condition })) |element| {
+            defer automation.release(element);
+            try other.foreground(window, browser_class);
+            try automation.check(automation.call("SetFocus", element, .{}));
+        }
+        sdk.Sleep(30);
+    }
+    return error.FixtureChatFocusMissing;
 }
 
 fn rejectReactionAfterForegroundChange(self: *Runner, other: driver.Child, window: sdk.HWND, other_page: *cdp.Page) !void {
@@ -1402,7 +1309,7 @@ fn sameVideoTab(self: *Runner, action: enum { send, slot, reaction }) !void {
     try self.reset(.input, "SOURCE_CHAT");
     const original = try waitTabChat(self, source_page, "original selected tab");
     try require(original.noDelivery() and equal(original.chat, "SOURCE_CHAT") and equal(original.video, original_video));
-    try self.record("different CDP targets for the same owned Brave HWND", .{
+    try self.record("different CDP targets for the same owned browser HWND", .{
         .pid = self.browser.pid,
         .hwnd = driver.number(self.browser_hwnd),
         .text = try std.fmt.allocPrint(self.alloc, "{s} to {s}", .{ &source_page.target_id, &destination.target_id }),
@@ -1581,6 +1488,24 @@ fn defaultSlots(self: *Runner) !void {
     try slots(self, sdk.VK_LMENU, .{ a1, a2, alpha, beta });
 }
 
+fn paletteDoubleClick(self: *Runner) !void {
+    try self.reset(.input, "leftREMOVEright");
+    try self.action("(document.getElementById('input').setSelectionRange(4, 10), true)");
+    try self.chord('Q');
+    const palette = try self.app.waitWindow(palette_class, true, 3500);
+    const list_id = 102;
+    const list = sdk.GetDlgItem(palette, list_id) orelse return error.FixturePaletteListMissing;
+    try require(driver.windowPid(list) == self.app.pid and sdk.GetParent(list) == palette);
+    const notification = (@as(usize, sdk.LBN_DBLCLK) << 16) | list_id;
+    try self.app.post(palette, palette_class, sdk.WM_COMMAND, notification, @bitCast(driver.number(list)));
+    _ = try self.waitState(.{ .chat = "left" ++ a1 ++ "right" }, "palette double-click replaces only the selection", 4000);
+    try self.waitUntilEditable();
+    const inserted = try self.observe("palette double-click inserted without sending Enter", false);
+    try require(equal(inserted.chat, "left" ++ a1 ++ "right") and equal(inserted.search, "KEEP"));
+    try require(inserted.count("Enter") == 0 and inserted.count("input") > 0);
+    for (inserted.events) |event| try require(!equal(event.key orelse "", "Enter"));
+}
+
 fn paletteAndReactionHover(self: *Runner) !void {
     try self.reset(.input, "UNCHANGED");
     try self.action("window.fixture.resetReactions() && window.fixture.showReactions(false)");
@@ -1651,7 +1576,20 @@ fn restartedSlots(self: *Runner) !void {
     try self.record("isolated DB saved manual caster B and all eleven remapped shortcuts", .{});
 
     if (!previous.running() or sdk.WaitForSingleObject(previous_worker.handle, 0) != sdk.WAIT_TIMEOUT) return error.FixtureWorkerMissing;
-    try self.record("original worker is alive before same-path takeover", .{ .pid = previous_worker.pid });
+    try self.record("original worker is alive before same-path restart", .{ .pid = previous_worker.pid });
+    const code = try previous.closeGracefully(host_class);
+    if (code != 0) return error.FixtureOriginalAppDidNotExitCleanly;
+    self.report.app_exit = code;
+    if (sdk.WaitForSingleObject(previous_worker.handle, 0) != sdk.WAIT_OBJECT_0) return error.FixturePreviousWorkerSurvivedRestart;
+    var worker_exit: sdk.DWORD = undefined;
+    if (sdk.GetExitCodeProcess(previous_worker.handle, &worker_exit) == 0 or worker_exit != 1)
+        return error.FixtureUnexpectedPreviousWorkerExit;
+    self.report.previous_worker_exit = worker_exit;
+    try previous.finishJob();
+    try self.record("original app exited before same-path relaunch", .{ .pid = previous.pid, .hwnd = driver.number(previous_host) });
+    try self.record("original worker exited with the disconnect code", .{ .pid = previous_worker.pid });
+
+    // A duplicate quiet launch recalls the resident. Relaunch after closing it.
     const replacement = try driver.Child.start(&.{ previous.path, "--quiet" }, candidate_dir, false);
     defer replacement.deinit();
     defer closeChild(replacement, host_class, &self.report.restarted_app_exit, self.report);
@@ -1660,18 +1598,6 @@ fn restartedSlots(self: *Runner) !void {
     const host = try replacement.waitWindow(host_class, false, 9500);
     _ = try replacement.waitWindow(palette_class, false, 6000);
     try replacement.waitForDispatch(host, host_class);
-    if (sdk.WaitForSingleObject(previous_worker.handle, 0) != sdk.WAIT_OBJECT_0) return error.FixturePreviousWorkerSurvivedTakeover;
-    var worker_exit: sdk.DWORD = undefined;
-    if (sdk.GetExitCodeProcess(previous_worker.handle, &worker_exit) == 0 or worker_exit != 1)
-        return error.FixtureUnexpectedPreviousWorkerExit;
-    self.report.previous_worker_exit = worker_exit;
-    if (sdk.WaitForSingleObject(previous.handle, 2500) != sdk.WAIT_OBJECT_0) return error.FixtureOriginalAppSurvivedTakeover;
-    var code: sdk.DWORD = undefined;
-    if (sdk.GetExitCodeProcess(previous.handle, &code) == 0 or code != 0) return error.FixtureOriginalAppDidNotExitCleanly;
-    self.report.app_exit = code;
-    try previous.finishJob();
-    try self.record("replacement acquired the same path and the original app and worker exited", .{ .pid = previous.pid, .hwnd = driver.number(previous_host) });
-    try self.record("original worker exited with the disconnect code", .{ .pid = previous_worker.pid });
     self.app = replacement;
     self.host = host;
     defer {
@@ -1738,7 +1664,10 @@ fn verifyRestartedPageKeys(self: *Runner) !void {
     try self.waitUntilEditable();
 
     try self.action("window.fixture.resetReactions() && window.fixture.showReactions(false)");
+    const result_overlay = self.progress() orelse return error.FixtureProgressMissing;
     try self.pointToButton("Search");
+    try require(self.progress() == result_overlay);
+    try self.record("browser pointer reached Search before the result overlay closed", .{ .hwnd = driver.number(result_overlay), .pid = self.app.pid });
     try self.reset(.input, "KEEP_CHAT");
     try self.chordWith('R', shift);
     _ = try self.waitState(.{ .event = "launcher_hover" }, "remapped show shortcut hovered the reaction launcher", 3500);
@@ -1762,7 +1691,7 @@ fn register(self: *Runner) !void {
     try require((try self.observe("no registration operations", false)).reactions.len == 0);
 
     const path = try std.fs.path.join(self.alloc, &.{ self.output, "candidate", database });
-    const saved = try registrationPayload(self.alloc, path);
+    const saved = try registrationPayload(self.alloc, path, try fixture_browser.Browser.fromPath(self.browser_exe));
     try self.action("(document.getElementById('fixture-heart').setAttribute('aria-label', 'ハート'), true)");
     {
         // A competing write transaction leaves the committed registration available to readers.
@@ -1777,7 +1706,7 @@ fn register(self: *Runner) !void {
     }
     const detail = try self.supportDocument(6, "database lock was reported after capture");
     try require(std.mem.indexOf(u8, detail, "DatabaseLocked") != null);
-    try require(equal(saved, try registrationPayload(self.alloc, path)));
+    try require(equal(saved, try registrationPayload(self.alloc, path, try fixture_browser.Browser.fromPath(self.browser_exe))));
     try require((try self.observe("no reaction from the failed capture", false)).reactions.len == 0);
     try self.action("(document.getElementById('fixture-heart').setAttribute('aria-label', 'Heart'), true)");
     try diagnosisWhileRegistering(self);
@@ -1856,10 +1785,10 @@ fn diagnosisWhileRegistering(self: *Runner) !void {
     try self.action("window.fixture.showReactions(true)");
 }
 
-fn registrationPayload(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
+fn registrationPayload(alloc: std.mem.Allocator, path: []const u8, browser: fixture_browser.Browser) ![]u8 {
     var reader = try sqlite.Connection.open(alloc, path, .read_only);
     defer reader.close();
-    return reader.scalarText(alloc, "SELECT payload FROM reaction_registrations WHERE browser='brave'", &.{});
+    return reader.scalarText(alloc, "SELECT payload FROM reaction_registrations WHERE browser=?", &.{.{ .text = @tagName(browser) }});
 }
 
 fn confirm(self: *Runner) !void {
@@ -2030,6 +1959,7 @@ const cases = [_]Scenario{
     .{ .name = "same-video tab proof rejects stale Enter and allows a fresh Enter shortcut", .run = sameVideoTabSend },
     .{ .name = "same-video tab proof rejects stale insertion and allows a fresh slot shortcut", .run = sameVideoTabSlot },
     .{ .name = "default keys select both manual caster slots and both shared slots without Enter", .run = defaultSlots },
+    .{ .name = "palette double-click replaces the selected text without sending Enter", .run = paletteDoubleClick },
     .{ .name = "default palette and reaction display keys open and hover without sending", .run = paletteAndReactionHover },
     .{ .name = "registration retries and captures at the physical pointer", .run = register },
     .{ .name = "confirmation shows progress and sends nothing", .run = confirm },
@@ -2047,11 +1977,11 @@ const ime_cases = [_]Scenario{
 test "browser fixture refuses invalid executable arguments and malformed debugging ports before any GUI work" {
     try std.testing.expectError(error.FixtureUsage, arguments(&.{}));
     try std.testing.expectError(error.ExpectedChatPaletteExecutable, arguments(&.{ "Other.exe", "result" }));
-    try std.testing.expectError(error.ExpectedAbsoluteBraveExecutable, arguments(&.{ "ChatPalette.exe", "result", "brave.exe" }));
-    try std.testing.expectError(error.ExpectedAbsoluteBraveExecutable, arguments(&.{ "ChatPalette.exe", "result", "C:\\Apps\\chrome.exe" }));
+    try std.testing.expectError(error.ExpectedAbsoluteBrowserExecutable, arguments(&.{ "ChatPalette.exe", "result", "brave.exe" }));
+    try std.testing.expectError(error.UnsupportedFixtureBrowser, arguments(&.{ "ChatPalette.exe", "result", "C:\\Apps\\firefox.exe" }));
     try std.testing.expect(!(try arguments(&.{ "ChatPalette.exe", "result" })).ime_only);
     try std.testing.expect((try arguments(&.{ "ChatPalette.exe", "result", "--ime-only" })).ime_only);
-    try std.testing.expectEqualStrings("C:\\Apps\\brave.exe", (try arguments(&.{ "ChatPalette.exe", "result", "C:\\Apps\\brave.exe", "--ime-only" })).brave.?);
+    try std.testing.expectEqualStrings("C:\\Apps\\brave.exe", (try arguments(&.{ "ChatPalette.exe", "result", "C:\\Apps\\brave.exe", "--ime-only" })).browser_exe.?);
     try std.testing.expectEqual(@as(u16, 65535), try parsePort("65535\r\n/devtools/browser/fixture\r\n"));
     try std.testing.expectError(error.InvalidDebuggingPort, parsePort("0\n/devtools/browser/fixture"));
     try std.testing.expectError(error.InvalidDebuggingPort, parsePort("80\nhttp://example.invalid"));

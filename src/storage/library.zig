@@ -64,6 +64,16 @@ const UndoChange = union(enum) {
 const Entry = struct {
     arena: std.heap.ArenaAllocator,
     change: UndoChange,
+    description: UndoDescription,
+};
+
+pub const UndoDescription = struct {
+    target: ?[]const u8,
+    operation: union(enum) {
+        item: std.meta.Tag(ItemCommand),
+        profile: std.meta.Tag(ProfileCommand),
+        assignment,
+    },
 };
 
 pub const History = struct {
@@ -86,10 +96,16 @@ pub const History = struct {
         self.length = 0;
     }
 
-    fn publish(self: *History, store: anytype, snapshot: *Snapshot, draft: model.Data, undo_change: UndoChange) !void {
-        var entry: Entry = .{ .arena = std.heap.ArenaAllocator.init(self.allocator), .change = undefined };
+    pub fn latest(self: *const History) ?UndoDescription {
+        if (self.length == 0) return null;
+        return self.entries[(self.start + self.length - 1) % self.entries.len].description;
+    }
+
+    fn publish(self: *History, store: anytype, snapshot: *Snapshot, draft: model.Data, undo_change: UndoChange, description: UndoDescription) !void {
+        var entry: Entry = .{ .arena = std.heap.ArenaAllocator.init(self.allocator), .change = undefined, .description = description };
         errdefer entry.arena.deinit();
         const own = entry.arena.allocator();
+        if (description.target) |target| entry.description.target = try own.dupe(u8, target);
         entry.change = switch (undo_change) {
             .items => |steps| .{ .items = .{
                 .first = try steps.first.owned(own),
@@ -197,7 +213,10 @@ pub const History = struct {
         const selected = try temp.dupe(u8, selection);
         const selected_scope = try temp.dupe(u8, selection_scope);
         const text_only = command == .edit and old.?.slot == command.edit.values.slot and inverse.restore[1] == null;
-        try self.publish(store, snapshot, draft, .{ .items = .{ .first = inverse, .second = second, .text_only = text_only } });
+        try self.publish(store, snapshot, draft, .{ .items = .{ .first = inverse, .second = second, .text_only = text_only } }, .{
+            .target = if (snapshot.data.findProfile(scope)) |profile_value| profile_value.name else null,
+            .operation = .{ .item = std.meta.activeTag(command) },
+        });
         if (selected.len == 0) return null;
         const published = try snapshot.data.itemsFor(selected_scope);
         return published[itemIndex(published, selected) orelse return error.ItemMissing].id;
@@ -244,7 +263,10 @@ pub const History = struct {
             },
         };
         draft.profiles = profiles.items;
-        try self.publish(store, snapshot, draft, inverse);
+        try self.publish(store, snapshot, draft, inverse, .{
+            .target = if (command == .delete) inverse.insert_profile.profile.name else profiles.items[index].name,
+            .operation = .{ .profile = std.meta.activeTag(command) },
+        });
         return if (snapshot.data.findProfile(labelled)) |profile_value| profile_value.id else null;
     }
 
@@ -255,7 +277,10 @@ pub const History = struct {
         var draft = try draftData(temp, snapshot.data);
         const previous = try applyAssignment(temp, &draft, .{ .scope = scope, .ids = .{ first, second } });
         if (equal(u8, first, previous[0]) and equal(u8, second, previous[1])) return false;
-        try self.publish(store, snapshot, draft, .{ .assign = .{ .scope = scope, .ids = previous } });
+        try self.publish(store, snapshot, draft, .{ .assign = .{ .scope = scope, .ids = previous } }, .{
+            .target = if (snapshot.data.findProfile(scope)) |profile_value| profile_value.name else null,
+            .operation = .assignment,
+        });
         return true;
     }
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const test_runner = @import("tools/test_runner.zig");
+const test_registry = @import("tools/test_registry.zig");
 const AppTestMode = enum { all, headless, desktop };
 
 pub fn build(b: *std.Build) void {
@@ -175,19 +175,19 @@ fn addFocusedCheck(
 ) void {
     const name = b.option([]const u8, "test-case", "Registered native test for the check step");
     const output = b.option([]const u8, "test-results", "New directory for check results");
-    const session = b.option(test_runner.Session, "test-session", "Select desktop explicitly for tests that use the current interactive session");
-    const brave = b.option([]const u8, "brave-exe", "Path to brave.exe for the Sandbox browser check");
+    const session = b.option(test_registry.Session, "test-session", "Select desktop explicitly for tests that use the current interactive session");
+    const browser_exe = b.option([]const u8, "browser-exe", "Path to a browser executable for the browser fixture");
+    const legacy_browser_exe = b.option([]const u8, "brave-exe", "Legacy alias for -Dbrowser-exe");
     const check = b.step("check", "Build and run one registered native test with the source check");
     if (name == null or output == null or output.?.len == 0) {
         check.dependOn(&b.addFail("check requires -Dtest-case=<name> and -Dtest-results=<new-dir>").step);
         return;
     }
-    const selected = for (test_runner.cases) |entry| {
-        if (std.mem.eql(u8, entry.name, name.?)) break entry;
-    } else {
+    const index = test_registry.indexOf(name.?) orelse {
         check.dependOn(&b.addFail(b.fmt("Unknown native test '{s}'. See chatpalette-tools test-list.", .{name.?})).step);
         return;
     };
+    const selected = test_registry.cases[index];
     const artifact = for (artifacts) |entry| {
         if (std.mem.eql(u8, entry.dest_sub_path, selected.executable)) break entry;
     } else @panic("A registered native test has no install artifact");
@@ -197,8 +197,8 @@ fn addFocusedCheck(
     run.step.dependOn(&artifact.step);
     if (selected.kind.usesApplication()) run.step.dependOn(&app.step);
     if (selected.kind == .browser and session == null) {
-        const browser_path = brave orelse {
-            check.dependOn(&b.addFail("The Brave fixture runs in Windows Sandbox by default. Pass -Dbrave-exe=<path-to-brave.exe>.").step);
+        const browser_path = browser_exe orelse legacy_browser_exe orelse {
+            check.dependOn(&b.addFail("The browser fixture runs in Windows Sandbox by default. Pass -Dbrowser-exe=<path-to-browser-exe>.").step);
             return;
         };
         const source = b.addRunArtifact(tools);
@@ -219,6 +219,9 @@ fn addFocusedCheck(
             return;
         }
         run.addArgs(&.{ "test-run", b.pathFromRoot("."), b.getInstallPath(.bin, ""), b.pathFromRoot(output.?), "--name", selected.name, "--session", @tagName(required_session) });
+        if (selected.kind == .browser) {
+            if (browser_exe orelse legacy_browser_exe) |path| run.addArgs(&.{ "--browser-exe", b.pathFromRoot(path) });
+        }
     }
     check.dependOn(&run.step);
 }

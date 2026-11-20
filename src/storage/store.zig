@@ -24,6 +24,7 @@ pub const backupForReset = recovery.backupForReset;
 pub const ResetReport = recovery.Report;
 pub const LibraryHistory = library.History;
 pub const ItemCommand = library.ItemCommand;
+pub const UndoDescription = library.UndoDescription;
 pub const ProfileCommand = library.ProfileCommand;
 
 pub const application_id = 1_129_335_892;
@@ -127,11 +128,11 @@ pub const Store = struct {
     /// Writes the complete snapshot. Prefer saveLibrary and savePreferences for edits
     /// that do not own the registration state.
     pub fn save(self: *Store, data: Data) !void {
-        try self.saveData(data, true);
+        try self.saveData(data, .complete);
     }
 
     pub fn saveLibrary(self: *Store, data: Data) !void {
-        try self.saveData(data, false);
+        try self.saveData(data, .library);
     }
 
     pub fn saveLibraryFromSnapshot(self: *Store, before: *const Snapshot, after: *Snapshot, text: ?library.TextEdit) !void {
@@ -165,7 +166,7 @@ pub const Store = struct {
 
         const text_bytes = try model.validatedTextBytes(self.allocator, after.data);
         var committed: LibraryRevision = undefined;
-        try self.saveDataInTransaction(after.data, false, if (standard_tables) &committed else null);
+        try self.saveDataInTransaction(after.data, .library, if (standard_tables) &committed else null);
         if (standard_tables)
             after.library_origin = .{ .connection = self.connection_id, .revision = committed, .text_bytes = text_bytes };
     }
@@ -209,19 +210,21 @@ pub const Store = struct {
         return .{ .connection = self.connection_id, .revision = revision, .text_bytes = new_bytes };
     }
 
-    fn saveData(self: *Store, data: Data, replace_registrations: bool) !void {
+    const SaveScope = enum { library, complete };
+
+    fn saveData(self: *Store, data: Data, scope: SaveScope) !void {
         self.db.clearFailure();
         try model.validate(self.allocator, data);
         try self.beginWrite();
         errdefer self.db.rollback();
-        try self.saveDataInTransaction(data, replace_registrations, null);
+        try self.saveDataInTransaction(data, scope, null);
     }
 
-    fn saveDataInTransaction(self: *Store, data: Data, replace_registrations: bool, committed: ?*LibraryRevision) !void {
-        if (!replace_registrations and try self.saveUnchangedLibraryShape(data, committed)) return;
+    fn saveDataInTransaction(self: *Store, data: Data, scope: SaveScope, committed_out: ?*LibraryRevision) !void {
+        if (scope == .library and try self.saveUnchangedLibraryShape(data, committed_out)) return;
         self.discardLibraryCache();
         try writeLibrary(self.allocator, &self.db, data);
-        if (replace_registrations) {
+        if (scope == .complete) {
             try writePreferences(&self.db, data.preferences);
             try self.db.exec("DELETE FROM reaction_registrations");
             var browsers = std.StringHashMap(void).init(self.allocator);
@@ -234,8 +237,9 @@ pub const Store = struct {
         } else {
             try writeActiveScope(&self.db, data.preferences.input_profile_id);
         }
-        if (committed) |out| out.* = try readLibraryRevision(&self.db, self.data_version.?);
+        const committed = if (committed_out != null) try readLibraryRevision(&self.db, self.data_version.?) else undefined;
         try self.db.exec("COMMIT");
+        if (committed_out) |out| out.* = committed;
     }
 
     fn discardLibraryCache(self: *Store) void {
@@ -336,8 +340,7 @@ pub const Store = struct {
         defer reader.close();
         try reader.exec("BEGIN");
         errdefer reader.rollback();
-        try reader.checkIntegrity();
-        var current = try readSnapshot(self.allocator, &reader, null);
+        var current = try readCheckedSnapshot(self.allocator, &reader);
         defer current.deinit();
         try reader.exec("COMMIT");
         try writeVerifiedJson(self.allocator, current.data, destination);
@@ -348,8 +351,7 @@ pub const Store = struct {
     pub fn createImportBackup(self: *Store, destination: []const u8) !void {
         try self.beginWrite();
         errdefer self.db.rollback();
-        try self.db.checkIntegrity();
-        var current = try readSnapshot(self.allocator, &self.db, null);
+        var current = try readCheckedSnapshot(self.allocator, &self.db);
         defer current.deinit();
         try writeVerifiedJson(self.allocator, current.data, destination);
         try self.db.exec("COMMIT");
@@ -420,8 +422,7 @@ fn createDatabase(path: []const u8) !void {
         defer db.close();
         try configure(allocator, &db);
         try initialize(&db);
-        try db.checkIntegrity();
-        var check = try readSnapshot(allocator, &db, null);
+        var check = try readCheckedSnapshot(allocator, &db);
         defer check.deinit();
         if (check.data.profiles.len != 0 or check.data.shared_items.len != 0 or check.data.registrations.len != 0)
             return error.InvalidDatabase;
@@ -457,8 +458,7 @@ pub fn readJson(allocator: Allocator, path: []const u8) !Snapshot {
     for (from_file.data.registrations) |registration_value|
         try registrations.save(allocator, &db, registration_value.payload_json, registration_value.browser);
     try db.exec("COMMIT");
-    try db.checkIntegrity();
-    return readSnapshot(allocator, &db, null);
+    return readCheckedSnapshot(allocator, &db);
 }
 
 fn writeVerifiedJson(allocator: Allocator, data: Data, destination: []const u8) !void {
@@ -483,6 +483,11 @@ fn writeVerifiedJson(allocator: Allocator, data: Data, destination: []const u8) 
     defer check.deinit();
     if (!Data.eql(data, check.data)) return error.BackupVerificationFailed;
     try std.os.windows.MoveFileEx(temporary, destination, 8);
+}
+
+fn readCheckedSnapshot(allocator: Allocator, db: *sqlite.Connection) !Snapshot {
+    try db.checkIntegrity();
+    return readSnapshot(allocator, db, null);
 }
 
 fn readSnapshot(allocator: Allocator, db: *sqlite.Connection, text_bytes: ?*usize) !Snapshot {
@@ -1525,6 +1530,8 @@ test "library edits preserve identity and original slot owners through undo" {
     const profile = try alloc.dupe(u8, new_profile);
     defer alloc.free(profile);
     try std.testing.expectEqualStrings("作成", current.data.findProfile(profile).?.name);
+    try std.testing.expectEqualStrings("作成", history.latest().?.target.?);
+    try std.testing.expectEqual(.add, history.latest().?.operation.profile);
     const first_id = (try history.item(&store, &current, "", .{ .add = .{ .name = " First ", .text = "👏", .slot = 1 } })).?;
     const first = try alloc.dupe(u8, first_id);
     defer alloc.free(first);
@@ -1535,6 +1542,7 @@ test "library edits preserve identity and original slot owners through undo" {
     try std.testing.expectEqual(@as(u8, 1), current.data.shared_items[1].slot);
     _ = try history.item(&store, &current, "", .{ .edit = .{ .id = first, .values = .{ .name = "First", .text = " changed ", .slot = 2 } } });
     try std.testing.expect(try history.assign(&store, &current, "", first, second));
+    try std.testing.expect(history.latest().?.target == null and history.latest().?.operation == .assignment);
     try std.testing.expectEqual(@as(u8, 1), current.data.shared_items[0].slot);
     try std.testing.expectEqual(@as(u8, 2), current.data.shared_items[1].slot);
     _ = try history.item(&store, &current, "", .{ .up = second });
@@ -1551,8 +1559,11 @@ test "library edits preserve identity and original slot owners through undo" {
     _ = try history.profile(&store, &current, .{ .bind = .{ .id = profile, .channel = "/@new" } });
     _ = try history.profile(&store, &current, .{ .delete = profile });
     try std.testing.expectEqual(@as(usize, 0), current.data.profiles.len);
+    try std.testing.expectEqualStrings("Changed", history.latest().?.target.?);
+    try std.testing.expectEqual(.delete, history.latest().?.operation.profile);
 
     try std.testing.expect(try history.undo(&store, &current));
+    try std.testing.expectEqual(.bind, history.latest().?.operation.profile);
     try std.testing.expectEqualStrings(first, current.data.profiles[0].items[0].id);
     try std.testing.expectEqualStrings("/@new", current.data.profiles[0].channel);
     for (0..4) |_| try std.testing.expect(try history.undo(&store, &current));

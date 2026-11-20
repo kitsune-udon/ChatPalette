@@ -96,14 +96,14 @@ pub const Client = struct {
     fn addressCondition(automation: *win.Automation) !*win.Condition {
         const edit = try win.integerCondition(automation, sdk.UIA_ControlTypePropertyId, sdk.UIA_EditControlTypeId);
         defer release(edit);
-        // Firefox exposes its address input as a ComboBox.
+        // Some browser chrome exposes the address input as a ComboBox with a known ID.
         const combo = try win.integerCondition(automation, sdk.UIA_ControlTypePropertyId, sdk.UIA_ComboBoxControlTypeId);
         defer release(combo);
         const urlbar = try win.textCondition(automation, sdk.UIA_AutomationIdPropertyId, "urlbar-input");
         defer release(urlbar);
-        const firefox = try object(win.Condition, "CreateAndCondition", automation, .{ combo, urlbar });
-        defer release(firefox);
-        return object(win.Condition, "CreateOrCondition", automation, .{ edit, firefox });
+        const address_combo = try object(win.Condition, "CreateAndCondition", automation, .{ combo, urlbar });
+        defer release(address_combo);
+        return object(win.Condition, "CreateOrCondition", automation, .{ edit, address_combo });
     }
 
     // A page can contain an Edit named "Address". Require the target's native

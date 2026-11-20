@@ -10,20 +10,23 @@
 | リアクションを準備、実行、停止する | [リアクション](user/reactions.md) |
 | キー・初期値・保存範囲を調べる | [リファレンス](user/reference.md) |
 | 以前の版から更新する、データを保管・復元する | [更新手順](user/maintenance.md#更新を反映する) · [バックアップ](user/maintenance.md#バックアップする) |
+| 起動に失敗し、保管していた設定を戻したい | [DBの控えから復元する](user/maintenance.md#起動できない場合に手動で復元する) · [JSONの控えから復元する](user/maintenance.md#別のフォルダーでjsonから復元する) |
 | アプリが起動しない、キーや入力欄が反応しない | [症状から確認する](user/maintenance.md#症状から確認する) |
 
 ## 開発する
 
 | 目的 | 文書 |
 |---|---|
-| ソースからビルドする、変更箇所を探す、配布ZIPを作る | [開発・配布手順](developer/guide.md) |
+| ソースからビルドする、変更箇所を探す | [開発・配布手順](developer/guide.md) |
+| 配布候補を固定し、ZIPと検証結果を照合する | [リリース手順](developer/guide.md#リリース手順) |
+| 生成済みEXEでリポジトリ直下の本体を更新する | [生成済みEXEをルートにコピーする](developer/guide.md#生成済みexeをルートにコピーする) |
 | 本体とワーカーの役割、入力・設定保存の流れを読む | [設計と状態の所有](developer/architecture.md) |
 | 変更に合う試験を選び、WindowsやSandboxで実行する | [検証ガイド](developer/testing.md) |
 | 0.8.0と現行版に同じ要求を送り、ワーカーの応答や所要時間を比べる | [ワーカーの比較手順](developer/worker-comparison.md) |
 
 ## 過去の版と移行記録を調べる
 
-利用者向けの変更点は[変更履歴](../CHANGELOG.md)にあります。次の資料には、AutoHotkey・PowerShell版からZig版に切り替えた当時の計画、試験条件、結果を保存しています。
+利用者向けの変更点は[変更履歴](../CHANGELOG.md)にあります。次の資料は、AutoHotkey・PowerShell版の0.8.0からZig版の0.9.0に切り替えた時点の計画・試験条件・結果です。いま使っている版を更新する場合は[現在の更新手順](user/maintenance.md#更新を反映する)を参照してください。
 
 | 調べたいこと | 資料 |
 |---|---|

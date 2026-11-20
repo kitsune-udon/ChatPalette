@@ -410,7 +410,7 @@ fn matchingButton(client: *uia.Client, candidates: []const CaptureRecord, first:
         if (kind != reaction_kind and (aliasMatches(candidates[button].token, kind) or aliasMatches(candidates[image].token, kind)))
             return null;
     }
-    // Firefox can expose an invokable image with the same label inside its button.
+    // Some providers expose an invokable image with the same label inside its button.
     if (!(imageBelongsToButton(client, candidates[image].element, candidates[button].element) catch false)) return null;
     return button;
 }

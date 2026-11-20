@@ -231,14 +231,26 @@ fn package(
     try files.publish(alloc, stage_path, out_absolute);
 }
 
+const VerifiedArchive = struct {
+    file: std.fs.File,
+    manifest: []const u8,
+    digest: files.Digest,
+
+    fn open(scratch: std.mem.Allocator, archive: []const u8, manifest_path: []const u8) !VerifiedArchive {
+        const manifest = try std.fs.cwd().readFileAlloc(scratch, manifest_path, manifest_limit);
+        const archive_path = try std.fs.cwd().realpathAlloc(scratch, archive);
+        const file = try files.openImmutable(scratch, archive_path);
+        errdefer file.close();
+        return .{ .file = file, .manifest = manifest, .digest = try zip.verify(scratch, file, manifest) };
+    }
+};
+
 pub fn verifyCandidate(allocator: std.mem.Allocator, archive: []const u8, manifest_path: []const u8) !files.Digest {
-    const manifest = try std.fs.cwd().readFileAlloc(allocator, manifest_path, manifest_limit);
-    defer allocator.free(manifest);
-    const archive_path = try std.fs.cwd().realpathAlloc(allocator, archive);
-    defer allocator.free(archive_path);
-    const file = try files.openImmutable(allocator, archive_path);
-    defer file.close();
-    return zip.verify(allocator, file, manifest);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const verified = try VerifiedArchive.open(arena.allocator(), archive, manifest_path);
+    defer verified.file.close();
+    return verified.digest;
 }
 
 /// Verify against the detached manifest before opening any archive path for extraction.
@@ -246,13 +258,10 @@ pub fn extractCandidate(allocator: std.mem.Allocator, archive: []const u8, manif
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const manifest = try std.fs.cwd().readFileAlloc(alloc, manifest_path, manifest_limit);
-    const archive_path = try std.fs.cwd().realpathAlloc(alloc, archive);
-    const file = try files.openImmutable(alloc, archive_path);
-    defer file.close();
-    const archive_hash = try zip.verify(alloc, file, manifest);
-    try extractVerified(alloc, file, manifest, output);
-    return archive_hash;
+    const verified = try VerifiedArchive.open(alloc, archive, manifest_path);
+    defer verified.file.close();
+    try extractVerified(alloc, verified.file, verified.manifest, output);
+    return verified.digest;
 }
 
 fn extractVerified(alloc: std.mem.Allocator, file: std.fs.File, manifest: []const u8, output: []const u8) !void {

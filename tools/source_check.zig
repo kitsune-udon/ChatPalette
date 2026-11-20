@@ -307,6 +307,12 @@ fn checkZigFile(alloc: std.mem.Allocator, dir: std.fs.Dir, name: []const u8, pat
 pub fn run(alloc: std.mem.Allocator, root: []const u8) !void {
     var project = try std.fs.cwd().openDir(root, .{});
     defer project.close();
+    try checkPackagedDocuments(alloc, project);
+    try checkBuildGraph(alloc, project);
+    for (release.source_roots) |source_root| try checkSourceTree(alloc, project, source_root);
+}
+
+fn checkPackagedDocuments(alloc: std.mem.Allocator, project: std.fs.Dir) !void {
     const version = try project.readFileAlloc(alloc, "VERSION", 1024);
     defer alloc.free(version);
     try utf8(version);
@@ -318,28 +324,32 @@ pub fn run(alloc: std.mem.Allocator, root: []const u8) !void {
         try utf8(bytes);
         if (std.mem.endsWith(u8, path, ".md")) try links(alloc, project, path, bytes);
     }
+}
+
+fn checkBuildGraph(alloc: std.mem.Allocator, project: std.fs.Dir) !void {
     try checkZigFile(alloc, project, "build.zig", "build.zig", .zig);
     checkZigFile(alloc, project, "build.zig.zon", "build.zig.zon", .zon) catch |err| {
         if (err != error.FileNotFound) return err;
     };
-    for (release.source_roots) |source_root| {
-        var dir = try project.openDir(source_root, .{ .iterate = true, .no_follow = true });
-        defer dir.close();
-        var walk = try dir.walk(alloc);
-        defer walk.deinit();
-        while (try walk.next()) |entry| {
-            if (entry.kind == .directory) continue;
-            if (entry.kind != .file) return error.UnexpectedNativeSource;
-            const extension = std.fs.path.extension(entry.basename);
-            if (std.mem.eql(u8, extension, ".zig")) {
-                const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ source_root, entry.path });
-                defer alloc.free(path);
-                std.mem.replaceScalar(u8, path, '\\', '/');
-                try checkZigFile(alloc, entry.dir, entry.basename, path, .zig);
-            } else if (legacyExtension(extension)) {
-                std.debug.print("{s}/{s}\n", .{ source_root, entry.path });
-                return error.LegacyExecutableSource;
-            }
+}
+
+fn checkSourceTree(alloc: std.mem.Allocator, project: std.fs.Dir, source_root: []const u8) !void {
+    var dir = try project.openDir(source_root, .{ .iterate = true, .no_follow = true });
+    defer dir.close();
+    var walk = try dir.walk(alloc);
+    defer walk.deinit();
+    while (try walk.next()) |entry| {
+        if (entry.kind == .directory) continue;
+        if (entry.kind != .file) return error.UnexpectedNativeSource;
+        const extension = std.fs.path.extension(entry.basename);
+        if (std.mem.eql(u8, extension, ".zig")) {
+            const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ source_root, entry.path });
+            defer alloc.free(path);
+            std.mem.replaceScalar(u8, path, '\\', '/');
+            try checkZigFile(alloc, entry.dir, entry.basename, path, .zig);
+        } else if (legacyExtension(extension)) {
+            std.debug.print("{s}/{s}\n", .{ source_root, entry.path });
+            return error.LegacyExecutableSource;
         }
     }
 }

@@ -4,43 +4,18 @@ const process = @import("process.zig");
 const freeze = @import("freeze.zig");
 
 const Allocator = std.mem.Allocator;
-pub const Session = enum { headless, desktop };
-const Kind = enum {
-    source,
-    unit,
-    browser,
-    ime,
-    startup,
-    transfer,
-    worker_lifecycle,
-
-    pub fn usesApplication(self: Kind) bool {
-        return self == .browser or self == .startup or self == .transfer or self == .worker_lifecycle;
-    }
-};
-const Case = struct {
-    name: []const u8,
-    session: ?Session,
-    executable: []const u8,
-    kind: Kind,
-    timeout_ms: u32,
-};
-
-// These are the executables installed by build.zig, not names from the legacy suite.
-pub const cases = [_]Case{
-    .{ .name = "app-unit", .session = .headless, .executable = "chatpalette-app-tests.exe", .kind = .unit, .timeout_ms = 180_000 },
-    .{ .name = "brave-fixture", .session = .desktop, .executable = "chatpalette-browser-fixture.exe", .kind = .browser, .timeout_ms = 180_000 },
-    .{ .name = "ime-input", .session = .desktop, .executable = "chatpalette-ime-input-test.exe", .kind = .ime, .timeout_ms = 30_000 },
-    .{ .name = "shortcut-unit", .session = .headless, .executable = "chatpalette-shortcut-tests.exe", .kind = .unit, .timeout_ms = 30_000 },
-    .{ .name = "startup", .session = .desktop, .executable = "chatpalette-startup-test.exe", .kind = .startup, .timeout_ms = 180_000 },
-    .{ .name = "tools-unit", .session = .headless, .executable = "chatpalette-tools-tests.exe", .kind = .unit, .timeout_ms = 180_000 },
-    .{ .name = "transfer", .session = .desktop, .executable = "chatpalette-transfer-test.exe", .kind = .transfer, .timeout_ms = 120_000 },
-    .{ .name = "worker-lifecycle", .session = .headless, .executable = "chatpalette-worker-lifecycle-test.exe", .kind = .worker_lifecycle, .timeout_ms = 60_000 },
-};
+const registry = @import("test_registry.zig");
+const Session = registry.Session;
+const Case = registry.Case;
+const cases = registry.cases;
 const source_gate: Case = .{ .name = "source-check", .session = null, .executable = "chatpalette-tools.exe", .kind = .source, .timeout_ms = 30_000 };
 const evidence_limit = 4 * 1024 * 1024;
 
 fn match(args: []const []const u8, default_session: ?Session) ![cases.len]bool {
+    return parseSelection(args, default_session, null);
+}
+
+fn parseSelection(args: []const []const u8, default_session: ?Session, browser_exe: ?*?[]const u8) ![cases.len]bool {
     var requested = @as([cases.len]bool, @splat(false));
     var named = false;
     var session: ?Session = null;
@@ -53,12 +28,13 @@ fn match(args: []const []const u8, default_session: ?Session) ![cases.len]bool {
             if (session != null) return error.InvalidTestSelection;
             session = std.meta.stringToEnum(Session, value) orelse return error.InvalidTestSession;
         } else if (std.mem.eql(u8, flag, "--name")) {
-            for (cases, 0..) |entry, i| {
-                if (!std.mem.eql(u8, entry.name, value)) continue;
-                requested[i] = true;
-                named = true;
-                break;
-            } else return error.UnknownTestName;
+            const selected = registry.indexOf(value) orelse return error.UnknownTestName;
+            requested[selected] = true;
+            named = true;
+        } else if (std.mem.eql(u8, flag, "--browser-exe")) {
+            const path = browser_exe orelse return error.InvalidTestSelection;
+            if (path.* != null or value.len == 0) return error.InvalidTestSelection;
+            path.* = value;
         } else {
             return error.InvalidTestSelection;
         }
@@ -139,7 +115,7 @@ fn readBrowserReport(alloc: Allocator, group_dir: std.fs.Dir, absolute_work: []c
 }
 
 const reaction_timing_case_name = "all reaction intervals and the random choice send exactly ten operations";
-const browser_case_count = 21;
+const browser_case_count = 22;
 const BrowserCaseResult = struct { name: []const u8, passed: bool };
 
 pub fn validateBrowserReport(alloc: Allocator, data: []const u8, expected_app: files.HexDigest) !void {
@@ -301,7 +277,7 @@ fn checkOutcome(
     if (report.result.?.stderr_bytes != 0) return error.UnexpectedTestStderr;
 }
 
-fn runOne(alloc: Allocator, output: []const u8, project: []const u8, entry: Case, image: Image, application: ?Image) !Group {
+fn runOne(alloc: Allocator, output: []const u8, project: []const u8, entry: Case, image: Image, application: ?Image, browser_exe: ?[]const u8) !Group {
     const path = try std.fs.path.join(alloc, &.{ output, entry.name });
     try std.fs.cwd().makeDir(path);
     var group_dir = try std.fs.cwd().openDir(path, .{ .no_follow = true });
@@ -312,7 +288,10 @@ fn runOne(alloc: Allocator, output: []const u8, project: []const u8, entry: Case
     const argv: []const []const u8 = switch (entry.kind) {
         .source => &.{ image.path, "source-check", project },
         .unit => &.{image.path},
-        .browser => &.{ image.path, application.?.path, try std.fs.path.join(alloc, &.{ work, "browser-observations" }) },
+        .browser => args: {
+            const observations = try std.fs.path.join(alloc, &.{ work, "browser-observations" });
+            break :args if (browser_exe) |executable| try alloc.dupe([]const u8, &.{ image.path, application.?.path, observations, executable }) else try alloc.dupe([]const u8, &.{ image.path, application.?.path, observations });
+        },
         .ime => &.{ image.path, try std.fs.path.join(alloc, &.{ work, "ime-observations" }) },
         .startup => &.{ image.path, application.?.path, try std.fs.path.join(alloc, &.{ work, "startup-observations" }) },
         .transfer => &.{ image.path, application.?.path, try std.fs.path.join(alloc, &.{ work, "transfer-observations" }) },
@@ -379,11 +358,18 @@ fn replayFailure(alloc: Allocator, output: []const u8, entry: Case, report: Grou
 }
 
 pub fn run(allocator: Allocator, project_path: []const u8, bin_path: []const u8, output_path: []const u8, args: []const []const u8) !bool {
-    const selected = try match(args, .headless);
+    var browser_argument: ?[]const u8 = null;
+    const selected = try parseSelection(args, .headless, &browser_argument);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
     const cwd = std.fs.cwd();
+    const browser_exe = if (browser_argument) |path| resolved: {
+        if (!selected[registry.indexOf("browser-fixture").?]) return error.InvalidTestSelection;
+        const absolute = try cwd.realpathAlloc(alloc, path);
+        _ = try @import("fixture_browser.zig").Browser.fromPath(absolute);
+        break :resolved absolute;
+    } else null;
     const project = try cwd.realpathAlloc(alloc, project_path);
     const bin = try cwd.realpathAlloc(alloc, bin_path);
     const tool = try Image.open(alloc, try std.fs.selfExePathAlloc(alloc));
@@ -404,13 +390,13 @@ pub fn run(allocator: Allocator, project_path: []const u8, bin_path: []const u8,
     try cwd.makeDir(output_path);
     const output = try cwd.realpathAlloc(alloc, output_path);
     var results: std.ArrayList(Group) = .empty;
-    const gate = try runOne(alloc, output, project, source_gate, tool, null);
+    const gate = try runOne(alloc, output, project, source_gate, tool, null, null);
     try results.append(alloc, gate);
     var failed: ?Case = if (gate.passed) null else source_gate;
     for (cases, images) |entry, image| {
         if (failed != null) break;
         const image_to_run = image orelse continue;
-        const group = try runOne(alloc, output, project, entry, image_to_run, application);
+        const group = try runOne(alloc, output, project, entry, image_to_run, application, browser_exe);
         try results.append(alloc, group);
         if (!group.passed) failed = entry;
     }
@@ -433,7 +419,12 @@ test "test inventory validates names and sessions and deduplicates in inventory 
     try std.testing.expectEqualStrings("app-unit\ntools-unit\n", named);
     const desktop = try list(allocator, &.{ "--session", "desktop" });
     defer allocator.free(desktop);
-    try std.testing.expectEqualStrings("brave-fixture\nime-input\nstartup\ntransfer\n", desktop);
+    try std.testing.expectEqualStrings("browser-fixture\nime-input\nstartup\ntransfer\n", desktop);
+    try std.testing.expectEqual(try match(&.{ "--name", "browser-fixture" }, null), try match(&.{ "--name", "brave-fixture" }, null));
+    var browser_exe: ?[]const u8 = null;
+    const explicit = try parseSelection(&.{ "--name", "browser-fixture", "--session", "desktop", "--browser-exe", "msedge.exe" }, .headless, &browser_exe);
+    try std.testing.expect(explicit[registry.indexOf("browser-fixture").?]);
+    try std.testing.expectEqualStrings("msedge.exe", browser_exe.?);
     try std.testing.expectError(error.UnknownTestName, list(allocator, &.{ "--name", "not-a-test" }));
     try std.testing.expectError(error.TestOutsideSelectedSession, list(allocator, &.{ "--name", "startup", "--session", "headless" }));
     try std.testing.expectError(error.InvalidTestSelection, list(allocator, &.{ "--session", "headless", "--session", "desktop" }));
@@ -447,8 +438,8 @@ test "test runs default to headless and desktop cases require explicit selection
             try std.testing.expectError(error.DesktopSessionRequired, match(&.{ "--name", entry.name }, .headless));
     }
     try std.testing.expectEqual(
-        try match(&.{ "--name", "brave-fixture" }, null),
-        try match(&.{ "--name", "brave-fixture", "--session", "desktop" }, .headless),
+        try match(&.{ "--name", "browser-fixture" }, null),
+        try match(&.{ "--name", "browser-fixture", "--session", "desktop" }, .headless),
     );
 }
 

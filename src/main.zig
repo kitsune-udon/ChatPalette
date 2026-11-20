@@ -50,6 +50,9 @@ test {
     _ = desktop;
     _ = @import("desktop/shortcuts.zig");
     _ = @import("desktop/operations.zig");
+    _ = @import("desktop/palette_results.zig");
+    _ = @import("desktop/reaction_registration.zig");
+    _ = @import("desktop/shortcut_draft.zig");
     _ = @import("desktop/worker_client.zig");
     _ = @import("storage/store.zig");
     _ = worker;

@@ -16,16 +16,27 @@ zig build install tools
 
 ### 既存の設定で開発ビルドを起動する
 
-リポジトリ直下の `ChatPalette.exe` を起動すると、その隣にある `data/settings.db` を読み込みます。起動中のChatPaletteを終了してから、リポジトリ直下のPowerShellで実行します。
+ルートの `ChatPalette.exe` は、その隣の `data/settings.db` を読み込みます。初めてビルドする場合は[作業を始める](#作業を始める)を参照してください。下の手順でEXEを反映した後、ルートで `.\ChatPalette.exe` を起動します。
+
+### 生成済みEXEをルートにコピーする
+
+通知領域の「終了」からChatPaletteを終了します。ルートのPowerShellで、反映したいビルドが `zig-out/bin/ChatPalette.exe` にあることを確認します。`--prefix` を指定した場合は、その出力先の `bin/ChatPalette.exe` を使います。
+
+次のコマンドはルートの `ChatPalette.exe` を上書きします。
 
 ~~~powershell
-zig build install
-if ($LASTEXITCODE -ne 0) { throw '本体のビルドに失敗しました' }
-Copy-Item -LiteralPath .\zig-out\bin\ChatPalette.exe -Destination .\ChatPalette.exe -Force
-.\ChatPalette.exe
+Copy-Item -LiteralPath .\zig-out\bin\ChatPalette.exe -Destination .\ChatPalette.exe -Force -ErrorAction Stop
 ~~~
 
-再ビルドで更新されるのは `zig-out/bin/ChatPalette.exe` です。**再ビルドするたびに、起動中のアプリを終了して生成したEXEを直下へコピーし直してください。**
+コピーに失敗した場合は起動せず、アプリの終了とコピー元のパスを確認します。コピー元と先のバイトが一致するか確かめたい場合は、次の2件の `Hash` を比較します。
+
+```powershell
+Get-FileHash -LiteralPath .\zig-out\bin\ChatPalette.exe, .\ChatPalette.exe
+```
+
+既存の設定を使う場合は、コピー後にルートで `.\ChatPalette.exe` を起動します。ルートの `data/settings.db` にある弾幕や設定を確認してください。
+
+### 別の設定データで開発ビルドを起動する
 
 独立した開発用データで試す場合は `.\zig-out\bin\ChatPalette.exe` を直接起動します。この場合は `zig-out/bin/data/settings.db` を使います。同じWindowsセッションで、本体を常駐できるのは1つです。同じフォルダーから通常起動すると既存の画面を呼び出します。`--quiet` はパレットを閉じたまま常駐し、同じフォルダーで稼働中なら画面を変えずに終了します。別のフォルダーに切り替える場合は稼働中の本体を終了してください。
 
@@ -64,7 +75,7 @@ Zig、Markdown、JSON、Git設定、`LICENSE`、`VERSION` はUTF-8（BOMなし�
 
 ## リリース手順
 
-1. 候補のコミットをクリーンな作業コピーで開き、`VERSION` の版番号と `CHANGELOG.md` の変更内容を確認します。`freeze` でゲストの試験まで実行するには、Windows Sandboxと `wsb.exe` が必要です。`wsb list` で稼働中のセッションが0件であることを確認します。
+1. `VERSION` の版番号と `CHANGELOG.md` の変更内容を確認します。公開に使う候補は、候補コミットのクリーンな作業コピーから作ります。作業中の差分で予行した候補も、ZIPとソースマニフェストを残すと後から照合できます。ゲスト試験にはWindows Sandboxと `wsb.exe` が必要です。`wsb list` で稼働中のセッションが0件であることを確認します。
 2. 次のコマンドで候補を固定します。`$zig` にはWindows x86_64版Zig 0.15.2の `zig.exe` 本体を指定します。`freeze` はバージョンと実行ファイルのSHA-256を検査します。
 
 ```powershell
@@ -74,10 +85,12 @@ $candidate = ".\dist\candidate-$version"
 & $zig build tools
 if ($LASTEXITCODE -ne 0) { throw '検証ツールのビルドに失敗しました。' }
 .\zig-out\bin\chatpalette-tools.exe freeze . $zig $candidate
+if ($LASTEXITCODE -ne 0) { throw '配布候補の固定に失敗しました。' }
 ```
 
 3. `freeze` が終了コード0を返したら、候補フォルダーの `ChatPalette-<版>.zip` と `ChatPalette-<版>.validation.json` を確認します。後者の `ArchiveSHA256` がZIPのハッシュです。`evidence/` には試験結果とログが入ります。
-4. 同じZIPを使ってクリーン展開、実ブラウザーでの動作、更新と切り戻しを確かめます。公開直前にZIPのハッシュをもう一度照合し、公開後はタグのコミットとReleaseの添付名・サイズ・SHA-256を照合します。タグの公開後に添付だけ失敗した場合は、同じ版へ不足分を添付します。[環境ごとの検証手順](testing.md#全体を検証する) · [Zig版の更新と切り戻し試験](testing.md#zig版の更新と切り戻しを確認する)
+4. 同じZIPでクリーン展開と更新・切り戻しを確認します。ブラウザー試験にはZIPから展開したEXEを使います。合成ページでの結果と、実際のYouTubeでの確認結果は分けて記録します。[環境ごとの検証手順](testing.md#全体を検証する) · [Zig版の更新と切り戻し試験](testing.md#zig版の更新と切り戻しを確認する)
+5. 公開直前にZIPのハッシュと、固定したソースが公開対象のコミットに対応することを照合します。公開後はタグのコミットとReleaseの添付名・サイズ・SHA-256を照合します。添付だけ失敗した場合は、同じ版へ不足分を添付します。
 
 `freeze` はビルド入力を作業コピーから採取し、そのコピーだけで本体と試験器を再ビルドします。キー割当とツールの単体試験はホストで、本体の単体試験、起動、ワーカーの故障と復旧、スモーク試験は消音したWindows Sandboxで実行します。ランナーは自分が起動したセッションIDを照合して終了します。既存の出力先は上書きしません。
 

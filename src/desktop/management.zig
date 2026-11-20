@@ -1,4 +1,56 @@
+const PublishedList = @import("management_list.zig").PublishedList;
 const std = @import("std");
+
+fn confirmationName(name: []const u8, buffer: []u8) []const u8 {
+    var codepoints = (std.unicode.Utf8View.init(name) catch return "（表示できない名前）").iterator();
+    var end: usize = 0;
+    for (0..(buffer.len - "…".len) / 4) |_| {
+        const part = codepoints.nextCodepointSlice() orelse return buffer[0..end];
+        const point = std.unicode.utf8Decode(part) catch unreachable;
+        if (point < 0x20 or point == 0x7f or point == 0x85 or point == 0x2028 or point == 0x2029) {
+            buffer[end] = ' ';
+            end += 1;
+        } else {
+            @memcpy(buffer[end..][0..part.len], part);
+            end += part.len;
+        }
+    }
+    if (codepoints.nextCodepointSlice() != null) {
+        @memcpy(buffer[end..][0.."…".len], "…");
+        end += "…".len;
+    }
+    return buffer[0..end];
+}
+
+test "deletion confirmation keeps names on one line and truncates on UTF-8 boundaries" {
+    var buffer: [323]u8 = undefined;
+    try std.testing.expectEqualStrings("一 二 三", confirmationName("一\n二\u{2028}三", &buffer));
+    try std.testing.expectEqualStrings("👏" ** 80 ++ "…", confirmationName("👏" ** 81, &buffer));
+}
+
+fn undoDescription(change: storage.UndoDescription, buffer: []u8) []const u8 {
+    const operation: []const u8 = switch (change.operation) {
+        .item => |item| switch (item) {
+            .add => "弾幕の追加",
+            .edit => "弾幕の編集",
+            .delete => "弾幕の削除",
+            .duplicate => "弾幕の複製",
+            .up, .down => "弾幕の並べ替え",
+            .move => "弾幕の移動",
+        },
+        .profile => |profile| switch (profile) {
+            .add => "配信者の追加",
+            .rename => "配信者名の変更",
+            .bind => "チャンネル連携",
+            .unbind => "チャンネル連携の解除",
+            .delete => "配信者の削除",
+        },
+        .assignment => "弾幕キーの割当",
+    };
+    var name_buffer: [99]u8 = undefined;
+    const target = if (change.target) |name| confirmationName(name, &name_buffer) else "共通の弾幕";
+    return std.fmt.bufPrint(buffer, "{s}の「{s}」", .{ target, operation }) catch operation;
+}
 const storage = @import("../storage/store.zig");
 const windows = @import("win.zig");
 const shortcuts = @import("shortcuts.zig");
@@ -113,73 +165,6 @@ const Editor = struct {
     viewport: Viewport = .{},
 };
 
-// Win32 asks for virtual item values independently of model commits. The
-// published scope owns its strings even after the model releases its arena.
-const PublishedList = struct {
-    arena: std.heap.ArenaAllocator,
-    references: usize = 1,
-    scope_id: []const u8,
-    rows: []const storage.Item,
-    slot_labels: [2][]const u8,
-
-    fn capture(memory: std.mem.Allocator, scope_id: []const u8, rows: []const storage.Item, labels: [2][]const u8) !*PublishedList {
-        var arena = std.heap.ArenaAllocator.init(memory);
-        errdefer arena.deinit();
-        const owned = arena.allocator();
-        const result = try owned.create(PublishedList);
-        const copies = try owned.alloc(storage.Item, rows.len);
-        var bytes = scope_id.len + labels[0].len + labels[1].len;
-        for (rows) |row| bytes += row.id.len + row.name.len + row.text.len;
-        var strings = try owned.alloc(u8, bytes);
-        const scope = copyString(&strings, scope_id);
-        const owned_labels = [2][]const u8{ copyString(&strings, labels[0]), copyString(&strings, labels[1]) };
-        for (rows, copies) |row, *copy| {
-            copy.* = .{
-                .id = copyString(&strings, row.id),
-                .name = copyString(&strings, row.name),
-                .text = copyString(&strings, row.text),
-                .slot = row.slot,
-            };
-        }
-        result.* = .{ .arena = arena, .scope_id = scope, .rows = copies, .slot_labels = owned_labels };
-        return result;
-    }
-
-    fn copyString(remaining: *[]u8, source: []const u8) []const u8 {
-        const value = remaining.*[0..source.len];
-        @memcpy(value, source);
-        remaining.* = remaining.*[source.len..];
-        return value;
-    }
-
-    fn matches(self: *const PublishedList, scope_id: []const u8, rows: []const storage.Item, labels: [2][]const u8) bool {
-        const equal = std.mem.eql;
-        if (self.rows.len != rows.len or !equal(u8, self.scope_id, scope_id) or
-            !equal(u8, self.slot_labels[0], labels[0]) or !equal(u8, self.slot_labels[1], labels[1])) return false;
-        for (self.rows, rows) |old, new| {
-            if (old.slot != new.slot or !equal(u8, old.id, new.id) or
-                !equal(u8, old.name, new.name) or !equal(u8, old.text, new.text)) return false;
-        }
-        return true;
-    }
-
-    fn retain(self: *PublishedList) *PublishedList {
-        self.references += 1;
-        return self;
-    }
-
-    fn release(self: *PublishedList) void {
-        self.references -= 1;
-        if (self.references != 0) return;
-        const arena = self.arena;
-        arena.deinit();
-    }
-
-    fn slotLabel(self: *const PublishedList, slot: u8) []const u8 {
-        return if (slot > 0 and slot <= self.slot_labels.len) self.slot_labels[slot - 1] else "";
-    }
-};
-
 pub const Management = struct {
     window: win.HWND = null,
     dpi: windows.Dpi = .{},
@@ -208,6 +193,7 @@ pub const Management = struct {
     manual: win.HWND = null,
     channel: win.HWND = null,
     undo_button: win.HWND = null,
+    undo_hint: win.HWND = null,
     support: win.HWND = null,
     back: win.HWND = null,
     load_defaults: win.HWND = null,
@@ -256,6 +242,7 @@ pub const Management = struct {
             hwnd.* = try controlText(self.window, wide("BUTTON"), button.text, win.WS_TABSTOP, button.id);
         }
         self.undo_button = try control(self.window, "BUTTON", "直前の変更を元に戻す", win.WS_TABSTOP, .undo);
+        self.undo_hint = try control(self.window, "STATIC", "取り消し履歴は全対象で共通です。", win.SS_NOPREFIX, null);
         self.notice = try control(self.window, "EDIT", "", win.WS_TABSTOP | win.WS_BORDER | win.WS_VSCROLL | win.ES_MULTILINE | win.ES_AUTOVSCROLL | win.ES_READONLY, .notice);
         _ = win.ShowWindow(self.notice, win.SW_HIDE);
         self.support = try control(self.window, "BUTTON", "操作・サポート…", win.WS_TABSTOP, .support);
@@ -508,6 +495,13 @@ pub const Management = struct {
             _ = win.EnableWindow(hwnd, @intFromBool(enabled));
         }
         _ = win.EnableWindow(self.undo_button, @intFromBool(ready and self.history.length != 0));
+        var summary: [256]u8 = undefined;
+        var hint_buffer: [384]u8 = undefined;
+        const hint = if (self.history.latest()) |latest|
+            std.fmt.bufPrint(&hint_buffer, "全対象共通の履歴\r\n次：{s}", .{undoDescription(latest, &summary)}) catch "取り消し履歴は全対象で共通です。"
+        else
+            "取り消し履歴は全対象で共通です。";
+        windows.setText(self.undo_hint, hint);
         _ = win.EnableWindow(self.profile_add, @intFromBool(ready));
         _ = win.EnableWindow(self.profile_menu, @intFromBool(ready));
     }
@@ -725,16 +719,30 @@ pub const Management = struct {
             @intFromEnum(Id.up) => if (row) |item| try self.runItemCommand(scope, .{ .up = item.id }),
             @intFromEnum(Id.down) => if (row) |item| try self.runItemCommand(scope, .{ .down = item.id }),
             @intFromEnum(Id.delete) => if (row) |item| {
-                if (self.confirm(self.window, "選んだ弾幕を削除します。元に戻すことができます。", "弾幕を削除") and self.editAllowed())
+                const profile = self.snapshot.data.findProfile(scope);
+                var name_buffer: [323]u8 = undefined;
+                var scope_buffer: [323]u8 = undefined;
+                const message = try std.fmt.allocPrint(allocator, "弾幕名：{s}\n対象：{s}{s}\n\nこの弾幕を削除します。元に戻すことができます。", .{
+                    confirmationName(item.name, &name_buffer),
+                    if (profile == null) "共通の弾幕" else "配信者 — ",
+                    if (profile) |value| confirmationName(value.name, &scope_buffer) else "",
+                });
+                defer allocator.free(message);
+                if (try self.confirmMessage(message, "弾幕を削除") and self.editAllowed())
                     try self.runItemCommand(scope, .{ .delete = item.id });
             },
             @intFromEnum(Id.assignment) => if (row) |item| try self.assignmentMenu(scope, item.id),
             @intFromEnum(Id.add_profile) => try self.openDialog(.add_profile, null),
             @intFromEnum(Id.profile_menu) => try self.profileMenu(),
             @intFromEnum(Id.undo) => {
+                const latest = self.history.latest() orelse return;
+                var summary: [256]u8 = undefined;
+                const target = undoDescription(latest, &summary);
+                var notice_buffer: [320]u8 = undefined;
+                const notice = std.fmt.bufPrint(&notice_buffer, "{s}を元に戻しました。", .{target}) catch "変更を元に戻しました。";
                 const previous = try allocator.dupe(u8, self.selection orelse "");
                 defer allocator.free(previous);
-                if (try self.history.undo(self.db, self.snapshot)) self.changed(previous);
+                if (try self.history.undo(self.db, self.snapshot)) self.changedWithNotice(previous, notice);
             },
             else => {},
         }
@@ -762,9 +770,19 @@ pub const Management = struct {
                 _ = try self.history.profile(self.db, self.snapshot, .{ .unbind = self.editingId() });
                 self.changed(null);
             },
-            4 => if (self.confirm(self.window, "この配信者と配信者別の弾幕を削除します。元に戻すことができます。", "配信者を削除") and self.editAllowed()) {
-                _ = try self.history.profile(self.db, self.snapshot, .{ .delete = self.editingId() });
-                self.changed(null);
+            4 => {
+                const profile = self.snapshot.data.findProfile(self.editingId()) orelse return error.ProfileMissing;
+                const id = try allocator.dupe(u8, profile.id);
+                defer allocator.free(id);
+                var name_buffer: [323]u8 = undefined;
+                const message = try std.fmt.allocPrint(allocator, "配信者：{s}\n削除する弾幕：{d}件\n\nこの配信者と配信者別の弾幕を削除します。元に戻すことができます。", .{
+                    confirmationName(profile.name, &name_buffer), profile.items.len,
+                });
+                defer allocator.free(message);
+                if (try self.confirmMessage(message, "配信者を削除") and self.editAllowed()) {
+                    _ = try self.history.profile(self.db, self.snapshot, .{ .delete = id });
+                    self.changed(null);
+                }
             },
             else => {},
         }
@@ -775,24 +793,56 @@ pub const Management = struct {
     }
 
     fn assignmentMenu(self: *Management, scope: []const u8, selected: []const u8) !void {
+        const library = try self.snapshot.retainLibrary();
+        defer library.release();
+        var slots: [2]?storage.Item = .{ null, null };
+        var source: ?storage.Item = null;
+        for (try library.read().itemsFor(scope)) |row| {
+            if (std.mem.eql(u8, row.id, selected)) source = row;
+            if (row.slot != 0) slots[row.slot - 1] = row;
+        }
+        const item = source orelse return error.ItemMissing;
         const menu = win.CreatePopupMenu() orelse return error.ManagementMenu;
         defer _ = win.DestroyMenu(menu);
-        _ = win.AppendMenuW(menu, win.MF_STRING, 1, wide("弾幕キー 1 に割当"));
-        _ = win.AppendMenuW(menu, win.MF_STRING, 2, wide("弾幕キー 2 に割当"));
-        _ = win.AppendMenuW(menu, win.MF_STRING, 3, wide("この弾幕の割当を解除"));
+        for (slots, 1..) |current, key| {
+            var name_buffer: [131]u8 = undefined;
+            const name = if (current) |row| confirmationName(row.name, &name_buffer) else "未割当";
+            const escaped = try std.mem.replaceOwned(u8, allocator, name, "&", "&&");
+            defer allocator.free(escaped);
+            var move_buffer: [64]u8 = undefined;
+            const move_hint = if (item.slot != 0 and item.slot != key)
+                try std.fmt.bufPrint(&move_buffer, "（キー{d}が空きます）", .{item.slot})
+            else
+                "";
+            const label = try std.fmt.allocPrint(allocator, "弾幕キー {d} に割当{s}\t現在：{s}", .{ key, move_hint, escaped });
+            defer allocator.free(label);
+            const utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, label);
+            defer allocator.free(utf16);
+            if (win.AppendMenuW(menu, win.MF_STRING, key, utf16) == 0) return error.ManagementMenu;
+        }
+        const remove_flags: win.UINT = if (item.slot == 0) win.MF_STRING | win.MF_GRAYED else win.MF_STRING;
+        if (win.AppendMenuW(menu, remove_flags, 3, wide("この弾幕の割当を解除")) == 0)
+            return error.ManagementMenu;
         const choice = popup(self.window, self.item_buttons[7], menu);
-        if (choice == 0 or !self.editAllowed()) return;
+        if (choice == 0 or choice == item.slot or !self.editAllowed() or self.snapshot.retained != library.owner) return;
+        if (choice <= 2) if (slots[choice - 1]) |current| {
+            var old_buffer: [323]u8 = undefined;
+            var new_buffer: [323]u8 = undefined;
+            var move_buffer: [96]u8 = undefined;
+            const move_hint = if (item.slot != 0) try std.fmt.bufPrint(&move_buffer, "\r\nキー{d}は未割当になります。", .{item.slot}) else "";
+            const message = try std.fmt.allocPrint(allocator, "弾幕キー {d} の割当を変更します。\r\n現在：{s}\r\n変更後：{s}\r\n現在の弾幕の割当は解除されます。{s}", .{
+                choice, confirmationName(current.name, &old_buffer), confirmationName(item.name, &new_buffer), move_hint,
+            });
+            defer allocator.free(message);
+            if (!try self.confirmMessage(message, "キー割当の変更") or !self.editAllowed() or self.snapshot.retained != library.owner) return;
+        };
         var ids: [2][]const u8 = .{ "", "" };
-        var found = false;
-        for (try self.snapshot.data.itemsFor(scope)) |row| {
-            if (std.mem.eql(u8, row.id, selected)) {
-                found = true;
-            } else if (row.slot != 0) {
-                ids[row.slot - 1] = row.id;
+        for (slots, &ids) |current, *id| {
+            if (current) |row| {
+                if (row.slot != item.slot) id.* = row.id;
             }
         }
-        if (!found) return error.ItemMissing;
-        if (choice <= 2) ids[choice - 1] = selected;
+        if (choice <= 2) ids[choice - 1] = item.id;
         if (try self.history.assign(self.db, self.snapshot, scope, ids[0], ids[1])) {
             self.restoreEditing(scope);
             self.changed(selected);
@@ -1104,17 +1154,23 @@ pub const Management = struct {
         }
         if (self.confirming or (self.saving_editor and self.dialog.mode != .link_profile)) return;
         if (self.editorDirty() catch true) {
-            if (!self.confirm(self.dialog.window, "保存せずに閉じますか？", "未保存の変更"))
+            if (!self.confirm(self.dialog.window, wide("保存せずに閉じますか？"), "未保存の変更"))
                 return;
         }
         self.closeDialog();
         self.updateActions();
     }
 
-    fn confirm(self: *Management, owner: win.HWND, comptime message: []const u8, comptime title: []const u8) bool {
+    fn confirmMessage(self: *Management, message: []const u8, comptime title: []const u8) !bool {
+        const utf16 = try std.unicode.utf8ToUtf16LeAllocZ(allocator, message);
+        defer allocator.free(utf16);
+        return self.confirm(self.window, utf16, title);
+    }
+
+    fn confirm(self: *Management, owner: win.HWND, message: [:0]const u16, comptime title: []const u8) bool {
         self.confirming = true;
         defer self.confirming = false;
-        return win.MessageBoxW(owner, wide(message), wide(title), win.MB_YESNO | win.MB_DEFBUTTON2 | win.MB_ICONQUESTION) == win.IDYES;
+        return win.MessageBoxW(owner, message, wide(title), win.MB_YESNO | win.MB_DEFBUTTON2 | win.MB_ICONQUESTION) == win.IDYES;
     }
 
     fn closeDialog(self: *Management) void {
@@ -1230,7 +1286,7 @@ pub const Management = struct {
 
     fn placeControls(self: *Management) void {
         const dpi = self.dpi;
-        const content = self.viewport.layout(self.window, dpi, .{ .width = 344, .height = 421 }, null) orelse return;
+        const content = self.viewport.layout(self.window, dpi, .{ .width = 344, .height = 473 }, null) orelse return;
         const top = -self.viewport.y;
         const margin = dpi.pixels(12);
         const pad = margin - self.viewport.x;
@@ -1243,7 +1299,7 @@ pub const Management = struct {
         move(self.profile_menu, pad + half + gap, top + dpi.pixels(69), half, dpi.pixels(28));
         move(self.channel, pad, top + dpi.pixels(102), full, dpi.pixels(26));
         const list_top = dpi.pixels(131);
-        const list_bottom = @max(list_top + dpi.pixels(56), content.height - dpi.pixels(231));
+        const list_bottom = @max(list_top + dpi.pixels(56), content.height - dpi.pixels(283));
         const foot = top + list_bottom;
         move(self.list, pad, top + list_top, full, list_bottom - list_top);
         _ = win.SendMessageW(self.list, win.LVM_SETCOLUMNWIDTH, 0, @divTrunc(full * 3, 10));
@@ -1260,10 +1316,11 @@ pub const Management = struct {
             left += button_width + gap;
         }
         move(self.undo_button, pad, foot + dpi.pixels(72), full, dpi.pixels(27));
-        move(self.notice, pad, foot + dpi.pixels(106), full, dpi.pixels(44));
-        move(self.back, pad, foot + dpi.pixels(156), half, dpi.pixels(27));
-        move(self.support, pad + half + gap, foot + dpi.pixels(156), half, dpi.pixels(27));
-        move(self.load_defaults, pad, foot + dpi.pixels(189), full, dpi.pixels(27));
+        move(self.undo_hint, pad, foot + dpi.pixels(102), full, dpi.pixels(52));
+        move(self.notice, pad, foot + dpi.pixels(158), full, dpi.pixels(44));
+        move(self.back, pad, foot + dpi.pixels(208), half, dpi.pixels(27));
+        move(self.support, pad + half + gap, foot + dpi.pixels(208), half, dpi.pixels(27));
+        move(self.load_defaults, pad, foot + dpi.pixels(241), full, dpi.pixels(27));
     }
 
     fn notify(self: *Management, header: *const win.NMHDR) win.LRESULT {

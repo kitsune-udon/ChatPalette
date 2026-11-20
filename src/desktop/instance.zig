@@ -69,3 +69,18 @@ fn requestExisting(name: [:0]const u16, request: Request) !void {
     }
     return error.InstanceNotResponding;
 }
+
+pub fn restart(allocator: std.mem.Allocator, executable: [:0]const u16) !void {
+    const full_name = try std.unicode.utf16LeToUtf8Alloc(allocator, executable);
+    defer allocator.free(full_name);
+    const command = try std.fmt.allocPrint(allocator, "\"{s}\"", .{full_name});
+    defer allocator.free(command);
+    const wide = try std.unicode.utf8ToUtf16LeAllocZ(allocator, command);
+    defer allocator.free(wide);
+    var startup = std.mem.zeroes(win.STARTUPINFOW);
+    startup.cb = @sizeOf(win.STARTUPINFOW);
+    var child: win.PROCESS_INFORMATION = undefined;
+    if (win.CreateProcessW(executable, wide, null, null, 0, 0, null, null, &startup, &child) == 0) return error.RestartApplication;
+    _ = win.CloseHandle(child.hThread);
+    _ = win.CloseHandle(child.hProcess);
+}

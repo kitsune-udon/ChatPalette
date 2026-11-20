@@ -1,9 +1,9 @@
 const std = @import("std");
 const resolve_deadline = @import("../resolve_deadline.zig");
+const frame = @import("../worker_frame.zig");
 const windows = @import("win.zig");
 const win = windows.api;
 const allocator = std.heap.page_allocator;
-const max_payload = 32768;
 const invalid_handle = std.os.windows.INVALID_HANDLE_VALUE;
 const StopWait = fn (*Client, u32) win.DWORD;
 
@@ -15,37 +15,7 @@ fn waitForOwnedProcess(client: *Client, milliseconds: u32) win.DWORD {
     return waitForProcess(client.process, milliseconds);
 }
 
-pub const Mode = enum {
-    browser_context,
-    resolve,
-    verify_input,
-    verify_chat,
-    chat_focus,
-    reactions_show,
-    reaction_configure,
-    reaction_capture,
-    reaction_check,
-    reaction_send,
-    chat_enter,
-    chat_clear,
-    input_insert,
-
-    pub fn deadlineMs(self: Mode) u64 {
-        return switch (self) {
-            .verify_input, .verify_chat, .chat_enter, .chat_clear, .input_insert => 2500,
-            else => 8000,
-        };
-    }
-
-    pub fn inputOutcome(self: Mode) ?[]const u8 {
-        return switch (self) {
-            .chat_enter => "enter_sent",
-            .chat_clear => "cleared",
-            .input_insert => "inserted",
-            else => null,
-        };
-    }
-};
+pub const Mode = frame.Mode;
 
 pub const Field = struct {
     name: []const u8,
@@ -127,15 +97,7 @@ pub const Client = struct {
     }
 
     fn stopWithWait(self: *Client, comptime observe: StopWait) !void {
-        self.registrations_current = false;
-        if (self.pipe != null) {
-            _ = win.CloseHandle(self.pipe);
-            self.pipe = null;
-        }
-        if (self.signal != null) {
-            _ = win.CloseHandle(self.signal);
-            self.signal = null;
-        }
+        self.closeChannel();
         if (self.process != null) {
             var state = observe(self, 250);
             if (state == win.WAIT_TIMEOUT) {
@@ -238,21 +200,25 @@ pub const Client = struct {
                 self.cleanup_failure = cleanup;
             };
         }
-        var buffer: [max_payload + 4]u8 = undefined;
+        var buffer: frame.Buffer = undefined;
         const work_deadline = if (deadline) |value| value - resolve_deadline.reply_reserve_ms else null;
         const request_bytes = try formatRequest(&buffer, self.sequence, hwnd, mode, expected, fields, work_deadline);
         return self.exchange(alloc, mode, request_bytes, hwnd, pump, deadline);
     }
 
     fn abortTimedOutResolve(self: *Client) void {
+        self.closeChannel();
+        if (self.running() and win.TerminateProcess(self.process, 1) == 0 and self.running())
+            self.cleanup_failure = error.WorkerDidNotExit;
+        // Keep the owned process handle until ensure or stop can confirm exit.
+    }
+
+    fn closeChannel(self: *Client) void {
         self.registrations_current = false;
         if (self.pipe) |pipe| _ = win.CloseHandle(pipe);
         self.pipe = null;
         if (self.signal) |signal| _ = win.CloseHandle(signal);
         self.signal = null;
-        if (self.running() and win.TerminateProcess(self.process, 1) == 0 and self.running())
-            self.cleanup_failure = error.WorkerDidNotExit;
-        // Keep the owned process handle until ensure or stop can confirm exit.
     }
 
     fn exchange(self: *Client, alloc: std.mem.Allocator, mode: Mode, request_bytes: []const u8, hwnd: usize, pump: Pump, deadline: ?u64) !Reply {
@@ -290,15 +256,14 @@ pub const Client = struct {
     }
 
     fn read(self: Client, alloc: std.mem.Allocator) !?Reply {
-        var header: [4]u8 = undefined;
+        var header: frame.Header = undefined;
         var copied: win.DWORD = 0;
         var available: win.DWORD = 0;
-        if (win.PeekNamedPipe(self.pipe, &header, 4, &copied, &available, null) == 0) return error.WorkerPipeClosed;
-        if (copied < 4) return null;
-        const size = std.mem.readInt(u32, &header, .little);
-        if (size == 0 or size > max_payload) return error.InvalidWorkerFrame;
-        if (available < size + 4) return null;
-        if (win.ReadFile(self.pipe, &header, 4, &copied, null) == 0 or copied != 4) return error.ReadWorkerReply;
+        if (win.PeekNamedPipe(self.pipe, &header, header.len, &copied, &available, null) == 0) return error.WorkerPipeClosed;
+        if (copied < header.len) return null;
+        const size = frame.decodeLength(&header) orelse return error.InvalidWorkerFrame;
+        if (available < size + header.len) return null;
+        if (win.ReadFile(self.pipe, &header, header.len, &copied, null) == 0 or copied != header.len) return error.ReadWorkerReply;
         const payload = try alloc.alloc(u8, size);
         errdefer alloc.free(payload);
         if (win.ReadFile(self.pipe, payload.ptr, size, &copied, null) == 0 or copied != size) return error.ReadWorkerReply;
@@ -362,9 +327,9 @@ fn spawnWorker(launch: Launch, name: []const u8) !win.HANDLE {
     return child.hProcess;
 }
 
-fn formatRequest(buffer: *[max_payload + 4]u8, sequence: u64, hwnd: usize, mode: Mode, expected: []const u8, fields: []const Field, work_deadline: ?u64) ![]const u8 {
+fn formatRequest(buffer: *frame.Buffer, sequence: u64, hwnd: usize, mode: Mode, expected: []const u8, fields: []const Field, work_deadline: ?u64) ![]const u8 {
     if (std.mem.indexOfAny(u8, expected, "\r\n") != null) return error.InvalidWorkerField;
-    var output = std.Io.Writer.fixed(buffer[4..]);
+    var output = std.Io.Writer.fixed(buffer[frame.header_bytes..]);
     output.print("Seq={d}\nWindow={d}\nMode={s}\nVideo={s}\n", .{ sequence, hwnd, @tagName(mode), expected }) catch return error.InvalidWorkerRequestSize;
     if (work_deadline) |deadline| output.print("Deadline={d}\n", .{deadline}) catch return error.InvalidWorkerRequestSize;
     for (fields) |field| {
@@ -374,8 +339,8 @@ fn formatRequest(buffer: *[max_payload + 4]u8, sequence: u64, hwnd: usize, mode:
         output.print("{s}={s}\n", .{ field.name, field.value }) catch return error.InvalidWorkerRequestSize;
     }
     const length = output.end;
-    std.mem.writeInt(u32, buffer[0..4], @intCast(length), .little);
-    return buffer[0 .. length + 4];
+    frame.encodeLength(buffer[0..frame.header_bytes], length);
+    return buffer[0 .. length + frame.header_bytes];
 }
 
 /// Used by the headless lifecycle test executable to exercise the production acquisition and wait paths.
@@ -530,7 +495,7 @@ pub const LifecycleProbe = struct {
 };
 
 test "host frames use the production field names, byte count and ownership checks" {
-    var storage: [max_payload + 4]u8 = undefined;
+    var storage: frame.Buffer = undefined;
     const bytes = try formatRequest(&storage, 12, 84, .verify_chat, "ZigTest0001", &.{.{ .name = "FocusToken", .value = "once" }}, null);
     try std.testing.expectEqual(bytes.len - 4, std.mem.readInt(u32, bytes[0..4], .little));
     try std.testing.expectEqualStrings("Seq=12\nWindow=84\nMode=verify_chat\nVideo=ZigTest0001\nFocusToken=once\n", bytes[4..]);
@@ -538,7 +503,7 @@ test "host frames use the production field names, byte count and ownership check
     try std.testing.expect(reply.matches(12, 84) and reply.is("ok"));
     try std.testing.expect(!reply.matches(12, 85));
     try std.testing.expectError(error.InvalidWorkerField, formatRequest(&storage, 12, 84, .reaction_send, "ZigTest0001\nState=ok", &.{}, null));
-    const too_large = [_]u8{'x'} ** max_payload;
+    const too_large = [_]u8{'x'} ** frame.max_body_bytes;
     try std.testing.expectError(error.InvalidWorkerRequestSize, formatRequest(&storage, 12, 84, .verify_input, "", &.{
         .{ .name = "Payload", .value = &too_large },
     }, null));

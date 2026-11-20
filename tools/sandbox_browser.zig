@@ -1,5 +1,6 @@
 const std = @import("std");
 const browser = @import("browser.zig");
+const Browser = @import("fixture_browser.zig").Browser;
 const files = @import("files.zig");
 const process = @import("process.zig");
 const sandbox = @import("sandbox.zig");
@@ -7,7 +8,6 @@ const test_runner = @import("test_runner.zig");
 
 const app_name = "ChatPalette.exe";
 const fixture_name = "chatpalette-browser-fixture.exe";
-const browser_name = "brave.exe";
 const selection_name = "browser-inputs.json";
 const observations_name = "browser-observations.json";
 const fixture_deadline_ms = 180_000;
@@ -18,8 +18,9 @@ const guest_startup_ms = 35_000;
 const Pins = struct {
     application: files.HexDigest,
     fixture: files.HexDigest,
-    brave: files.HexDigest,
-    chrome_dll: files.HexDigest,
+    browser: Browser,
+    browser_executable: files.HexDigest,
+    runtime_dll: files.HexDigest,
 };
 
 const Report = struct {
@@ -32,10 +33,9 @@ const Report = struct {
     desktop_wait_ms: ?u64 = null,
 };
 
-pub fn host(allocator: std.mem.Allocator, app: []const u8, fixture: []const u8, brave: []const u8, output: []const u8, prepare_only: bool) !void {
+pub fn host(allocator: std.mem.Allocator, app: []const u8, fixture: []const u8, browser_path: []const u8, output: []const u8, prepare_only: bool) !void {
     if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(app), app_name) or
-        !std.ascii.eqlIgnoreCase(std.fs.path.basename(fixture), fixture_name) or
-        !std.ascii.eqlIgnoreCase(std.fs.path.basename(brave), browser_name)) return error.UnexpectedSandboxBrowserExecutable;
+        !std.ascii.eqlIgnoreCase(std.fs.path.basename(fixture), fixture_name)) return error.UnexpectedSandboxBrowserExecutable;
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -43,9 +43,11 @@ pub fn host(allocator: std.mem.Allocator, app: []const u8, fixture: []const u8, 
     const session = try sandbox.Host.openOwned(alloc, prepare_only);
     defer session.close();
     const cwd = std.fs.cwd();
-    const resolved_brave = try cwd.realpathAlloc(alloc, brave);
-    const version = try browser.executableVersion(alloc, resolved_brave);
-    const runtime = try std.fs.path.join(alloc, &.{ std.fs.path.dirname(resolved_brave).?, version });
+    const resolved_browser = try cwd.realpathAlloc(alloc, browser_path);
+    const selected = try Browser.fromPath(resolved_browser);
+    const browser_name = selected.executable();
+    const version = try browser.executableVersion(alloc, resolved_browser);
+    const runtime = try std.fs.path.join(alloc, &.{ std.fs.path.dirname(resolved_browser).?, version });
     var source = try cwd.openDir(runtime, .{ .no_follow = true, .iterate = true });
     defer source.close();
     const absolute_output = try std.fs.path.resolve(alloc, &.{ try std.process.getCwdAlloc(alloc), output });
@@ -64,12 +66,12 @@ pub fn host(allocator: std.mem.Allocator, app: []const u8, fixture: []const u8, 
     try cwd.copyFile(app, input, app_name, .{});
     try cwd.copyFile(fixture, input, fixture_name, .{});
     try cwd.copyFile(try std.fs.selfExePathAlloc(alloc), input, sandbox.tool_name, .{});
-    try cwd.copyFile(resolved_brave, input, browser_name, .{});
+    try cwd.copyFile(resolved_browser, input, browser_name, .{});
     const staged_version = try browser.executableVersion(alloc, try std.fs.path.join(alloc, &.{ layout.input, browser_name }));
     if (!std.mem.eql(u8, staged_version, version)) return error.SandboxInputChanged;
 
-    try copyRuntime(source, input, version);
-    const expected = try readPins(alloc, input, version);
+    try copyRuntime(source, input, version, selected);
+    const expected = try readPins(alloc, input, version, selected);
     try files.writeNew(input, selection_name, try std.json.Stringify.valueAlloc(alloc, expected, .{ .whitespace = .indent_2 }));
     try layout.configure(alloc, .browser);
     if (try session.run(Report, alloc, layout, guest_deadline_ms)) |report| {
@@ -81,17 +83,17 @@ pub fn host(allocator: std.mem.Allocator, app: []const u8, fixture: []const u8, 
     }
 }
 
-fn copyRuntime(source: std.fs.Dir, destination: std.fs.Dir, version: []const u8) !void {
+fn copyRuntime(source: std.fs.Dir, destination: std.fs.Dir, version: []const u8, selected: Browser) !void {
     try destination.makeDir(version);
     var output = try destination.openDir(version, .{ .no_follow = true });
     defer output.close();
-    try copyTree(source, output, true);
+    try copyTree(source, output, selected);
 }
 
-fn copyTree(source: std.fs.Dir, destination: std.fs.Dir, root: bool) !void {
+fn copyTree(source: std.fs.Dir, destination: std.fs.Dir, root_browser: ?Browser) !void {
     var iterator = source.iterate();
     while (try iterator.next()) |entry| {
-        if (root and (std.ascii.eqlIgnoreCase(entry.name, "Installer") or std.ascii.eqlIgnoreCase(entry.name, "BraveVpnWireguardService"))) continue;
+        if (root_browser != null and (std.ascii.eqlIgnoreCase(entry.name, "Installer") or (root_browser == .brave and std.ascii.eqlIgnoreCase(entry.name, "BraveVpnWireguardService")))) continue;
         switch (entry.kind) {
             .file => try source.copyFile(entry.name, destination, entry.name, .{}),
             .directory => {
@@ -100,19 +102,20 @@ fn copyTree(source: std.fs.Dir, destination: std.fs.Dir, root: bool) !void {
                 try destination.makeDir(entry.name);
                 var local = try destination.openDir(entry.name, .{ .no_follow = true });
                 defer local.close();
-                try copyTree(nested, local, false);
+                try copyTree(nested, local, null);
             },
             else => return error.UnexpectedBrowserBundleEntry,
         }
     }
 }
 
-fn readPins(alloc: std.mem.Allocator, dir: std.fs.Dir, version: []const u8) !Pins {
+fn readPins(alloc: std.mem.Allocator, dir: std.fs.Dir, version: []const u8, selected: Browser) !Pins {
     return .{
         .application = files.hex(try files.readDigest(dir, app_name)),
         .fixture = files.hex(try files.readDigest(dir, fixture_name)),
-        .brave = files.hex(try files.readDigest(dir, browser_name)),
-        .chrome_dll = files.hex(try files.readDigest(dir, try std.fs.path.join(alloc, &.{ version, "chrome.dll" }))),
+        .browser = selected,
+        .browser_executable = files.hex(try files.readDigest(dir, selected.executable())),
+        .runtime_dll = files.hex(try files.readDigest(dir, try std.fs.path.join(alloc, &.{ version, selected.runtimeDll() }))),
     };
 }
 
@@ -147,14 +150,16 @@ fn runFixture(alloc: std.mem.Allocator, input_path: []const u8, output_path: []c
     const work_path = try files.newDirectory(alloc, try std.process.getEnvVarOwned(alloc, "TEMP"), "ChatPaletteBrowser-");
     var work = try cwd.openDir(work_path, .{ .no_follow = true });
     defer work.close();
+    const selected = expected.browser;
+    const browser_name = selected.executable();
     for ([_][]const u8{ app_name, fixture_name, browser_name }) |name| try input.copyFile(name, work, name, .{});
-    const brave = try std.fs.path.join(alloc, &.{ work_path, browser_name });
-    const version = try browser.executableVersion(alloc, brave);
+    const browser_exe = try std.fs.path.join(alloc, &.{ work_path, browser_name });
+    const version = try browser.executableVersion(alloc, browser_exe);
     var source = try input.openDir(version, .{ .no_follow = true, .iterate = true });
     defer source.close();
-    try copyRuntime(source, work, version);
+    try copyRuntime(source, work, version, selected);
     report.browser_version = version;
-    report.pins = try readPins(alloc, work, version);
+    report.pins = try readPins(alloc, work, version, selected);
     if (!std.meta.eql(report.pins.?, expected)) return error.SandboxInputChanged;
 
     const startup_remaining = guest_startup_ms * std.time.ns_per_ms -| startup.read();
@@ -167,7 +172,7 @@ fn runFixture(alloc: std.mem.Allocator, input_path: []const u8, output_path: []c
         try std.fs.path.join(alloc, &.{ work_path, fixture_name }),
         try std.fs.path.join(alloc, &.{ work_path, app_name }),
         raw,
-        brave,
+        browser_exe,
     }, work_path, evidence, fixture_deadline_ms);
     report.fixture = observed.result;
     if (observed.cleanup_failure) |failure| report.cleanup_failure = @errorName(failure);

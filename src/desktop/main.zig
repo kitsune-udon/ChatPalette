@@ -7,6 +7,9 @@ const keyboard = @import("../worker/keyboard.zig");
 const shortcuts = @import("shortcuts.zig");
 const operations = @import("operations.zig");
 const feedback = @import("reaction_progress.zig");
+const reaction_registration = @import("reaction_registration.zig");
+const Preparation = reaction_registration.Preparation;
+const ReactionTimer = @import("reaction_timer.zig").Timer;
 const StatusTip = @import("status_tip.zig").StatusTip;
 const transport = @import("worker_client.zig");
 const instance = @import("instance.zig");
@@ -68,7 +71,7 @@ pub fn run(mode: Startup) !void {
         defer owner.release();
         break :resident try runResident(mode, executable, dir, &owner.window_name);
     };
-    if (restarting) try restart(executable);
+    if (restarting) try instance.restart(allocator, executable);
 }
 
 fn runResident(mode: Startup, executable: [:0]const u16, dir: []const u8, window_name: [:0]const u16) !bool {
@@ -247,21 +250,6 @@ fn readExecutableDigest(executable: [:0]const u16) ![32]u8 {
     return hash.finalResult();
 }
 
-fn restart(executable: [:0]const u16) !void {
-    const full_name = try std.unicode.utf16LeToUtf8Alloc(allocator, executable);
-    defer allocator.free(full_name);
-    const command = try std.fmt.allocPrint(allocator, "\"{s}\"", .{full_name});
-    defer allocator.free(command);
-    const wide = try std.unicode.utf8ToUtf16LeAllocZ(allocator, command);
-    defer allocator.free(wide);
-    var startup = std.mem.zeroes(win.STARTUPINFOW);
-    startup.cb = @sizeOf(win.STARTUPINFOW);
-    var child: win.PROCESS_INFORMATION = undefined;
-    if (win.CreateProcessW(executable, wide, null, null, 0, 0, null, null, &startup, &child) == 0) return error.RestartApplication;
-    _ = win.CloseHandle(child.hThread);
-    _ = win.CloseHandle(child.hProcess);
-}
-
 const App = struct {
     startup_ready: bool = false,
     executable: [:0]const u16,
@@ -289,9 +277,8 @@ const App = struct {
     reaction_generation: u64 = 0,
     // New attempts and results can take ownership without changing the timer generation.
     reaction_revision: u64 = 0,
-    reaction_timer: ?ReactionTimer = null,
+    reaction_timer: ReactionTimer = .init(first_reaction_timer_id),
     pending_reaction_start: ?ReactionStart = null,
-    next_reaction_timer_id: win.UINT_PTR = first_reaction_timer_id,
     reaction_progress: feedback.Overlay = .{},
     pending_reaction_progress: ?ReactionProgressUpdate = null,
     rendering_reaction_progress: bool = false,
@@ -314,23 +301,6 @@ const App = struct {
     last_worker_failure: ?diagnostic.WorkerFailure = null,
     last_resolve_failure: ?diagnostic.ResolveFailure = null,
     last_stop_failure: ?anyerror = null,
-
-    const Preparation = struct {
-        mode: transport.Mode,
-        target: usize,
-        video: operations.VideoId,
-        page: operations.PageToken,
-        generation: u64,
-        due: u64,
-        committed: bool = false,
-        browser: diagnostic.Browser = .unselected,
-        started_at: ?u64 = null,
-
-        fn retries(mode: transport.Mode, state: []const u8) bool {
-            return mode == .reaction_capture and
-                (std.mem.eql(u8, state, "unsupported") or std.mem.eql(u8, state, "wrong_window"));
-        }
-    };
 
     fn open(self: *App, owner: [:0]const u16) !void {
         var window_class = std.mem.zeroes(win.WNDCLASSW);
@@ -497,6 +467,7 @@ const App = struct {
         }
         if (self.quitting) return self.finishQuit();
         if (returning_from != null and (self.manager.window != returning_from or self.manager.isEditing())) return;
+        self.palette.inputFailure("");
         self.refreshPalette();
         self.refreshRegistrationStatus();
         self.status_tip.close();
@@ -1129,8 +1100,8 @@ const App = struct {
         }
     }
 
-    fn report(self: *App, state: []const u8) void {
-        const message = if (std.mem.eql(u8, state, "unavailable"))
+    fn noticeText(state: []const u8) []const u8 {
+        return if (std.mem.eql(u8, state, "unavailable"))
             "動画・入力欄を確認できませんでした。"
         else if (std.mem.eql(u8, state, "changed"))
             "動画・タブ・ウィンドウが切り替わりました。"
@@ -1138,6 +1109,8 @@ const App = struct {
             "操作を中止しました。"
         else if (std.mem.eql(u8, state, "wrong_input"))
             "現在の入力欄を操作できません。"
+        else if (std.mem.eql(u8, state, "wrong_window"))
+            "操作先のブラウザーを最前面にして、やり直してください。"
         else if (std.mem.eql(u8, state, "invalid_text"))
             "本文に入力できない制御文字が含まれています。弾幕を編集し、制御文字を取り除いてください。"
         else if (std.mem.eql(u8, state, "chat_missing"))
@@ -1148,10 +1121,17 @@ const App = struct {
             "チャット欄へのフォーカス移動を確認できませんでした。入力欄をクリックしてください。"
         else if (std.mem.eql(u8, state, "unknown"))
             "操作結果を確認できませんでした。自動では再実行しません。画面で結果を確認してください。"
+        else if (std.meta.stringToEnum(diagnostic.State, state)) |known|
+            known.label()
         else
             state;
+    }
+
+    fn report(self: *App, state: []const u8) void {
+        const message = noticeText(state);
         self.palette.status(message);
-        if (win.IsWindowVisible(self.palette.window) != 0 or win.IsWindowVisible(self.reaction_progress.window) != 0) return;
+        if (win.IsWindowVisible(self.palette.window) != 0) return;
+        if (win.IsWindowVisible(self.reaction_progress.window) != 0 and self.reaction_hide_at == null) return;
         self.showStatusTip(message);
     }
 
@@ -1383,7 +1363,7 @@ const App = struct {
         if (!self.checkCommandTarget(command)) return false;
         if (!context.is("ok")) {
             if (action == .reaction) return self.failReactionStart(feedback.Reason.fromReply(context.field("State")), context.field("Detail"));
-            self.report(context.field("State"));
+            _ = self.rejectPage(diagnostic.State.fromWorker(context.field("State")));
             return false;
         }
         const video = operations.videoId(context.field("Video")) orelse {
@@ -1543,10 +1523,14 @@ const App = struct {
     }
 
     fn pageReplySucceeded(self: *App, reply: transport.Reply, video: operations.VideoId, expected_state: diagnostic.State) bool {
+        return if (pageFailure(reply, video, expected_state)) |failure| self.rejectPage(failure) else true;
+    }
+
+    fn pageFailure(reply: transport.Reply, video: operations.VideoId, expected_state: diagnostic.State) ?diagnostic.State {
         const state = diagnostic.State.fromWorker(reply.field("State"));
-        if (state != expected_state) return self.rejectPage(if (state == .ok) .wrong_input else state);
-        if (!std.mem.eql(u8, reply.field("Video"), &video)) return self.rejectPage(.changed);
-        return true;
+        if (state != expected_state) return if (state == .ok) .wrong_input else state;
+        if (!std.mem.eql(u8, reply.field("Video"), &video)) return .changed;
+        return null;
     }
 
     fn rejectPage(self: *App, state: diagnostic.State) bool {
@@ -1554,55 +1538,6 @@ const App = struct {
         self.report(self.last_state);
         return false;
     }
-
-    const InputPlan = struct {
-        arena: std.heap.ArenaAllocator,
-        scope: []const u8,
-        id: []const u8,
-        text: []const u8,
-        channel: []const u8,
-        settings_revision: u64,
-
-        fn capture(app: *const App, scope: []const u8, item: storage.Item) !InputPlan {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            errdefer arena.deinit();
-            const owned = arena.allocator();
-            const channel = if (scope.len != 0)
-                (app.snapshot.data.findProfile(scope) orelse return error.ProfileChanged).channel
-            else
-                "";
-            const owned_scope = try owned.dupe(u8, scope);
-            const owned_id = try owned.dupe(u8, item.id);
-            const owned_text = try owned.dupe(u8, item.text);
-            const owned_channel = try owned.dupe(u8, channel);
-            return .{
-                .arena = arena,
-                .scope = owned_scope,
-                .id = owned_id,
-                .text = owned_text,
-                .channel = owned_channel,
-                .settings_revision = app.input_settings_revision,
-            };
-        }
-
-        fn current(self: *const InputPlan, app: *const App) bool {
-            return app.input_settings_revision == self.settings_revision and self.itemCurrent(app);
-        }
-
-        fn itemCurrent(self: *const InputPlan, app: *const App) bool {
-            const data = app.snapshot.data;
-            if (self.scope.len != 0) {
-                const profile = data.findProfile(self.scope) orelse return false;
-                if (!std.mem.eql(u8, self.channel, profile.channel)) return false;
-                if (!data.preferences.auto_mode and !std.mem.eql(u8, self.scope, data.preferences.input_profile_id)) return false;
-            }
-            const items = data.itemsFor(self.scope) catch return false;
-            for (items) |item| {
-                if (std.mem.eql(u8, self.id, item.id)) return std.mem.eql(u8, self.text, item.text);
-            }
-            return false;
-        }
-    };
 
     fn slot(self: *App, command: operations.Command, video: operations.VideoId, page_token: operations.PageToken) !bool {
         const source = command.slot orelse return false;
@@ -1652,37 +1587,18 @@ const App = struct {
             self.report("このキーに弾幕が割り当てられていません。");
             return false;
         };
-        var plan = try InputPlan.capture(self, profile_id, item);
-        defer plan.arena.deinit();
-        if (!plan.itemCurrent(self)) return self.rejectPage(.changed);
+        var plan = try operations.InputPlan.capture(allocator, self.snapshot.data, self.input_settings_revision, profile_id, item);
+        defer plan.deinit();
+        if (!plan.itemCurrent(self.snapshot.data)) return self.rejectPage(.changed);
         const verification = try self.verifyShortcutInput(target, video, page_token);
         defer verification.deinit();
-        if (!self.commandCurrent(command) or !source.scope.current(self.snapshot.data.preferences) or !plan.itemCurrent(self)) return false;
+        if (!self.commandCurrent(command) or !source.scope.current(self.snapshot.data.preferences) or !plan.itemCurrent(self.snapshot.data)) return false;
         if (!self.pageReplySucceeded(verification, video, .ok)) return false;
         const outcome = try self.commitInput(.input_insert, target, video, page_token, plan.text);
         if (self.shortcutSuperseded(command.generation)) return false;
         if (outcome != .inserted) return self.rejectPage(outcome);
         self.report("弾幕を入力しました。");
         return true;
-    }
-
-    fn enqueueShortcut(self: *App, event: shortcuts.Event, video: ?operations.VideoId) !void {
-        const scope: operations.SlotSource.Scope = switch (event.action) {
-            .shared1, .shared2 => .shared,
-            .profile1, .profile2 => scope: {
-                const data = self.snapshot.data;
-                if (data.preferences.auto_mode) break :scope .automatic;
-                const selected = data.findProfile(data.preferences.input_profile_id);
-                break :scope .{ .manual = if (selected) |profile| profile.id else "" };
-            },
-            else => return self.queue.enqueue(allocator, event, self.library_revision, video),
-        };
-        const library = try self.snapshot.retainLibrary();
-        errdefer library.release();
-        try self.queue.enqueueWithSlot(allocator, event, self.library_revision, video, .{
-            .library = library,
-            .scope = scope,
-        });
     }
 
     fn verifyShortcutInput(self: *App, target: usize, video: operations.VideoId, page_token: operations.PageToken) !transport.Reply {
@@ -1698,19 +1614,20 @@ const App = struct {
         if (self.updating_reaction_buttons or !self.paletteOperationsAllowed() or
             self.palette.refreshing or self.palette.resetting_search or self.palette.refresh_failed or self.palette.search_due != null) return;
         const context = self.paletteContext();
+        self.palette.inputFailure("");
         self.deliverPaletteItem(index, context) catch |failure| {
             if (self.paletteContextCurrent(context) and (self.foreground(windows.number(context.target)) or
                 self.foreground(windows.number(self.palette.window))))
             {
                 self.refreshPalette();
-                self.report(switch (failure) {
+                self.palette.inputFailure(noticeText(switch (failure) {
                     error.ProfileChanged => "配信者が変わりました。弾幕を選び直してください。",
                     error.ProfileSelectionNotSaved => "自動選択を保存できませんでした。",
                     error.ProfileLookupFailed => self.resolveFailureNotice(),
                     error.TargetChanged, error.ForegroundChanged => "changed",
                     error.VideoUnavailable => "unavailable",
                     else => self.cleanupNotice(failure) orelse @tagName(self.workerFailureReason(failure)),
-                });
+                }));
                 self.palette.show();
             }
         };
@@ -1723,10 +1640,10 @@ const App = struct {
         if (self.modal or self.manager.isEditing()) return;
         if (self.quitting or self.queue.active or self.worker.active or self.reaction != null or index >= self.palette.count) return;
         const target = owner.target;
-        if (input.browser(target) == null) return self.report("unavailable");
+        if (input.browser(target) == null) return self.palette.inputFailure(noticeText("unavailable"));
         const row = self.palette.rows[index];
-        var plan = try InputPlan.capture(self, row.profile_id, row.item);
-        defer plan.arena.deinit();
+        var plan = try operations.InputPlan.capture(allocator, self.snapshot.data, self.input_settings_revision, row.profile_id, row.item);
+        defer plan.deinit();
         const auto_profile = plan.scope.len != 0 and self.snapshot.data.preferences.auto_mode;
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
         _ = win.SetForegroundWindow(target);
@@ -1739,7 +1656,7 @@ const App = struct {
         };
         defer context.deinit();
         if (self.modal or self.manager.isEditing()) return;
-        if (!self.foreground(hwnd) or !self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
+        if (!self.foreground(hwnd) or !self.paletteTargetCurrent(owner) or !plan.current(self.snapshot.data, self.input_settings_revision)) return error.TargetChanged;
         if (!context.is("ok")) return if (auto_profile and context.is("unavailable"))
             error.ProfileLookupFailed
         else
@@ -1749,23 +1666,25 @@ const App = struct {
         if (auto_profile) {
             _ = (self.selectDetectedProfile(context.field("Channel"), .immediate) catch return error.ProfileSelectionNotSaved) orelse
                 return error.ProfileChanged;
-            if (!self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
+            if (!self.paletteTargetCurrent(owner) or !plan.current(self.snapshot.data, self.input_settings_revision)) return error.TargetChanged;
             if (!std.mem.eql(u8, context.field("Channel"), plan.channel)) return error.ProfileChanged;
         }
         const checked = try self.requestOnPage(.verify_input, hwnd, &video, &page_token, &.{});
         defer checked.deinit();
         if (self.modal or self.manager.isEditing()) return;
-        if (!self.foreground(hwnd) or !self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
-        if (!checked.is("ok") or !std.mem.eql(u8, checked.field("Video"), &video)) {
-            self.report(checked.field("State"));
+        if (!self.foreground(hwnd) or !self.paletteTargetCurrent(owner) or !plan.current(self.snapshot.data, self.input_settings_revision)) return error.TargetChanged;
+        if (pageFailure(checked, video, .ok)) |failure| {
+            self.last_state = @tagName(failure);
+            self.palette.inputFailure(noticeText(self.last_state));
             self.palette.show();
             return;
         }
         const outcome = try self.commitInput(.input_insert, hwnd, video, page_token, plan.text);
         if (outcome != .inserted and !self.modal and !self.manager.isEditing() and
-            self.paletteTargetCurrent(owner) and self.foreground(hwnd) and plan.current(self))
+            self.paletteTargetCurrent(owner) and self.foreground(hwnd) and plan.current(self.snapshot.data, self.input_settings_revision))
         {
-            _ = self.rejectPage(outcome);
+            self.last_state = @tagName(outcome);
+            self.palette.inputFailure(noticeText(self.last_state));
             self.palette.show();
         }
     }
@@ -1776,13 +1695,14 @@ const App = struct {
         self.starting_reaction = null;
         if (command) |starting| self.queue.finish(starting, false);
         self.updateReactionButtons();
-        if (self.reaction_revision == revision) self.showReactionResult(feedback.Result.quickStart(reason, detail));
+        if (self.reaction_revision == revision)
+            self.showReactionResult(if (command) |starting| @ptrFromInt(starting.event.window) else null, feedback.Result.quickStart(reason, detail));
         return false;
     }
 
     fn reactionSetupFailed(self: *App, job: operations.Reaction, detail: []const u8) bool {
         if (job.shortcut != null) return self.failReactionStart(.unavailable, detail);
-        self.publishReactionResult(.unavailable, null, detail);
+        self.publishReactionResult(@ptrFromInt(job.target), .unavailable, null, detail);
         return false;
     }
 
@@ -1798,6 +1718,7 @@ const App = struct {
         };
         if (self.reaction_generation != before_open or (job.shortcut == null and self.reaction_revision != revision)) return false;
         if (job.shortcut) |command| if (!self.checkCommandTarget(command)) return false;
+        self.reaction_progress.anchor = @ptrFromInt(job.target);
         const generation = before_open +% 1;
         self.reaction_generation = generation;
         self.reaction_revision +%= 1;
@@ -1843,16 +1764,10 @@ const App = struct {
     }
 
     fn scheduleReactionAdvance(self: *App, generation: u64, wait_ms: u32) bool {
-        if (wait_ms != 0) return self.setReactionTimer(.send, wait_ms);
-        self.cancelReactionTimer();
+        if (wait_ms != 0) return self.reaction_timer.arm(self.window, .send, wait_ms);
+        self.reaction_timer.cancel(self.window);
         return win.PostMessageW(self.window, advance_reaction_message, generation, 0) != 0;
     }
-
-    const ReactionTimer = struct {
-        const Kind = enum { preparation, send };
-        id: win.UINT_PTR,
-        kind: Kind,
-    };
 
     const ReactionStart = struct {
         generation: u64,
@@ -1882,26 +1797,10 @@ const App = struct {
             .send => if (!self.scheduleReactionAdvance(generation, wait_ms)) {
                 self.finishReaction(.unavailable, "リアクションのタイマーを開始できませんでした。");
             },
-            .preparation => if (!self.setReactionTimer(.preparation, wait_ms)) {
+            .preparation => if (!self.reaction_timer.arm(self.window, .preparation, wait_ms)) {
                 self.finishPreparation(.unavailable, "リアクションの登録・確認のタイマーを開始できませんでした。");
             },
         }
-    }
-
-    fn setReactionTimer(self: *App, kind: ReactionTimer.Kind, wait_ms: u32) bool {
-        self.cancelReactionTimer();
-        // KillTimer does not remove a WM_TIMER that is already queued.
-        const id = self.next_reaction_timer_id;
-        self.next_reaction_timer_id = @max(first_reaction_timer_id, id +% 1);
-        if (win.SetTimer(self.window, id, wait_ms, null) == 0) return false;
-        self.reaction_timer = .{ .id = id, .kind = kind };
-        return true;
-    }
-
-    fn cancelReactionTimer(self: *App) void {
-        const timer = self.reaction_timer orelse return;
-        self.reaction_timer = null;
-        _ = win.KillTimer(self.window, timer.id);
     }
 
     fn openReactionProgress(self: *App) !void {
@@ -1960,11 +1859,11 @@ const App = struct {
         self.showReactionCounts(text, job, .running);
     }
 
-    fn publishReactionResult(self: *App, reason: feedback.Reason, counts: ?feedback.Counts, detail: []const u8) void {
-        self.showReactionResult(feedback.Result.init(reason, counts, detail));
+    fn publishReactionResult(self: *App, target: win.HWND, reason: feedback.Reason, counts: ?feedback.Counts, detail: []const u8) void {
+        self.showReactionResult(target, feedback.Result.init(reason, counts, detail));
     }
 
-    fn showReactionResult(self: *App, result: feedback.Result) void {
+    fn showReactionResult(self: *App, target: win.HWND, result: feedback.Result) void {
         self.reaction_revision +%= 1;
         const revision = self.reaction_revision;
         if (self.reaction_result) |previous| previous.deinit();
@@ -1972,6 +1871,7 @@ const App = struct {
         if (self.quitting) return;
         self.reaction_progress.open(self.window) catch {};
         if (self.reaction_revision != revision) return;
+        self.reaction_progress.anchor = target;
         var summary: [reaction_summary_capacity]u8 = undefined;
         self.updateReactionProgress(result.summary(&summary), .finished);
         if (self.reaction_revision != revision or self.quitting or self.reaction != null or self.preparation != null or self.reaction_progress.window == null) return;
@@ -2008,7 +1908,7 @@ const App = struct {
 
     fn reactionContext(self: *App, origin: ReactionOrigin) ?ReactionContext {
         if (origin.foreground == null or win.GetForegroundWindow() != origin.foreground or input.browser(origin.target) == null) {
-            self.publishReactionResult(.wrong_window, null, "");
+            self.publishReactionResult(origin.target, .wrong_window, null, "");
             return null;
         }
         defer {
@@ -2017,21 +1917,21 @@ const App = struct {
         }
         const response = self.requestOnPage(.browser_context, windows.number(origin.target), "", "bind", &.{}) catch |failure| {
             var detail: [256]u8 = undefined;
-            if (self.reactionContextCurrent(origin)) self.publishReactionResult(.unavailable, null, self.workerFailureDetail(failure, &detail));
+            if (self.reactionContextCurrent(origin)) self.publishReactionResult(origin.target, .unavailable, null, self.workerFailureDetail(failure, &detail));
             return null;
         };
         defer response.deinit();
         if (!self.reactionContextCurrent(origin)) return null;
         if (win.GetForegroundWindow() != origin.foreground) {
-            self.publishReactionResult(.wrong_window, null, "");
+            self.publishReactionResult(origin.target, .wrong_window, null, "");
             return null;
         }
         if (!response.is("ok")) {
-            self.publishReactionResult(feedback.Reason.fromReply(response.field("State")), null, response.field("Detail"));
+            self.publishReactionResult(origin.target, feedback.Reason.fromReply(response.field("State")), null, response.field("Detail"));
             return null;
         }
         const video = operations.videoId(response.field("Video")) orelse {
-            self.publishReactionResult(.unavailable, null, "");
+            self.publishReactionResult(origin.target, .unavailable, null, "");
             return null;
         };
         const page_proof = operations.pageToken(response.field("PageToken")) orelse unreachable;
@@ -2055,7 +1955,7 @@ const App = struct {
             return self.palette.settingsStatus("リアクションの標準設定を保存しました。ショートカット実行にも使います。");
         }
         const origin = self.reactionOrigin();
-        if (origin.foreground != self.palette.window) return self.publishReactionResult(.wrong_window, null, "");
+        if (origin.foreground != self.palette.window) return self.publishReactionResult(origin.target, .wrong_window, null, "");
         const context = self.reactionContext(origin) orelse return;
         const delay = 3000;
         _ = win.ShowWindow(self.palette.window, win.SW_HIDE);
@@ -2078,7 +1978,7 @@ const App = struct {
             const notice = "YouTubeを前面にし、パレットを開いて対象を選んでください。";
             const result = feedback.Result.init(.wrong_window, null, notice);
             self.manager.setNotice(notice);
-            if (self.reactionContextCurrent(origin)) self.showReactionResult(result) else result.deinit();
+            if (self.reactionContextCurrent(origin)) self.showReactionResult(origin.target, result) else result.deinit();
             return;
         }
         const target = windows.number(origin.target);
@@ -2088,11 +1988,12 @@ const App = struct {
         _ = win.SetForegroundWindow(origin.target);
         if (!self.reactionContextCurrent(origin)) return;
         self.openReactionProgress() catch |failure| {
-            if (self.reactionContextCurrent(origin)) self.publishReactionResult(.unavailable, null, @errorName(failure));
+            if (self.reactionContextCurrent(origin)) self.publishReactionResult(origin.target, .unavailable, null, @errorName(failure));
             return;
         };
         if (!self.reactionContextCurrent(origin)) return;
         const delay: u32 = if (mode == .reaction_capture) 1000 else 5000;
+        self.reaction_progress.anchor = origin.target;
         self.reaction_generation +%= 1;
         self.reaction_revision +%= 1;
         self.pending_reaction_start = .{ .generation = self.reaction_generation, .kind = .preparation, .wait_ms = 1000 };
@@ -2123,7 +2024,7 @@ const App = struct {
 
     fn schedulePreparation(self: *App, pending: Preparation, wait: u32) bool {
         if (!self.preparationCurrent(pending)) return false;
-        if (self.setReactionTimer(.preparation, wait)) return true;
+        if (self.reaction_timer.arm(self.window, .preparation, wait)) return true;
         self.finishPreparation(.unavailable, "リアクションの準備タイマーを再開できませんでした。");
         return false;
     }
@@ -2140,7 +2041,7 @@ const App = struct {
             _ = self.schedulePreparation(pending, wait);
             return;
         }
-        self.cancelReactionTimer();
+        self.reaction_timer.cancel(self.window);
         self.preparation.?.started_at = now;
         defer self.finishQuit();
         self.updateReactionProgress(if (pending.mode == .reaction_capture) "ボタンを登録しています。" else "5種類のボタンを確認しています。", .running);
@@ -2166,7 +2067,7 @@ const App = struct {
         const revision = self.reaction_revision;
         self.preparation = null;
         self.pending_reaction_start = null;
-        self.cancelReactionTimer();
+        self.reaction_timer.cancel(self.window);
         self.updateReactionButtons();
         // A committed registration still needs its confirmation even if another key is waiting.
         if (self.reaction_revision == revision and (pending.committed or !self.reactionQueued() or self.queue.target == pending.target)) {
@@ -2183,7 +2084,7 @@ const App = struct {
                     .elapsed_ms = if (pending.started_at) |started| win.GetTickCount64() -| started else 0,
                 };
             }
-            self.publishReactionResult(reason, null, detail);
+            self.publishReactionResult(@ptrFromInt(pending.target), reason, null, detail);
         }
         if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
@@ -2209,7 +2110,7 @@ const App = struct {
         const fields: []const transport.Field = if (pending.mode == .reaction_capture) fields: {
             var point: win.POINT = undefined;
             if (win.GetPhysicalCursorPos(&point) == 0) return error.CursorPosition;
-            capture_fields = captureFields(point, &x_buffer, &y_buffer);
+            capture_fields = reaction_registration.captureFields(point, &x_buffer, &y_buffer);
             break :fields &capture_fields;
         } else &.{};
         const reply = try self.requestOnPage(pending.mode, pending.target, &pending.video, &pending.page, fields);
@@ -2221,11 +2122,10 @@ const App = struct {
             return false;
         }
         if (pending.mode == .reaction_capture and reply.is("captured")) {
-            self.db.saveRegistration(reply.field("Detail")) catch |failure| {
+            self.preparation.?.saveCaptured(self.db, reply.field("Detail")) catch |failure| {
                 self.finishPreparation(.save_failed, @errorName(failure));
                 return false;
             };
-            self.preparation.?.committed = true;
             self.worker.registrations_current = false;
             self.refreshRegistrationStatus();
             self.updateReactionProgress("登録を保存しました。ワーカーへ反映しています。", .running);
@@ -2257,7 +2157,7 @@ const App = struct {
             }
             return;
         }
-        self.cancelReactionTimer();
+        self.reaction_timer.cancel(self.window);
         defer self.finishQuit();
         const reply = (self.operateReaction(job) catch |failure| {
             _ = job.acknowledge(false);
@@ -2320,41 +2220,18 @@ const App = struct {
         self.reaction = null;
         self.reaction_clock = null;
         self.pending_reaction_start = null;
-        self.cancelReactionTimer();
+        self.reaction_timer.cancel(self.window);
         if (job.shortcut) |command| self.queue.finish(command, job.succeeded());
         self.updateReactionButtons();
         // A replacement queued during the old request owns the next result and progress display.
         if (self.reaction_revision == revision and !(superseded and self.reactionQueued())) {
             var result = feedback.Result.init(reason, reactionCounts(job), detail);
             result.settings = .{ .kind = job.kind, .standard = job.shortcut != null };
-            self.showReactionResult(result);
+            self.showReactionResult(@ptrFromInt(job.target), result);
         }
         if (!self.quitting) _ = win.PostMessageW(self.window, drain_message, 0, 0);
     }
 };
-
-fn captureFields(point: win.POINT, x: *[11]u8, y: *[11]u8) [2]transport.Field {
-    return .{
-        .{ .name = "X", .value = std.fmt.bufPrint(x, "{d}", .{point.x}) catch unreachable },
-        .{ .name = "Y", .value = std.fmt.bufPrint(y, "{d}", .{point.y}) catch unreachable },
-    };
-}
-
-test "registration sends signed physical coordinates and only retries registration misses" {
-    var x: [11]u8 = undefined;
-    var y: [11]u8 = undefined;
-    const fields = captureFields(.{ .x = -2147483648, .y = 1200 }, &x, &y);
-    try std.testing.expectEqualStrings("X", fields[0].name);
-    try std.testing.expectEqualStrings("-2147483648", fields[0].value);
-    try std.testing.expectEqualStrings("Y", fields[1].name);
-    try std.testing.expectEqualStrings("1200", fields[1].value);
-    try std.testing.expect(App.Preparation.retries(.reaction_capture, "unsupported"));
-    try std.testing.expect(App.Preparation.retries(.reaction_capture, "wrong_window"));
-    try std.testing.expect(!App.Preparation.retries(.reaction_capture, "changed"));
-    try std.testing.expect(!App.Preparation.retries(.reaction_capture, "captured"));
-    try std.testing.expect(!App.Preparation.retries(.reaction_check, "unsupported"));
-    try std.testing.expect(!App.Preparation.retries(.reaction_check, "wrong_window"));
-}
 
 test "diagnostics publish version and runtime conditions without sharing user data" {
     const testing = std.testing;
@@ -2452,11 +2329,16 @@ test "desktop: a page acknowledgement requires the expected video and reports th
         defer testing.allocator.free(notice);
         try testing.expectEqualStrings("動画・タブ・ウィンドウが切り替わりました。", notice);
     }
-    for ([_]diagnostic.State{ .wrong_input, .changed, .unavailable, .unknown }) |state| {
+    for ([_]diagnostic.State{ .wrong_input, .wrong_window, .changed, .unavailable, .unknown }) |state| {
         const frame = try std.fmt.allocPrint(testing.allocator, "State={s}\nVideo=ZigTest0001\n", .{@tagName(state)});
         defer testing.allocator.free(frame);
         try testing.expect(!app.pageReplySucceeded(.{ .alloc = testing.allocator, .payload = frame }, expected, .ok));
         try testing.expectEqual(state, app.diagnosticSnapshot(0).state);
+        if (state == .wrong_window) {
+            const notice = try windows.text(app.palette.message, testing.allocator);
+            defer testing.allocator.free(notice);
+            try testing.expectEqualStrings("操作先のブラウザーを最前面にして、やり直してください。", notice);
+        }
     }
 }
 
@@ -3306,6 +3188,36 @@ test "desktop: reaction progress preserves palette input and settings notices" {
     try testing.expectEqualStrings("標準設定を読み込みました。変更は今回の実行だけに適用します。", settings_notice);
 }
 
+test "desktop: a completed reaction does not suppress the next shortcut notice" {
+    try @import("test_mode.zig").requireDesktop();
+    var app: App = .{ .executable = undefined, .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null };
+    try app.palette.open(null);
+    defer app.palette.close();
+    app.window = app.palette.window;
+    defer app.status_tip.close();
+    defer app.reaction_progress.close();
+    defer if (app.reaction_result) |result| result.deinit();
+    try app.openReactionProgress();
+    try std.testing.expect(app.reaction_progress.showChecked());
+    app.report("このキーに弾幕が割り当てられていません。");
+    try std.testing.expect(app.status_tip.window == null);
+
+    app.publishReactionResult(null, .stopped, null, "");
+    app.report("このキーに弾幕が割り当てられていません。");
+    try std.testing.expect(win.IsWindowVisible(app.status_tip.window) != 0);
+    try std.testing.expect(win.IsWindowVisible(app.reaction_progress.window) != 0);
+    try std.testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
+
+    app.reaction_progress.anchor = app.window;
+    app.starting_reaction = .{
+        .event = .{ .action = .reaction, .window = windows.number(app.reaction_progress.window) },
+        .generation = app.queue.generation,
+        .library = 0,
+    };
+    try std.testing.expect(!app.failReactionStart(.wrong_window, ""));
+    try std.testing.expectEqual(app.reaction_progress.window, app.reaction_progress.anchor);
+}
+
 test "stop invalidates a reaction context even before a preparation or send job exists" {
     var app: App = .{
         .executable = undefined,
@@ -3356,7 +3268,7 @@ test "desktop: queued timers from finished reactions and preparations cannot fin
         .window = handle,
         .quitting = true,
     };
-    defer app.cancelReactionTimer();
+    defer app.reaction_timer.cancel(app.window);
     defer if (app.reaction_result) |result| result.deinit();
     current = &app;
     defer current = null;
@@ -3364,14 +3276,14 @@ test "desktop: queued timers from finished reactions and preparations cannot fin
     const job: operations.Reaction = .{ .target = 1, .video = "Fixture0001".*, .page = @splat(0), .kind = 1, .count = 2, .interval = 100 };
     app.reaction = job;
     try testing.expect(app.scheduleReactionAdvance(0, 60000));
-    const obsolete_send = app.reaction_timer.?.id;
+    const obsolete_send = app.reaction_timer.armed.?.id;
     app.finishReaction(.stopped, "");
-    try testing.expect(app.reaction_timer == null);
+    try testing.expect(app.reaction_timer.armed == null);
 
     app.reaction_generation = 1;
     app.preparation = .{ .mode = .reaction_check, .target = 1, .video = job.video, .page = job.page, .generation = 1, .due = 0 };
-    try testing.expect(app.setReactionTimer(.preparation, 60000));
-    const obsolete_preparation = app.reaction_timer.?.id;
+    try testing.expect(app.reaction_timer.arm(app.window, .preparation, 60000));
+    const obsolete_preparation = app.reaction_timer.armed.?.id;
     _ = messageHandler(handle, win.WM_TIMER, obsolete_send, 0);
     try testing.expect(app.preparation != null and app.reaction_result.?.reason == .stopped);
     _ = messageHandler(handle, win.WM_TIMER, obsolete_preparation, 0);
@@ -3380,14 +3292,14 @@ test "desktop: queued timers from finished reactions and preparations cannot fin
     app.reaction_generation = 2;
     app.reaction = job;
     try testing.expect(app.scheduleReactionAdvance(2, 60000));
-    const current_send = app.reaction_timer.?.id;
+    const current_send = app.reaction_timer.armed.?.id;
     try testing.expect(current_send != obsolete_send and current_send != obsolete_preparation);
     _ = messageHandler(handle, win.WM_TIMER, obsolete_send, 0);
     _ = messageHandler(handle, win.WM_TIMER, obsolete_preparation, 0);
     _ = messageHandler(handle, advance_reaction_message, 0, 0);
     try testing.expectEqualDeep(job, app.reaction.?);
     _ = messageHandler(handle, win.WM_TIMER, current_send, 0);
-    try testing.expect(app.reaction == null and app.reaction_timer == null);
+    try testing.expect(app.reaction == null and app.reaction_timer.armed == null);
 }
 
 test "desktop: a stop reentered from progress rendering leaves the terminal controls and retires the clock" {
@@ -3437,7 +3349,7 @@ test "desktop: a stop reentered from progress rendering leaves the terminal cont
     defer _ = win.RemoveWindowSubclass(status, Reentry.stopDuringText, 1);
     app.updateReactionProgress("実行中の古い表示", .running);
 
-    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
+    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer.armed == null);
     const result = app.reaction_result orelse return error.TestReactionResultMissing;
     try testing.expectEqual(feedback.Reason.stopped, result.reason);
     try testing.expectEqual(@as(u32, 1), result.counts.?.completed);
@@ -3450,7 +3362,7 @@ test "desktop: a stop reentered from progress rendering leaves the terminal cont
     try testing.expect(win.IsWindowEnabled(app.reaction_progress.stop) == 0);
     try testing.expect(win.GetWindowLongW(app.reaction_progress.stop, win.GWL_STYLE) & win.WS_VISIBLE == 0);
 
-    const pending: App.Preparation = .{
+    const pending: Preparation = .{
         .mode = .reaction_check,
         .target = 1,
         .video = "Fixture0001".*,
@@ -3462,7 +3374,7 @@ test "desktop: a stop reentered from progress rendering leaves the terminal cont
     try testing.expect(app.schedulePreparation(pending, 60000));
     try testing.expect(win.SetWindowSubclass(status, Reentry.stopDuringText, 1, @intFromPtr(&app)) != 0);
     app.showPreparationCountdown(3000);
-    try testing.expect(app.preparation == null and app.reaction_timer == null);
+    try testing.expect(app.preparation == null and app.reaction_timer.armed == null);
     try testing.expect(!app.schedulePreparation(pending, 1000));
     try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
 }
@@ -3512,7 +3424,7 @@ test "desktop: reaction buttons reconcile a stop while starting and a replacemen
         return error.TestReactionStatusControl;
     var app: App = .{ .executable = undefined, .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null, .window = host };
     defer app.reaction_progress.close();
-    defer app.cancelReactionTimer();
+    defer app.reaction_timer.cancel(app.window);
     defer if (app.reaction_result) |result| result.deinit();
     defer app.queue.deinit(allocator);
     app.palette.start_button = start;
@@ -3525,7 +3437,7 @@ test "desktop: reaction buttons reconcile a stop while starting and a replacemen
     defer _ = win.RemoveWindowSubclass(start, Reentry.duringEnable, 1);
     try testing.expect(app.startReaction(job, 1000));
     try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
-    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
+    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer.armed == null);
     try testing.expect(win.IsWindowEnabled(start) != 0 and win.IsWindowEnabled(stop_button) == 0);
     const summary = try windows.text(app.reaction_progress.summary, testing.allocator);
     defer testing.allocator.free(summary);
@@ -3539,7 +3451,7 @@ test "desktop: reaction buttons reconcile a stop while starting and a replacemen
     try testing.expect(probe.replacement_started);
     try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
     try testing.expectEqual(@as(u32, 5), app.reaction_result.?.counts.?.total);
-    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer == null);
+    try testing.expect(app.reaction == null and app.reaction_clock == null and app.reaction_timer.armed == null);
     try testing.expect(win.IsWindowEnabled(start) != 0 and win.IsWindowEnabled(stop_button) == 0);
 
     app.palette.reaction_notice = status;
@@ -4263,7 +4175,7 @@ fn shortcut(event: shortcuts.Event) void {
     else
         null;
     const generation = app.queue.generation;
-    app.enqueueShortcut(event, video) catch {
+    app.queue.enqueueShortcut(allocator, &app.snapshot, app.library_revision, event, video) catch {
         app.queue.cancel();
         if (app.input_cancellation) |pending| pending.signal.cancel();
         return;
@@ -4298,11 +4210,9 @@ fn messageHandler(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam:
         win.WM_TIMER => switch (wparam) {
             timer_reaction_feedback => app.hideFinishedReaction(),
             timer_status_tip => app.expireStatusTip(),
-            else => if (app.reaction_timer) |timer| {
-                if (wparam == timer.id) switch (timer.kind) {
-                    .preparation => app.prepareNow(),
-                    .send => app.advanceReaction(),
-                };
+            else => if (app.reaction_timer.matches(wparam)) |kind| switch (kind) {
+                .preparation => app.prepareNow(),
+                .send => app.advanceReaction(),
             },
         },
         drain_message => app.drain(),

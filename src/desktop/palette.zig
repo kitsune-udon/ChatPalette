@@ -4,12 +4,12 @@ const windows = @import("win.zig");
 const shortcuts = @import("shortcuts.zig");
 const reaction_progress = @import("reaction_progress.zig");
 const viewport = @import("viewport.zig");
+const results = @import("palette_results.zig");
 const Viewport = viewport.Viewport;
 const win = windows.api;
 const allocator = std.heap.page_allocator;
 const class = windows.wide("ChatPalette.Palette");
 const search_timer = 1;
-extern "kernel32" fn FindStringOrdinal(win.DWORD, [*]const u16, c_int, [*]const u16, c_int, win.BOOL) callconv(.winapi) c_int;
 pub const wm_insert = win.WM_APP + 10;
 pub const wm_stop = win.WM_APP + 11;
 pub const wm_manage = win.WM_APP + 12;
@@ -39,37 +39,27 @@ const SortOrder = enum {
     }
 };
 const sort_row = 32;
+const search_label_row = 20;
+const search_hint_height = 52;
+const preview_label_row = 20;
+const input_notice_height = 64;
+const list_labels = search_label_row + preview_label_row + search_hint_height - 22;
 const interval_hint_row = 24;
 const notice_row = 34;
 const reaction_detail_rows = interval_hint_row + 3 * notice_row - 24;
 const minimum_width = 344;
 const compact_width = 535;
-const minimum_height = 394 + sort_row + reaction_detail_rows;
-const compact_minimum_height = 426 + sort_row + reaction_detail_rows;
+const minimum_height = 394 + sort_row + reaction_detail_rows + list_labels;
+const compact_minimum_height = 426 + sort_row + reaction_detail_rows + list_labels;
 
 pub const ReactionOptions = struct { kind: u8, count: u32, interval: u32 };
 pub const reaction_counts = storage.Preferences.reaction_counts;
 pub const reaction_intervals = storage.Preferences.reaction_intervals;
 
 pub const Palette = struct {
-    const max_rows = 500;
-    const Row = struct { item: storage.Item, profile_id: []const u8 };
+    const max_rows = results.max_rows;
+    const Row = results.Row;
     const ListPosition = struct { top: usize = 0, id: ?[]u8 = null };
-    const ItemRows = struct {
-        rows: [max_rows]Row = undefined,
-        count: usize = 0,
-
-        fn collect(self: *ItemRows, items: []const storage.Item, profile_id: []const u8, query: []const u8) bool {
-            for (items) |item| {
-                if (!matchesQuery(query, item)) continue;
-                if (self.count == self.rows.len) return true;
-                self.rows[self.count] = .{ .item = item, .profile_id = profile_id };
-                self.count += 1;
-            }
-            return false;
-        }
-    };
-
     const SortContext = struct {
         order: SortOrder,
         preferences: *const storage.Preferences,
@@ -95,10 +85,14 @@ pub const Palette = struct {
     font: windows.GuiFont = .{},
     host: win.HWND = null,
     search: win.HWND = null,
+    search_label: win.HWND = null,
+    input_notice: win.HWND = null,
+    input_notice_visible: bool = false,
     sort_label: win.HWND = null,
     sort_selector: win.HWND = null,
     list: win.HWND = null,
     preview: win.HWND = null,
+    preview_label: win.HWND = null,
     insert_button: win.HWND = null,
     stop_button: win.HWND = null,
     manage_button: win.HWND = null,
@@ -121,12 +115,15 @@ pub const Palette = struct {
     reaction_notice: win.HWND = null,
     settings_notice: win.HWND = null,
     search_hint: win.HWND = null,
+    search_guidance: []const u8 = "",
+    search_retry: bool = false,
     viewport: Viewport = .{},
     data: storage.Data = .{},
     rows: [max_rows]Row = undefined,
     count: usize = 0,
     items_revision: u64 = 0,
     selected_id: ?[]u8 = null,
+    selection_intent: enum { automatic, explicit, reselect } = .automatic,
     row_ids_arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(allocator),
     row_ids: []const []const u8 = &.{},
     saved_refresh_pending: bool = false,
@@ -162,6 +159,9 @@ pub const Palette = struct {
         self.input_context = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         _ = addText(self.mode, win.CB_ADDSTRING, "自動判別");
         _ = addText(self.mode, win.CB_ADDSTRING, "手動選択");
+        self.input_notice = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
+        _ = win.ShowWindow(self.input_notice, win.SW_HIDE);
+        self.search_label = try control(self.window, "STATIC", "弾幕名・本文を検索", 0, null);
         self.search = try control(self.window, "EDIT", "", win.ES_AUTOHSCROLL | win.WS_TABSTOP | win.WS_BORDER, .search);
         self.link_button = try control(self.window, "BUTTON", "チャンネル連携…", win.WS_TABSTOP, .link);
         self.sort_label = try control(self.window, "STATIC", "並べ替え", 0, null);
@@ -170,7 +170,8 @@ pub const Palette = struct {
             if (!addText(self.sort_selector, win.CB_ADDSTRING, order.label())) return error.CreatePaletteSortChoices;
         _ = win.SendMessageW(self.sort_selector, win.CB_SETCURSEL, @intFromEnum(self.sort_order), 0);
         self.list = try control(self.window, "LISTBOX", "", win.LBS_NOTIFY | win.WS_VSCROLL | win.WS_TABSTOP | win.WS_BORDER, .list);
-        self.preview = try control(self.window, "EDIT", "", win.ES_READONLY | win.ES_MULTILINE | win.WS_VSCROLL | win.WS_BORDER, null);
+        self.preview_label = try control(self.window, "STATIC", "弾幕本文", 0, null);
+        self.preview = try control(self.window, "EDIT", "", win.ES_READONLY | win.ES_MULTILINE | win.WS_VSCROLL | win.WS_BORDER | win.WS_TABSTOP, null);
         self.insert_button = try control(self.window, "BUTTON", "選んだ弾幕を入力", win.BS_DEFPUSHBUTTON | win.WS_TABSTOP, .insert);
         self.manage_button = try control(self.window, "BUTTON", "弾幕を追加・編集", win.WS_TABSTOP, .manage);
         self.stop_button = try control(self.window, "BUTTON", "停止", win.WS_TABSTOP, .stop);
@@ -193,7 +194,6 @@ pub const Palette = struct {
         self.reaction_notice = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         self.settings_notice = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         self.search_hint = try control(self.window, "STATIC", "", 0, null);
-        _ = win.SendMessageW(self.search, win.EM_SETCUEBANNER, 1, @bitCast(@intFromPtr(windows.wide("弾幕名・本文を検索").ptr)));
         self.font.applyChildren(self.window);
         self.resize();
     }
@@ -204,6 +204,7 @@ pub const Palette = struct {
         self.font.deinit();
         if (self.selected_id) |id| allocator.free(id);
         self.selected_id = null;
+        self.selection_intent = .automatic;
         self.row_ids_arena.deinit();
         self.row_ids_arena = std.heap.ArenaAllocator.init(allocator);
         self.row_ids = &.{};
@@ -240,6 +241,18 @@ pub const Palette = struct {
 
     pub fn status(self: Palette, value: []const u8) void {
         windows.setText(self.message, value);
+    }
+
+    pub fn inputFailure(self: *Palette, message: []const u8) void {
+        const visible = message.len != 0;
+        if (!visible and !self.input_notice_visible) return;
+        windows.setText(self.input_notice, message);
+        if (visible != self.input_notice_visible) {
+            self.input_notice_visible = visible;
+            _ = win.ShowWindow(self.input_notice, if (visible) win.SW_SHOWNA else win.SW_HIDE);
+            self.resize();
+        }
+        if (visible) _ = win.SendMessageW(self.window, win.WM_VSCROLL, win.SB_TOP, 0);
     }
 
     pub fn settingsStatus(self: Palette, value: []const u8) void {
@@ -366,6 +379,7 @@ pub const Palette = struct {
     }
 
     fn queueSearch(self: *Palette) void {
+        self.inputFailure("");
         if (self.refreshing) {
             self.items_pending = true;
             return;
@@ -390,12 +404,13 @@ pub const Palette = struct {
     fn settleSearchForAction(self: *Palette) bool {
         if (self.search_due == null) return false;
         self.refreshItems();
-        if (!self.refresh_failed)
-            windows.setText(self.search_hint, "検索結果を更新しました。弾幕を選んで操作してください。");
+        self.search_retry = !self.refresh_failed and self.count != 0;
+        self.showSearchHint();
         return true;
     }
 
     pub fn resetSearch(self: *Palette) void {
+        self.inputFailure("");
         self.cancelSearch();
         // Import can release the previous library before publishing the new one.
         self.resetting_search = true;
@@ -404,6 +419,7 @@ pub const Palette = struct {
         _ = win.SetWindowTextW(self.search, windows.wide(""));
         if (self.selected_id) |id| allocator.free(id);
         self.selected_id = null;
+        self.selection_intent = .automatic;
     }
 
     pub fn selectedRow(self: *Palette) ?Row {
@@ -491,7 +507,7 @@ pub const Palette = struct {
         const query = std.mem.trim(u8, raw_query, " \t");
         const profile = self.inputProfile();
         const profile_name = if (profile) |value| value.name else "";
-        var next: ItemRows = .{};
+        var next: results.ItemRows = .{};
         const profile_truncated = if (profile) |value| next.collect(value.items, value.id, query) else false;
         const truncated = profile_truncated or next.collect(self.data.shared_items, "", query);
         if (self.sort_order != .saved) {
@@ -523,20 +539,23 @@ pub const Palette = struct {
         self.count = next.count;
         self.items_revision +%= 1;
         self.refresh_failed = self.scope_refresh_failed;
-        windows.setText(self.search_hint, if (truncated)
-            "先頭500件を表示しています。検索で絞り込んでください。"
+        self.search_retry = false;
+        self.search_guidance = if (truncated)
+            "並べ替えは表示中の500件のみ。検索で絞り込めます。\r\nダブルクリックで入力します。"
         else if (self.count > 0)
-            "弾幕は入力のみです。内容を確認してYouTubeで送信します。"
+            "ダブルクリックで入力できます。送信はYouTubeで行います。"
         else if (query.len != 0)
             "一致する弾幕がありません。"
         else
-            "弾幕を追加・編集できます。");
+            "弾幕を追加・編集できます。";
         if (self.items_pending) return;
+        const retained = if (self.selected_id) |id| for (self.rows[0..self.count], 0..) |row, n| {
+            if (std.mem.eql(u8, row.item.id, id)) break n;
+        } else null else null;
+        if (self.selection_intent == .explicit and retained == null) self.selection_intent = .reselect;
         if (self.count > 0) {
-            const retained = if (self.selected_id) |id| for (self.rows[0..self.count], 0..) |row, n| {
-                if (std.mem.eql(u8, row.item.id, id)) break n;
-            } else null else null;
-            _ = win.SendMessageW(self.list, win.LB_SETCURSEL, retained orelse 0, 0);
+            const selection = retained orelse if (self.selection_intent == .reselect) @as(usize, std.math.maxInt(usize)) else 0;
+            _ = win.SendMessageW(self.list, win.LB_SETCURSEL, selection, 0);
             if (!self.items_pending and retained != null) self.restoreListPosition(position);
         }
         self.showSelection();
@@ -548,7 +567,8 @@ pub const Palette = struct {
         self.count = 0;
         self.items_revision +%= 1;
         _ = win.SendMessageW(self.list, win.LB_RESETCONTENT, 0, 0);
-        windows.setText(self.search_hint, "弾幕一覧を更新できませんでした。検索し直してください。");
+        self.search_retry = false;
+        self.search_guidance = "弾幕一覧を更新できませんでした。検索し直してください。";
         self.showSelection();
     }
 
@@ -586,12 +606,27 @@ pub const Palette = struct {
         const item = if (selected) |index| self.rows[index].item else null;
         windows.setText(self.preview, if (item) |value| value.text else "");
         if (self.items_pending) return;
+        self.showSearchHint();
+        if (self.items_pending) return;
         if (self.selected_id) |id| allocator.free(id);
         self.selected_id = if (item) |value| allocator.dupe(u8, value.id) catch null else null;
     }
 
+    fn showSearchHint(self: *Palette) void {
+        if (self.search_due != null) return;
+        const action = if (!self.refresh_failed and self.count != 0 and self.selection_intent == .reselect)
+            "弾幕を選び直してください。"
+        else if (self.search_retry)
+            "選択を確認し、もう一度操作してください。"
+        else
+            return windows.setText(self.search_hint, self.search_guidance);
+        var message: [512]u8 = undefined;
+        windows.setText(self.search_hint, std.fmt.bufPrint(&message, "{s}\r\n{s}", .{ action, self.search_guidance }) catch action);
+    }
+
     fn selectionChanged(self: *Palette) void {
         if (self.refreshing) return;
+        if (self.search_due == null and self.selectedIndex() != null) self.selection_intent = .explicit;
         self.refreshing = true;
         self.updateCommandButtons();
         self.showSelection();
@@ -612,8 +647,13 @@ pub const Palette = struct {
     }
 
     fn placeControls(self: *Palette) void {
-        const content = self.viewport.layout(self.window, self.dpi, .{ .width = minimum_width, .height = minimum_height }, .{ .below_width = compact_width, .minimum_height = compact_minimum_height }) orelse return;
+        const extra = self.inputNoticeHeight();
+        const content = self.viewport.layout(self.window, self.dpi, .{ .width = minimum_width, .height = minimum_height + extra }, .{ .below_width = compact_width, .minimum_height = compact_minimum_height + extra }) orelse return;
         self.layout(self.dpi.fittingUnits(content.width), self.dpi.fittingUnits(content.height));
+    }
+
+    fn inputNoticeHeight(self: Palette) i32 {
+        return if (self.input_notice_visible) input_notice_height else 0;
     }
 
     fn place(self: Palette, hwnd: win.HWND, x: i32, y: i32, width: i32, height: i32) void {
@@ -627,18 +667,26 @@ pub const Palette = struct {
         const extra: i32 = if (compact) 32 else 0;
         const context_row: i32 = 21;
         const registration_row: i32 = 21;
-        const list_height = @max(height - 324 - extra - registration_row - context_row - sort_row - reaction_detail_rows, 28);
-        const below_list = context_row + sort_row + list_height;
+        const input_notice_row = self.inputNoticeHeight();
+        const list_height = @max(height - 324 - extra - registration_row - context_row - sort_row - reaction_detail_rows - list_labels - input_notice_row, 28);
+        const search_top = 51 + context_row + search_label_row + input_notice_row;
+        const sort_top = search_top + 34 + search_hint_height;
+        const list_top = sort_top + sort_row;
+        const below_list = list_top - 85 + list_height + preview_label_row;
         self.place(self.mode, padding, 12, 112, 180);
         self.place(self.profile, 134, 12, width - 264, 242);
         self.place(self.support_button, width - 122, 11, 110, 29);
         self.place(self.input_context, padding, 43, full, 21);
         const link_width: i32 = 132;
-        self.place(self.search, padding, 51 + context_row, full - link_width - 8, 27);
-        self.place(self.link_button, width - padding - link_width, 51 + context_row, link_width, 27);
-        self.place(self.sort_label, padding, 88 + context_row, 74, 24);
-        self.place(self.sort_selector, padding + 80, 85 + context_row, 160, 160);
-        self.place(self.list, padding, 85 + context_row + sort_row, full, list_height);
+        if (self.input_notice_visible) self.place(self.input_notice, padding, 51 + context_row, full, input_notice_row - 4);
+        self.place(self.search_label, padding, search_top - search_label_row, full, search_label_row);
+        self.place(self.search, padding, search_top, full - link_width - 8, 27);
+        self.place(self.link_button, width - padding - link_width, search_top, link_width, 27);
+        self.place(self.search_hint, padding, search_top + 31, full, search_hint_height);
+        self.place(self.sort_label, padding, sort_top + 3, 74, 24);
+        self.place(self.sort_selector, padding + 80, sort_top, 160, 160);
+        self.place(self.list, padding, list_top, full, list_height);
+        self.place(self.preview_label, padding, 93 + below_list - preview_label_row, full, preview_label_row);
         self.place(self.preview, padding, 93 + below_list, full, 48);
         self.place(self.insert_button, padding, 149 + below_list, 164, 30);
         self.place(self.manage_button, padding + 173, 149 + below_list, 148, 30);
@@ -662,29 +710,8 @@ pub const Palette = struct {
         self.place(self.message, padding, notices_top, full, notice_row - 2);
         self.place(self.reaction_notice, padding, notices_top + notice_row, full, notice_row - 2);
         self.place(self.settings_notice, padding, notices_top + 2 * notice_row, full, notice_row - 2);
-        self.place(self.search_hint, padding, notices_top + 3 * notice_row, full, 22);
     }
 };
-
-fn matchesQuery(query: []const u8, item: storage.Item) bool {
-    if (query.len == 0) return true;
-    var fallback = std.heap.stackFallback(2048, allocator);
-    const scratch = fallback.get();
-    const joined = std.fmt.allocPrint(scratch, "{s} {s}", .{ item.name, item.text }) catch return false;
-    defer scratch.free(joined);
-    if (std.ascii.indexOfIgnoreCase(joined, query) != null) return true;
-    if (asciiOnly(joined) and asciiOnly(query)) return false;
-    const source = std.unicode.utf8ToUtf16LeAlloc(scratch, joined) catch return false;
-    defer scratch.free(source);
-    const target = std.unicode.utf8ToUtf16LeAlloc(scratch, query) catch return false;
-    defer scratch.free(target);
-    return FindStringOrdinal(win.FIND_FROMSTART, source.ptr, @intCast(source.len), target.ptr, @intCast(target.len), 1) >= 0;
-}
-
-fn asciiOnly(value: []const u8) bool {
-    for (value) |ch| if (!std.ascii.isAscii(ch)) return false;
-    return true;
-}
 
 fn control(parent: win.HWND, comptime kind: []const u8, comptime text: []const u8, styles: win.DWORD, id: ?Id) !win.HWND {
     const menu: win.HMENU = if (id) |value| @ptrFromInt(@intFromEnum(value)) else null;
@@ -768,13 +795,6 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
     return 0;
 }
 
-test "palette matches across name and text and folds Unicode case" {
-    const item = storage.Item{ .id = "1", .name = "Ä弾幕", .text = "日本語 😀", .slot = 0 };
-    try std.testing.expect(matchesQuery("ä弾幕 日", item));
-    try std.testing.expect(matchesQuery("日本語", item));
-    try std.testing.expect(!matchesQuery("別", item));
-}
-
 test "desktop: palette keeps unchanged native labels and replaces their displayed ID mapping" {
     try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
@@ -853,7 +873,7 @@ test "desktop: compact palette leaves room for the registration row and the bott
         palette.reaction_heading,  palette.reaction_registration, palette.reaction_kind,  palette.reaction_count,
         palette.reaction_interval, palette.interval_hint,         palette.start_button,   palette.stop_button,
         palette.save_defaults,     palette.load_defaults,         palette.message,        palette.reaction_notice,
-        palette.settings_notice,   palette.search_hint,
+        palette.settings_notice,   palette.search_hint,           palette.search_label,   palette.preview_label,
     }) |control_window| {
         const bounds = try Probe.boundsInClient(&palette, control_window);
         try expect(bounds.left >= 0 and bounds.right <= client.right);
@@ -862,10 +882,25 @@ test "desktop: compact palette leaves room for the registration row and the bott
     var list: win.RECT = undefined;
     try expect(win.GetClientRect(palette.list, &list) != 0);
     try expect(list.bottom >= win.SendMessageW(palette.list, win.LB_GETITEMHEIGHT, 0, 0));
+    const hint = try Probe.boundsInClient(&palette, palette.search_hint);
+    try expect(hint.top >= (try Probe.boundsInClient(&palette, palette.search)).bottom);
+    try expect(hint.bottom <= (try Probe.boundsInClient(&palette, palette.list)).top);
+    _ = win.ShowWindow(palette.window, win.SW_SHOWNOACTIVATE);
+    _ = win.EnableWindow(palette.insert_button, 1);
+    try std.testing.expectEqual(palette.preview, win.GetNextDlgTabItem(palette.window, palette.list, 0));
+    try std.testing.expectEqual(palette.insert_button, win.GetNextDlgTabItem(palette.window, palette.preview, 0));
     try Probe.resizeClient(&palette, minimum_width, 410);
     _ = win.SendMessageW(palette.window, win.WM_VSCROLL, win.SB_BOTTOM, 0);
+    try expect(palette.viewport.y > 0);
+    palette.inputFailure("配信者が変わりました。弾幕を選び直してください。");
+    palette.show();
+    const failure_notice = try Probe.boundsInClient(&palette, palette.input_notice);
+    try expect(win.GetClientRect(palette.window, &client) != 0);
+    try expect(failure_notice.top >= 0 and failure_notice.bottom <= client.bottom);
+    palette.inputFailure("");
+    _ = win.SendMessageW(palette.window, win.WM_VSCROLL, win.SB_BOTTOM, 0);
     try expect(palette.viewport.y > 0 and win.GetClientRect(palette.window, &client) != 0);
-    for ([_]win.HWND{ palette.load_defaults, palette.message, palette.reaction_notice, palette.settings_notice, palette.search_hint }) |tail| {
+    for ([_]win.HWND{ palette.load_defaults, palette.message, palette.reaction_notice, palette.settings_notice }) |tail| {
         const bounds = try Probe.boundsInClient(&palette, tail);
         try expect(bounds.top >= 0 and bounds.bottom <= client.bottom);
     }
@@ -892,7 +927,9 @@ test "desktop: short palette can scroll to every operation and clears its offset
     try std.testing.expect(bottom.left >= 0 and bottom.right <= client_bounds.right);
     try std.testing.expect(bottom.top >= 0 and bottom.bottom <= client_bounds.bottom);
 
-    try std.testing.expect(win.SetWindowPos(palette.window, null, 0, 0, 580, 620, flags) != 0);
+    const expanded_width = palette.dpi.pixels(compact_width + 45);
+    const expanded_height = palette.dpi.pixels(minimum_height + 64);
+    try std.testing.expect(win.SetWindowPos(palette.window, null, 0, 0, expanded_width, expanded_height, flags) != 0);
     try std.testing.expectEqual(@as(i32, 0), palette.viewport.x);
     try std.testing.expectEqual(@as(i32, 0), palette.viewport.y);
     const style: u32 = @bitCast(win.GetWindowLongW(palette.window, win.GWL_STYLE));
@@ -1000,6 +1037,41 @@ test "desktop: palette searches beyond the visible 500 rows and retains the sele
     windows.setText(palette.search, "");
     palette.refresh(.{ .shared_items = &items });
     try std.testing.expectEqualStrings("item-501", palette.selectedRow().?.item.id);
+}
+
+test "desktop: filtering away an explicit palette selection requires a new choice" {
+    try @import("test_mode.zig").requireDesktop();
+    var palette: Palette = .{};
+    defer palette.close();
+    try palette.open(null);
+    palette.refresh(.{ .shared_items = &.{
+        .{ .id = "a", .name = "alpha", .text = "first" },
+        .{ .id = "b", .name = "beta", .text = "second" },
+    } });
+    palette.operationButtons(true, false);
+    try std.testing.expectEqualStrings("a", palette.selectedRow().?.item.id);
+    // Clicking the already highlighted row also makes it an explicit choice.
+    const first_row_point = 1 | (1 << 16);
+    _ = win.SendMessageW(palette.list, win.WM_LBUTTONDOWN, win.MK_LBUTTON, first_row_point);
+    _ = win.SendMessageW(palette.list, win.WM_LBUTTONUP, 0, first_row_point);
+    try std.testing.expect(palette.selection_intent == .explicit);
+    _ = win.SendMessageW(palette.list, win.LB_SETCURSEL, 1, 0);
+    palette.selectionChanged();
+
+    windows.setText(palette.search, "alpha");
+    try std.testing.expect(palette.selectedRow() == null);
+    try std.testing.expect(win.IsWindowEnabled(palette.insert_button) == 0);
+    try std.testing.expect(win.GetWindowTextLengthW(palette.preview) == 0);
+    const hint = try windows.text(palette.search_hint, std.testing.allocator);
+    defer std.testing.allocator.free(hint);
+    try std.testing.expect(std.mem.indexOf(u8, hint, "弾幕を選び直してください。") != null);
+    windows.setText(palette.search, "");
+    try std.testing.expect(palette.selectedRow() == null);
+
+    _ = win.SendMessageW(palette.list, win.LB_SETCURSEL, 0, 0);
+    palette.selectionChanged();
+    try std.testing.expectEqualStrings("a", palette.selectedRow().?.item.id);
+    try std.testing.expect(win.IsWindowEnabled(palette.insert_button) != 0);
 }
 
 test "desktop: palette sort preserves native preview and action identities in all five orders" {
