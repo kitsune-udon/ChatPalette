@@ -52,8 +52,26 @@ pub fn run(mode: Startup) !void {
     const dir = std.fs.path.dirname(path) orelse return error.ExecutablePath;
     const instance_id = try std.ascii.allocLowerString(allocator, dir);
     defer allocator.free(instance_id);
-    const owner = try instance.Instance.acquire(instance_id, if (mode == .smoke) .fail_if_running else .take_over);
-    defer owner.release();
+    const owner = (instance.Instance.acquire(instance_id, switch (mode) {
+        .normal => .reveal,
+        .quiet => .quiet,
+        .smoke => null,
+    }) catch |failure| {
+        if (mode == .normal) switch (failure) {
+            error.OtherInstanceAlreadyRunning => messageBox(null, "別のフォルダーのChatPaletteが稼働中です。その本体を終了してから起動してください。", windows.wide("ChatPalette"), win.MB_ICONWARNING),
+            error.InstanceNotResponding => messageBox(null, "稼働中のChatPaletteが表示要求に応答しませんでした。", windows.wide("ChatPalette"), win.MB_ICONWARNING),
+            else => {},
+        };
+        return failure;
+    }) orelse return;
+    const restarting = resident: {
+        defer owner.release();
+        break :resident try runResident(mode, executable, dir, &owner.window_name);
+    };
+    if (restarting) try restart(executable);
+}
+
+fn runResident(mode: Startup, executable: [:0]const u16, dir: []const u8, window_name: [:0]const u16) !bool {
     const data_dir = try std.fs.path.join(allocator, &.{ dir, "data" });
     defer allocator.free(data_dir);
     std.fs.cwd().makePath(data_dir) catch |failure| {
@@ -84,7 +102,7 @@ pub fn run(mode: Startup) !void {
     defer app.deinit();
     current = &app;
     defer current = null;
-    app.open(&owner.window_name) catch |failure| {
+    app.open(window_name) catch |failure| {
         if (failure == error.InstallKeyboardHook and mode != .smoke) {
             const details = hookFailureMessage(allocator, app.keyboard.install_error_code) catch return failure;
             defer allocator.free(details);
@@ -92,7 +110,8 @@ pub fn run(mode: Startup) !void {
         }
         return failure;
     };
-    if (mode == .smoke) return;
+    if (mode == .smoke) return false;
+    app.startup_ready = true;
     if (mode == .normal) app.show(.active_window);
     var message: win.MSG = undefined;
     while (true) {
@@ -101,7 +120,7 @@ pub fn run(mode: Startup) !void {
         if (result == 0) break;
         dispatch(&message);
     }
-    if (app.restarting) try restart(executable);
+    return app.restarting;
 }
 
 const Settings = struct { db: storage.Store, snapshot: storage.Snapshot };
@@ -244,6 +263,7 @@ fn restart(executable: [:0]const u16) !void {
 }
 
 const App = struct {
+    startup_ready: bool = false,
     executable: [:0]const u16,
     db: *storage.Store,
     snapshot: storage.Snapshot,
@@ -378,6 +398,17 @@ const App = struct {
         _ = win.Shell_NotifyIconW(win.NIM_MODIFY, &icon);
     }
 
+    fn announceBusyRecall(self: *App) void {
+        const message = "ChatPaletteは処理中です。完了後にもう一度開いてください。";
+        if (self.tray) {
+            var icon = self.trayData();
+            icon.uFlags = win.NIF_INFO;
+            windows.copyText(&icon.szInfo, message);
+            if (win.Shell_NotifyIconW(win.NIM_MODIFY, &icon) != 0) return;
+        }
+        self.showStatusTip(message);
+    }
+
     fn removeTray(self: *App) void {
         if (!self.tray) return;
         var icon = self.trayData();
@@ -475,6 +506,30 @@ const App = struct {
         if (returning_from != null and self.manager.window == returning_from and
             !self.manager.isEditing() and win.IsWindowVisible(self.palette.window) != 0)
             _ = win.ShowWindow(returning_from, win.SW_HIDE);
+    }
+
+    fn presentExisting(self: *App) void {
+        if (!self.startup_ready or self.quitting) return;
+        if (self.reaction != null or self.preparation != null or self.input_cancellation != null or
+            self.worker.active or self.queue.busy() or self.updatingViews())
+            return self.announceBusyRecall();
+        if (self.manager.isEditing()) {
+            if (self.manager.dialog.window) |editor| windows.recallOwnedWindow(editor) else self.manager.show();
+            return;
+        }
+        if (self.modal) {
+            if (support.shortcutEditorAwayFrom(win.GetForegroundWindow())) |editor| {
+                windows.recallOwnedWindow(editor);
+            } else {
+                windows.recallOwnedWindow(self.dialogParent());
+            }
+            return;
+        }
+        if (win.IsWindowVisible(self.palette.window) != 0) {
+            windows.recallOwnedWindow(self.palette.window);
+        } else {
+            self.palette.show();
+        }
     }
 
     fn registrationLabel(self: *const App, browser: ?[]const u8, buffer: []u8) []const u8 {
@@ -2556,9 +2611,12 @@ test "desktop: modeless diagnostics and reaction details leave waiting and palet
         return error.CreateInformationHost;
     try app.palette.open(app.window);
     const palette = app.palette.window;
-    _ = win.ShowWindow(palette, win.SW_SHOWNOACTIVATE);
     const target = app.window;
     app.target = target;
+    app.startup_ready = true;
+    app.presentExisting();
+    try t.expect(win.IsWindowVisible(palette) != 0);
+    try t.expectEqual(target, app.target);
     app.preparation = .{
         .mode = .reaction_capture,
         .target = windows.number(target),
@@ -2572,6 +2630,8 @@ test "desktop: modeless diagnostics and reaction details leave waiting and palet
         return error.InstallDocumentActivationProbe;
     defer _ = win.UnhookWindowsHookEx(activation_hook);
     ActivationProbe.activated = null;
+    app.presentExisting();
+    try t.expect(ActivationProbe.activated == null and app.preparation != null and app.target == target);
     app.menuCommand(menu_diag);
     const diagnostics_window = app.diagnostic_view.dialog.window orelse return error.ShowDiagnosticView;
     try expectModeless(ActivationProbe.activated == null, "diagnostic display activated window {x}", .{windows.number(ActivationProbe.activated)});
@@ -3102,7 +3162,7 @@ fn testTakeQuitMessage() ?win.WPARAM {
     return null;
 }
 
-test "the restart menu refuses active work while a same-path launch can drain it" {
+test "a launch recall preserves active work and explicit close still drains it" {
     const testing = std.testing;
     var app: App = .{
         .executable = undefined,
@@ -3138,7 +3198,17 @@ test "the restart menu refuses active work while a same-path launch can drain it
     try testing.expectEqual(@as(?win.WPARAM, null), testTakeQuitMessage());
 
     app.worker.active = true;
-    _ = messageHandler(null, instance.take_over, 0, 0);
+    app.startup_ready = true;
+    app.target = @ptrFromInt(1);
+    try testing.expectEqual(@as(win.LRESULT, 1), messageHandler(null, instance.recall, @intFromEnum(instance.Request.quiet), 0));
+    _ = messageHandler(null, instance.present, 0, 0);
+    try testing.expect(!app.quitting and !app.restarting);
+    try testing.expectEqual(@as(win.HWND, @ptrFromInt(1)), app.target);
+    try testing.expectEqual(generation, app.queue.generation);
+    try testing.expectEqual(@as(usize, 1), app.queue.pending.items.len);
+    try testing.expectEqual(@as(win.DWORD, win.WAIT_TIMEOUT), win.WaitForSingleObject(signal.handle, 0));
+
+    _ = messageHandler(null, win.WM_CLOSE, 0, 0);
     try testing.expect(app.quitting and !app.restarting);
     try testing.expectEqual(@as(usize, 0), app.queue.pending.items.len);
     try testing.expectEqual(@as(win.DWORD, win.WAIT_OBJECT_0), win.WaitForSingleObject(signal.handle, 0));
@@ -4197,7 +4267,14 @@ fn shortcut(event: shortcuts.Event) void {
 fn messageHandler(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
     const app = current orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
-        win.WM_CLOSE, instance.take_over => app.quit(false),
+        win.WM_CLOSE => app.quit(false),
+        instance.recall => {
+            if (!app.startup_ready or app.quitting or lparam != 0) return 0;
+            if (wparam == @intFromEnum(instance.Request.quiet)) return 1;
+            if (wparam != @intFromEnum(instance.Request.reveal)) return 0;
+            return @intFromBool(win.PostMessageW(hwnd, instance.present, 0, 0) != 0);
+        },
+        instance.present => app.presentExisting(),
         win.WM_COMMAND => {
             if (lparam != 0 or windows.high(wparam) != 0) return win.DefWindowProcW(hwnd, message, wparam, lparam);
             app.menuCommand(windows.low(wparam));

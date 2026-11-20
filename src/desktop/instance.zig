@@ -3,13 +3,17 @@ const windows = @import("win.zig");
 const win = windows.api;
 
 pub const class_name = windows.wide("ChatPalette.Host");
-pub const take_over = win.WM_APP + 1;
+pub const recall = win.WM_APP + 5;
+pub const present = win.WM_APP + 6;
+pub const Request = enum(usize) { quiet, reveal };
+const session_name = windows.wide("Local\\ChatPalette.Desktop");
 
 pub const Instance = struct {
-    handle: win.HANDLE,
+    directory: win.HANDLE,
+    session: win.HANDLE,
     window_name: [77:0]u16,
 
-    pub fn acquire(directory: []const u8, policy: enum { take_over, fail_if_running }) !Instance {
+    pub fn acquire(directory: []const u8, request: ?Request) !?Instance {
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(directory, &digest, .{});
         const hex = std.fmt.bytesToHex(digest, .lower);
@@ -17,32 +21,51 @@ pub const Instance = struct {
         const prefix = windows.wide("ChatPalette.");
         @memcpy(name[0..prefix.len], prefix);
         for (hex, name[prefix.len .. prefix.len + hex.len]) |ch, *unit| unit.* = ch;
-        win.SetLastError(0);
-        const mutex = win.CreateMutexW(null, 1, &name) orelse return error.CreateInstanceMutex;
-        errdefer _ = win.CloseHandle(mutex);
-        if (win.GetLastError() == win.ERROR_ALREADY_EXISTS) {
-            if (policy == .fail_if_running) {
-                switch (win.WaitForSingleObject(mutex, 0)) {
-                    win.WAIT_OBJECT_0, win.WAIT_ABANDONED => return .{ .handle = mutex, .window_name = name },
-                    win.WAIT_TIMEOUT => return error.InstanceAlreadyRunning,
-                    else => return error.WaitForInstanceMutex,
-                }
-            }
-            const started = win.GetTickCount64();
-            while (true) {
-                const previous = win.FindWindowW(class_name, &name);
-                if (previous != null) _ = win.PostMessageW(previous, take_over, 0, 0);
-                const state = win.WaitForSingleObject(mutex, 50);
-                if (state == win.WAIT_OBJECT_0 or state == win.WAIT_ABANDONED) break;
-                if (state != win.WAIT_TIMEOUT or win.GetTickCount64() - started >= 8000)
-                    return error.PreviousInstanceDidNotExit;
-            }
-        }
-        return .{ .handle = mutex, .window_name = name };
+        const local = try tryLock(&name) orelse {
+            try requestExisting(&name, request orelse return error.InstanceAlreadyRunning);
+            return null;
+        };
+        errdefer unlock(local);
+        const session = try tryLock(session_name) orelse return error.OtherInstanceAlreadyRunning;
+        return .{ .directory = local, .session = session, .window_name = name };
     }
 
     pub fn release(self: Instance) void {
-        _ = win.ReleaseMutex(self.handle);
-        _ = win.CloseHandle(self.handle);
+        unlock(self.session);
+        unlock(self.directory);
     }
 };
+
+fn tryLock(name: [:0]const u16) !?win.HANDLE {
+    const mutex = win.CreateMutexW(null, 0, name) orelse return error.CreateInstanceMutex;
+    switch (win.WaitForSingleObject(mutex, 0)) {
+        win.WAIT_OBJECT_0, win.WAIT_ABANDONED => return mutex,
+        else => |state| {
+            _ = win.CloseHandle(mutex);
+            if (state == win.WAIT_TIMEOUT) return null;
+            return error.WaitForInstanceMutex;
+        },
+    }
+}
+
+fn unlock(mutex: win.HANDLE) void {
+    _ = win.ReleaseMutex(mutex);
+    _ = win.CloseHandle(mutex);
+}
+
+fn requestExisting(name: [:0]const u16, request: Request) !void {
+    const started = win.GetTickCount64();
+    while (win.GetTickCount64() - started < 3000) {
+        if (win.FindWindowW(class_name, name)) |window| {
+            if (request == .reveal) {
+                var pid: win.DWORD = 0;
+                if (win.GetWindowThreadProcessId(window, &pid) != 0) _ = win.AllowSetForegroundWindow(pid);
+            }
+            var response: win.DWORD_PTR = 0;
+            if (win.SendMessageTimeoutW(window, recall, @intFromEnum(request), 0, win.SMTO_ABORTIFHUNG | win.SMTO_BLOCK, 300, &response) != 0 and response == 1)
+                return;
+        }
+        std.Thread.sleep(25 * std.time.ns_per_ms);
+    }
+    return error.InstanceNotResponding;
+}

@@ -38,10 +38,12 @@ const Report = struct {
     invalid_db_after: ?files.HexDigest = null,
     invalid_arguments_leave_no_data: bool = false,
     worker_leaves_no_data: bool = false,
-    quiet_instances_are_independent: bool = false,
-    rejected_check_leaves_both_hosts_running: bool = false,
-    takeover_leaves_other_host_running: bool = false,
-    trials: [9]Trial = undefined,
+    same_folder_recalled_existing_palette: bool = false,
+    rejected_launches_preserved_resident: bool = false,
+    alternate_folder_startup_after_exit: bool = false,
+    explicit_restart_replaced_resident: bool = false,
+    concurrent_launch_kept_one_resident: bool = false,
+    trials: [17]Trial = undefined,
     trial_count: usize = 0,
 };
 
@@ -82,9 +84,11 @@ pub fn main() !void {
         .invalid_database_sha256_after = report.invalid_db_after,
         .invalid_arguments_leave_no_data = report.invalid_arguments_leave_no_data,
         .worker_leaves_no_data = report.worker_leaves_no_data,
-        .quiet_instances_are_independent = report.quiet_instances_are_independent,
-        .rejected_check_leaves_both_hosts_running = report.rejected_check_leaves_both_hosts_running,
-        .takeover_leaves_other_host_running = report.takeover_leaves_other_host_running,
+        .same_folder_recalled_existing_palette = report.same_folder_recalled_existing_palette,
+        .rejected_launches_preserved_resident = report.rejected_launches_preserved_resident,
+        .alternate_folder_startup_after_exit = report.alternate_folder_startup_after_exit,
+        .explicit_restart_replaced_resident = report.explicit_restart_replaced_resident,
+        .concurrent_launch_kept_one_resident = report.concurrent_launch_kept_one_resident,
         .trials = report.trials[0..report.trial_count],
     };
     try process.saveResult(allocator, output, summary);
@@ -125,25 +129,33 @@ fn verify(input: []const u8, output: []const u8, dir: std.fs.Dir, report: *Repor
 
     var quiet_a = try Child.init(logs, report, a, "05-quiet-a", &.{"--quiet"});
     defer quiet_a.deinit();
-    _ = try quiet_a.waitHost(a);
-    var quiet_b = try Child.init(logs, report, b, "06-quiet-b", &.{"--quiet"});
+    const a_host = try quiet_a.waitHost(a);
+    try finite(logs, report, a, "06-duplicate-quiet", &.{"--quiet"}, 0, "");
+    const palette = findWindowForPid(windows.wide("ChatPalette.Palette"), null, quiet_a.pid) orelse return error.PaletteNotFound;
+    if (win.IsWindowVisible(palette) != 0) return error.QuietPaletteWasShown;
+
+    try finite(logs, report, a, "07-recall-palette", &.{}, 0, "");
+    try waitVisiblePalette(quiet_a.pid);
+    if (try quiet_a.ownedHost(a) != a_host) return error.ResidentHostChanged;
+    report.same_folder_recalled_existing_palette = true;
+
+    try finite(logs, report, b, "08-other-quiet-rejected", &.{"--quiet"}, 1, "OtherInstanceAlreadyRunning");
+    try rejectVisibleLaunch(logs, report, b);
+    try finite(logs, report, a, "10-busy-smoke", &.{"--smoke"}, 1, "InstanceAlreadyRunning");
+    try finite(logs, report, b, "11-other-smoke-rejected", &.{"--smoke"}, 1, "OtherInstanceAlreadyRunning");
+    try finite(logs, report, a, "12-check-rejection", &.{"--check"}, 1, invalid_arguments);
+    if (try quiet_a.ownedHost(a) != a_host or b.host() != null) return error.ResidentHostChanged;
+    report.rejected_launches_preserved_resident = true;
+
+    try verifyRestart(&quiet_a, a, a_host);
+    report.explicit_restart_replaced_resident = true;
+
+    var quiet_b = try Child.init(logs, report, b, "13-quiet-b-after-exit", &.{"--quiet"});
     defer quiet_b.deinit();
-    _ = try quiet_b.waitHost(b);
-    if (quiet_a.pid == quiet_b.pid) return error.QuietHostsShareProcess;
-    _ = try quiet_a.ownedHost(a);
-    _ = try quiet_b.ownedHost(b);
-    report.quiet_instances_are_independent = true;
-
-    try finite(logs, report, a, "07-check-rejection", &.{"--check"}, 1, invalid_arguments);
-    _ = try quiet_a.ownedHost(a);
-    _ = try quiet_b.ownedHost(b);
-    report.rejected_check_leaves_both_hosts_running = true;
-
-    try finite(logs, report, a, "08-smoke-takeover", &.{"--smoke"}, 0, "");
-    try quiet_a.expectExit(0, "");
-    if (a.host() != null) return error.SmokeHostStillRunning;
-    const b_host = try quiet_b.ownedHost(b);
-    report.takeover_leaves_other_host_running = true;
+    const b_host = try quiet_b.waitHost(b);
+    try finite(logs, report, a, "14-other-quiet-reverse", &.{"--quiet"}, 1, "OtherInstanceAlreadyRunning");
+    if (try quiet_b.ownedHost(b) != b_host or a.host() != null) return error.ResidentHostChanged;
+    report.alternate_folder_startup_after_exit = true;
     if (win.PostMessageW(b_host, win.WM_CLOSE, 0, 0) == 0) return error.CannotCloseQuietHost;
     try quiet_b.expectExit(0, "");
 
@@ -155,11 +167,103 @@ fn verify(input: []const u8, output: []const u8, dir: std.fs.Dir, report: *Repor
     try b.dir.rename(db_path, "data/settings.valid.db");
     try files.writeNew(b.dir, db_path, "ChatPalette startup test: intentionally invalid SQLite database\n");
     report.invalid_db_before = files.hex(try files.readDigest(b.dir, db_path));
-    try finite(logs, report, b, "09-corrupt-db-smoke", &.{"--smoke"}, 1, "ChatPalette: InvalidDatabase");
+    try finite(logs, report, b, "15-corrupt-db-smoke", &.{"--smoke"}, 1, "ChatPalette: InvalidDatabase");
     report.invalid_db_after = files.hex(try files.readDigest(b.dir, db_path));
     if (!std.mem.eql(u8, &report.invalid_db_before.?, &report.invalid_db_after.?)) return error.CorruptDatabaseChanged;
     if (!std.mem.eql(u8, &report.b_before.?, &files.hex(try files.readDigest(b.dir, "data/settings.valid.db"))))
         return error.SavedDatabaseChanged;
+
+    try verifyConcurrentLaunch(logs, report, a);
+    if (!std.mem.eql(u8, &report.a_after.?, &(try a.databaseDigest()))) return error.ExistingDatabaseChanged;
+    report.concurrent_launch_kept_one_resident = true;
+}
+
+fn verifyConcurrentLaunch(logs: std.fs.Dir, report: *Report, folder: Folder) !void {
+    var first = try Child.init(logs, report, folder, "16-concurrent-quiet-first", &.{"--quiet"});
+    defer first.deinit();
+    var second = try Child.init(logs, report, folder, "17-concurrent-quiet-second", &.{"--quiet"});
+    defer second.deinit();
+    while (first.timer.read() < deadline_ms * std.time.ns_per_ms) {
+        if (folder.host()) |host| {
+            const pid = windowPid(host);
+            const owner, const duplicate = if (pid == first.pid) .{ &first, &second } else if (pid == second.pid)
+                .{ &second, &first }
+            else
+                return error.InvalidConcurrentHost;
+            try duplicate.expectExit(0, "");
+            if (try owner.ownedHost(folder) != host) return error.ResidentHostChanged;
+            if (win.PostMessageW(host, win.WM_CLOSE, 0, 0) == 0) return error.CannotCloseQuietHost;
+            return owner.expectExit(0, "");
+        }
+        std.Thread.sleep(20 * std.time.ns_per_ms);
+    }
+    return error.ConcurrentHostNotFound;
+}
+
+fn windowPid(window: win.HWND) win.DWORD {
+    var pid: win.DWORD = 0;
+    _ = win.GetWindowThreadProcessId(window, &pid);
+    return pid;
+}
+
+fn findWindowForPid(class: [:0]const u16, title: win.LPCWSTR, pid: win.DWORD) win.HWND {
+    var after: win.HWND = null;
+    while (win.FindWindowExW(null, after, class, title)) |window| {
+        if (windowPid(window) == pid) return window;
+        after = window;
+    }
+    return null;
+}
+
+fn waitVisiblePalette(pid: win.DWORD) !void {
+    var timer = try std.time.Timer.start();
+    while (timer.read() < deadline_ms * std.time.ns_per_ms) {
+        if (findWindowForPid(windows.wide("ChatPalette.Palette"), null, pid)) |palette| {
+            if (win.IsWindowVisible(palette) != 0) return;
+        }
+        std.Thread.sleep(20 * std.time.ns_per_ms);
+    }
+    return error.PaletteNotRecalled;
+}
+
+fn rejectVisibleLaunch(logs: std.fs.Dir, report: *Report, folder: Folder) !void {
+    var child = try Child.init(logs, report, folder, "09-other-normal-rejected", &.{});
+    defer child.deinit();
+    while (child.timer.read() < deadline_ms * std.time.ns_per_ms) {
+        if (findWindowForPid(windows.wide("#32770"), windows.wide("ChatPalette"), child.pid)) |dialog| {
+            if (win.IsWindowVisible(dialog) != 0) {
+                if (win.PostMessageW(dialog, win.WM_CLOSE, 0, 0) == 0) return error.CannotDismissStartupNotice;
+                return child.expectExit(1, "OtherInstanceAlreadyRunning");
+            }
+        }
+        std.Thread.sleep(20 * std.time.ns_per_ms);
+    }
+    return error.StartupNoticeNotFound;
+}
+
+fn verifyRestart(child: *Child, folder: Folder, host: win.HWND) !void {
+    // The tray's "アプリを再起動" command goes through the real resident window.
+    if (win.PostMessageW(host, win.WM_COMMAND, 3, 0) == 0) return error.CannotRequestRestart;
+    try child.expectExit(0, "");
+    var timer = try std.time.Timer.start();
+    while (timer.read() < deadline_ms * std.time.ns_per_ms) {
+        if (folder.host()) |replacement| {
+            const pid = windowPid(replacement);
+            if (pid == 0 or pid == child.pid) return error.InvalidRestartProcess;
+            const process_handle = win.OpenProcess(win.PROCESS_QUERY_LIMITED_INFORMATION | win.SYNCHRONIZE, 0, pid) orelse
+                return error.CannotOpenRestartedHost;
+            defer kernel.CloseHandle(process_handle);
+            var belongs: win.BOOL = 0;
+            if (win.IsProcessInJob(process_handle, child.job, &belongs) == 0 or belongs == 0) return error.InvalidRestartProcess;
+            try waitVisiblePalette(pid);
+            if (windowPid(replacement) != pid or win.PostMessageW(replacement, win.WM_CLOSE, 0, 0) == 0)
+                return error.CannotCloseRestartedHost;
+            try kernel.WaitForSingleObject(process_handle, deadline_ms);
+            return;
+        }
+        std.Thread.sleep(20 * std.time.ns_per_ms);
+    }
+    return error.RestartHostNotFound;
 }
 
 fn expectMissing(dir: std.fs.Dir, path: []const u8) !void {
