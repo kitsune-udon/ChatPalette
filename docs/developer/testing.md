@@ -11,6 +11,7 @@
 | 本体のロジック・設定DB、キー割当、検証ツール | `app-unit`、`shortcut-unit`、`tools-unit`。3群まとめて実行するには `zig build test` |
 | ワーカー通信、タイムアウト、故障後の再開 | `worker-lifecycle`。ヘッドレスで製品EXEと名前付きパイプを使う |
 | 二重起動時の画面表示、別フォルダーからの起動拒否、再起動、管理画面でのデータ移行 | `startup`、`transfer`。稼働中の本体を終了し、試験用の対話デスクトップで実行する |
+| 公開版からの更新、保存と再起動、バックアップからの切り戻し | [`upgrade-rollback`](#zig版の更新と切り戻しを確認する)。公開版と候補のZIPを使い、試験用の対話デスクトップで実行する |
 | 入力欄の識別、Enterやリアクションの操作回数 | `brave-fixture`。オフラインのWindows SandboxでBraveと合成ページを使う |
 | 日本語IME、DPI、常駐アプリとのキー競合 | 対象の設定を備えた試験用デスクトップ。IMEの開閉・文字列・Enter回数は `ime-input` |
 | 配布ZIPの初回起動、保存、再起動 | `sandbox-package`。開発ツールのないオフラインのWindows Sandboxで候補ZIPを展開する |
@@ -102,6 +103,21 @@ zig build check -Dtest-case=brave-fixture "-Dbrave-exe=$brave" -Dtest-results=zi
 | `session-cleanup.json` | ランナーが起動したセッションのID、終了結果、ホスト側のエラー |
 
 Sandboxの試験は一度に1セッションだけ実行します。使用中なら `wsb list` で確認します。`wsb.exe` を使うランナーは成功・失敗のどちらでも自分が起動したIDを照合して終了します。通常の `sandbox` コマンドを `wsb.exe` のない環境で実行した場合は、試験用セッションを手動で閉じます。[Windows Sandboxの構成](https://learn.microsoft.com/ja-jp/windows/security/application-security/application-isolation/windows-sandbox/windows-sandbox-configure-using-wsb-file)
+
+### Zig版の更新と切り戻しを確認する
+
+稼働中のChatPaletteを終了し、試験用の対話デスクトップで実行します。公開版と候補のZIPを用意し、それぞれのZIPの隣に、同じ名前で末尾を `.validation.json` に置き換えた検証JSONを置きます。試験は検証JSONのSHA-256でZIPを照合し、出力フォルダー内だけに展開します。
+
+```powershell
+zig build tools
+$baseline = '.\dist\baseline\ChatPalette-0.9.0.zip'
+$candidate = '.\dist\candidate-0.9.1\ChatPalette-0.9.1.zip'
+.\zig-out\bin\chatpalette-tools.exe upgrade-rollback $baseline $candidate .\zig-out\upgrade-rollback-01 --session desktop
+```
+
+公開版の画面で共通弾幕・配信者・配信者別の弾幕とショートカットを登録します。公開版を終了して実行ファイルと `data/` をバックアップし、`data/` のコピーで候補を起動します。候補で変更を保存して再起動後に読み込み、最後にバックアップから復元した公開版で更新前の値を確認します。候補の保存データとバックアップもSHA-256で照合します。
+
+出力フォルダーの `result.json` が全体の合否、`scenario/result.json` が版・ハッシュ・各起動の結果と失敗箇所です。正常終了時は展開先と合成DBを削除します。失敗時は `scenario/work/` に残った展開物とログを確認できます。
 
 ### 旧版へ切り戻す
 

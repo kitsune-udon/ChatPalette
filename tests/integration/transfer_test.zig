@@ -27,9 +27,9 @@ const shortcut_scope_id = 200;
 const shortcut_first_slot_id = 201;
 const shortcut_second_slot_id = 202;
 const shortcut_save_items_id = 203;
-const shortcut_key_status_id = 204;
+pub const shortcut_key_status_id = 204;
 const shortcut_item_status_id = 205;
-const ShortcutKeys = [storage.action_count][]const u8;
+pub const ShortcutKeys = [storage.action_count][]const u8;
 const WindowSize = struct { width: i32, height: i32 };
 const TrackObservation = struct {
     window_dpi: u32,
@@ -239,23 +239,23 @@ fn verify(scratch: std.mem.Allocator, candidate: []const u8, output: []const u8,
     report.stage = "complete";
 }
 
-const AppTrial = struct {
+pub const AppTrial = struct {
     exe: []const u8,
     cwd: []const u8,
     output: std.fs.Dir,
     result: anyerror!process.Result = error.DesktopNotLaunched,
 
-    fn run(self: *AppTrial) void {
+    pub fn run(self: *AppTrial) void {
         self.result = process.run(allocator, &.{ self.exe, "--quiet" }, self.cwd, self.output, app_timeout_ms);
     }
 };
 
-const OwnedProduct = struct {
+pub const OwnedProduct = struct {
     host: win.HWND,
     pid: u32,
     handle: win.HANDLE,
 
-    fn wait(scratch: std.mem.Allocator, installation_path: []const u8, exe: []const u8) !OwnedProduct {
+    pub fn wait(scratch: std.mem.Allocator, installation_path: []const u8, exe: []const u8) !OwnedProduct {
         const host = try ui.waitWindow(windows.wide("ChatPalette.Host"), try ui.hostTitle(scratch, installation_path), null);
         const pid = ui.windowPid(host);
         if (pid == 0) return error.HostPidMissing;
@@ -272,12 +272,12 @@ const OwnedProduct = struct {
             return error.ForeignProductProcess;
     }
 
-    fn requestClose(self: OwnedProduct) !void {
+    pub fn requestClose(self: OwnedProduct) !void {
         try self.checkWindow(self.host);
         if (win.PostMessageW(self.host, win.WM_CLOSE, 0, 0) == 0) return error.HostQuitFailed;
     }
 
-    fn quit(self: OwnedProduct) !void {
+    pub fn quit(self: OwnedProduct) !void {
         try self.requestClose();
         if (win.WaitForSingleObject(self.handle, step_timeout_ms) != win.WAIT_OBJECT_0) return error.ProductDidNotQuit;
     }
@@ -770,7 +770,7 @@ fn closeCleanEditor(editor: win.HWND, manager: win.HWND, pid: u32) !void {
     if (!waitUntilEnabled(manager, pid)) return error.ClosingEditorDidNotEnableManagement;
 }
 
-fn postDialogCommand(dialog: win.HWND, pid: u32, id: u16) !void {
+pub fn postDialogCommand(dialog: win.HWND, pid: u32, id: u16) !void {
     if (ui.windowPid(dialog) != pid) return error.ForeignProductProcess;
     const button = try ui.control(dialog, id);
     // A dirty draft opens a nested modal loop, so send the button command asynchronously.
@@ -1093,7 +1093,7 @@ fn observeShortcutRestart(scratch: std.mem.Allocator, installation: std.fs.Dir, 
     if (!std.mem.eql(u8, &digest, &report.shortcut_db_sha256.?)) return error.RestartChangedSavedValues;
 }
 
-fn openShortcutEditor(app: OwnedProduct, parent: win.HWND) !win.HWND {
+pub fn openShortcutEditor(app: OwnedProduct, parent: win.HWND) !win.HWND {
     try app.checkWindow(parent);
     if (win.IsWindowEnabled(parent) == 0 or win.IsWindowVisible(parent) == 0) return error.ShortcutEditorParentNotReady;
     try postMenuCommand(app.host, app.pid, .shortcuts);
@@ -1110,7 +1110,7 @@ fn expectShortcutEditorActive(app: OwnedProduct, parent: win.HWND, editor: win.H
     if (!waitUntilEnabled(editor, app.pid)) return error.ShortcutEditorStillDisabled;
 }
 
-fn expectShortcutEditorClosed(app: OwnedProduct, parent: win.HWND, editor: win.HWND) !void {
+pub fn expectShortcutEditorClosed(app: OwnedProduct, parent: win.HWND, editor: win.HWND) !void {
     try ui.waitClosed(editor, app.pid);
     try synchronizeHost(app.host, app.pid);
     if (!waitUntilEnabled(parent, app.pid)) return error.ShortcutEditorDidNotReleaseParent;
@@ -1176,7 +1176,7 @@ fn waitShortcutScroll(editor: win.HWND, expected: i32) !void {
     return error.ShortcutWheelDidNotMoveViewport;
 }
 
-fn cleanupShortcutEditor(app: OwnedProduct, editor: win.HWND) void {
+pub fn cleanupShortcutEditor(app: OwnedProduct, editor: win.HWND) void {
     app.checkWindow(editor) catch return;
     const started = win.GetTickCount64();
     var posted_cancel = false;
@@ -1203,12 +1203,12 @@ fn cleanupShortcutEditor(app: OwnedProduct, editor: win.HWND) void {
     }
 }
 
-fn shortcutField(editor: win.HWND, action: storage.Action) !win.HWND {
+pub fn shortcutField(editor: win.HWND, action: storage.Action) !win.HWND {
     const index: c_int = @intFromEnum(action);
     return ui.control(editor, 100 + index);
 }
 
-fn expectShortcutFields(scratch: std.mem.Allocator, editor: win.HWND, keys: ShortcutKeys) !void {
+pub fn expectShortcutFields(scratch: std.mem.Allocator, editor: win.HWND, keys: ShortcutKeys) !void {
     for (std.enums.values(storage.Action), keys) |action, key| {
         const field = try shortcutField(editor, action);
         if (key.len == 0) {
@@ -1249,7 +1249,7 @@ fn selectShortcutCombo(app: OwnedProduct, editor: win.HWND, id: u16, value: usiz
         return error.CannotPostShortcutSelection;
 }
 
-fn waitShortcutStatus(scratch: std.mem.Allocator, editor: win.HWND, id: c_int, expected: []const u8) !void {
+pub fn waitShortcutStatus(scratch: std.mem.Allocator, editor: win.HWND, id: c_int, expected: []const u8) !void {
     const status = try ui.control(editor, id);
     const start = win.GetTickCount64();
     while (win.GetTickCount64() - start < step_timeout_ms) {
@@ -1391,7 +1391,7 @@ fn postMenuCommand(host: win.HWND, pid: u32, command: ProductMenu) !void {
         return error.CannotPostProductMenuCommand;
 }
 
-fn synchronizeHost(host: win.HWND, pid: u32) !void {
+pub fn synchronizeHost(host: win.HWND, pid: u32) !void {
     if (pid == 0 or ui.windowPid(host) != pid) return error.ForeignProductProcess;
     _ = try ui.message(host, win.WM_NULL, 0, 0);
 }
@@ -1682,7 +1682,7 @@ fn waitForFile(dir: std.fs.Dir, name: []const u8) !void {
     return error.ExportNotPublished;
 }
 
-fn readDatabase(path: []const u8) !storage.Snapshot {
+pub fn readDatabase(path: []const u8) !storage.Snapshot {
     var db = try storage.Store.open(allocator, path);
     defer db.close();
     return db.load(allocator);

@@ -26,6 +26,43 @@ fn print(comptime format: []const u8, args: anytype) !void {
     try stdout.interface.flush();
 }
 
+fn runUpgradeRollback(parent_allocator: std.mem.Allocator, baseline: []const u8, candidate: []const u8, output: []const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(parent_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const cwd = std.fs.cwd();
+    const self = try std.fs.selfExePathAlloc(alloc);
+    const runner_path = try std.fs.path.join(alloc, &.{ std.fs.path.dirname(self) orelse return error.InvalidToolPath, "chatpalette-upgrade-rollback-test.exe" });
+    const runner = try files.openImmutable(alloc, runner_path);
+    defer runner.close();
+    const working = try std.process.getCwdAlloc(alloc);
+    const old_zip = try std.fs.path.resolve(alloc, &.{ working, baseline });
+    const new_zip = try std.fs.path.resolve(alloc, &.{ working, candidate });
+
+    try cwd.makeDir(output);
+    const absolute = try cwd.realpathAlloc(alloc, output);
+    var directory = try cwd.openDir(absolute, .{ .no_follow = true });
+    defer directory.close();
+    const scenario = try std.fs.path.join(alloc, &.{ absolute, "scenario" });
+    const result = try process.run(alloc, &.{ runner_path, old_zip, new_zip, scenario }, absolute, directory, 420_000);
+    const report_path = "scenario/result.json";
+    const report = directory.readFileAlloc(alloc, report_path, 64 * 1024) catch |failure| switch (failure) {
+        error.FileNotFound => null,
+        else => return failure,
+    };
+    const passed = result.passed() and if (report) |content|
+        (try std.json.parseFromSliceLeaky(struct { passed: bool }, alloc, content, .{ .ignore_unknown_fields = true })).passed
+    else
+        false;
+    try process.saveResult(alloc, absolute, .{
+        .passed = passed,
+        .process = result,
+        .scenario_report = if (report != null) report_path else null,
+    });
+    try print("{s}\n", .{absolute});
+    if (!passed) return error.UpgradeRollbackFailed;
+}
+
 fn command(allocator: std.mem.Allocator) !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
@@ -72,6 +109,11 @@ fn command(allocator: std.mem.Allocator) !void {
         try print("{s}\n", .{args[4]});
         if (!passed) return error.NativeTestRunFailed;
         return;
+    }
+    if (std.mem.eql(u8, action, "upgrade-rollback") and args.len == 7) {
+        if (!std.mem.eql(u8, args[5], "--session") or !std.mem.eql(u8, args[6], "desktop"))
+            return error.DesktopSessionRequired;
+        return runUpgradeRollback(allocator, args[2], args[3], args[4]);
     }
     if (std.mem.eql(u8, action, "compare") and (args.len == 7 or args.len == 9)) {
         const with_expectation = args.len == 9;
@@ -179,6 +221,7 @@ fn command(allocator: std.mem.Allocator) !void {
             \\chatpalette-tools test-list [--name <native-test>]... [--session <headless|desktop>]
             \\chatpalette-tools test-run <project-root> <build-bin-dir> <new-results-dir> [--name <native-test>]... [--session <headless|desktop>]
             \\chatpalette-tools compare <verified-0.8.0.zip> <native-exe> <decimal-HWND> <repeats-per-order> <new-output-dir> [--expect <json>]
+            \\chatpalette-tools upgrade-rollback <baseline.zip> <candidate.zip> <new-output-dir> --session desktop
             \\chatpalette-tools run <new-output-dir> <timeout-ms> <exe> [args...]
             \\chatpalette-tools sandbox <exe> <new-output-dir> [--prepare-only] [-- args...]
             \\chatpalette-tools sandbox-watch <results-dir> <timeout-ms>
