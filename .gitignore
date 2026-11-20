@@ -2,6 +2,9 @@
 /data/
 /tests/.tmp/
 /dist/
+/.zig-cache/
+/zig-out/
+/ChatPalette.exe
 # Local editor and OS files
 /.idea/
 /.vscode/

@@ -1,24 +1,34 @@
-# 文書一覧
+# ChatPaletteの文書一覧
 
-初めて使う場合は[README](../README.md)の手順から始めます。
+初めて使う方は、配布ZIPを展開し、共通の弾幕を1件登録してYouTubeの入力欄で試せます。[READMEの「最初の弾幕を使う」](../README.md#最初の弾幕を使う)
 
 ## 利用する
 
 | 目的 | 文書 |
 |---|---|
-| 弾幕・配信者を登録、連携、整理する | [弾幕と配信者](user/guide.md) |
+| 弾幕を登録する、チャンネルに合わせて配信者を切り替える | [弾幕と配信者](user/guide.md) |
 | リアクションを準備、実行、停止する | [リアクション](user/reactions.md) |
 | キー・初期値・保存範囲を調べる | [リファレンス](user/reference.md) |
-| 更新、バックアップ、復元、エラー対処 | [保守](user/maintenance.md) |
-
-パレットは入力と今回のリアクションを行う画面です。配信者はアプリ内の管理対象で、YouTubeチャンネルと連携すると自動選択できます。管理画面の編集対象は入力対象とは独立します。ボタン登録はブラウザー別のリアクション識別情報です。
+| 以前の版から更新する、データを保管・復元する | [更新手順](user/maintenance.md#更新を反映する) · [バックアップ](user/maintenance.md#バックアップする) |
+| アプリが起動しない、キーや入力欄が反応しない | [症状から確認する](user/maintenance.md#症状から確認する) |
 
 ## 開発する
 
 | 目的 | 文書 |
 |---|---|
-| 環境を用意し、変更・配布する | [開発・配布](developer/guide.md) |
-| 状態の所有と保存契約を確認する | [設計](developer/architecture.md) |
-| 検証を選び、実行する | [検証ガイド](developer/testing.md) |
-| 実測と未特定の観測を調べる | [検証・計測の記録](developer/complexity-results.md) |
-| 版ごとの変更を調べる | [変更履歴](../CHANGELOG.md) |
+| ソースからビルドする、変更箇所を探す、配布ZIPを作る | [開発・配布手順](developer/guide.md) |
+| 本体とワーカーの役割、入力・設定保存の流れを読む | [設計と状態の所有](developer/architecture.md) |
+| 変更に合う試験を選び、WindowsやSandboxで実行する | [検証ガイド](developer/testing.md) |
+| 0.8.0と現行版に同じ要求を送り、ワーカーの応答や所要時間を比べる | [ワーカーの比較手順](developer/worker-comparison.md) |
+
+## 過去の版と移行記録を調べる
+
+利用者向けの変更点は[変更履歴](../CHANGELOG.md)にあります。次の資料には、AutoHotkey・PowerShell版からZig版に切り替えた当時の計画、試験条件、結果を保存しています。
+
+| 調べたいこと | 資料 |
+|---|---|
+| 0.8.0以前の動作と性能 | [旧版の検証・計測記録](history/complexity-results.md) |
+| 移行の範囲と合格条件 | [移行計画](history/zig-migration.md) · [計画の独立レビュー](history/zig-migration-review.md) |
+| ワーカーの移植と初回応答時間 | [移植検証](history/worker-verification.md) · [試作時の計測値（JSON）](history/worker-prototype.json) |
+| 旧版の57試験群に対応するZig版の検証結果 | [新旧の照合記録](history/zig-migration-evidence.md#080の57群との照合) |
+| 0.9.0の公開時に照合したZIPとSHA-256 | [公開後の検証記録](history/zig-migration-evidence.md#m7の完了判定) |
