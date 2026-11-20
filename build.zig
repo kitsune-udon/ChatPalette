@@ -114,9 +114,13 @@ pub fn build(b: *std.Build) void {
     const tool_tests = b.addTest(.{ .name = "chatpalette-tools-tests", .root_module = tools_module });
     const test_step = b.step("test", "Run native tests on Windows x64");
     const shortcut_tests = b.addTest(.{ .name = "chatpalette-shortcut-tests", .root_module = shortcut_domain });
-    test_step.dependOn(&b.addRunArtifact(shortcut_tests).step);
+    const run_shortcut_tests = b.addRunArtifact(shortcut_tests);
+    const run_tool_tests = b.addRunArtifact(tool_tests);
+    b.step("test-shortcuts", "Run shortcut unit tests").dependOn(&run_shortcut_tests.step);
+    b.step("test-tools", "Run validation tool unit tests").dependOn(&run_tool_tests.step);
+    test_step.dependOn(&run_shortcut_tests.step);
     test_step.dependOn(&b.addRunArtifact(app_tests).step);
-    test_step.dependOn(&b.addRunArtifact(tool_tests).step);
+    test_step.dependOn(&run_tool_tests.step);
     const test_artifacts = b.step("test-artifacts", "Install the native executables for release verification");
     for (installs[standalone_tools.len..], [_]*std.Build.Step.Compile{ app_tests, shortcut_tests, tool_tests }) |*install, executable| {
         install.* = b.addInstallArtifact(executable, .{});

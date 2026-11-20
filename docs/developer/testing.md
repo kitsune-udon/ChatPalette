@@ -18,6 +18,17 @@
 
 `test-run` の「ヘッドレス」は、対話試験を明示的に選ばなくても実行できるグループです。`app-unit` の一部はWin32の画面と前面ウィンドウを使います。前面の切り替わりに関わる失敗は、該当のテスト名と直前のログを保存し、配布試験と同じWindows Sandboxでも確認できます。[配布試験の手順](guide.md#リリース手順)
 
+## PRのWindows CI
+
+`main` 向けのPRと `main` への反映時に、GitHub ActionsでWindows CIが実行されます。PRの **Checks** タブで、ビルド・ソース検査・単体試験の結果とログを確認できます。Windows上で同じ検査を実行するコマンドは次のとおりです。
+
+```powershell
+zig build install tools --summary all
+.\zig-out\bin\chatpalette-tools.exe source-check .
+zig build test-shortcuts --summary all
+zig build test-tools --summary all
+```
+
 ### 修正箇所に絞って検証する
 
 `zig build check` は検証CLI、選んだ試験器、その試験に必要な製品EXEをビルドし、ソース検査の後に指定の1群を実行します。

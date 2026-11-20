@@ -1,0 +1,48 @@
+name: Windows CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows build and unit tests
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install Zig 0.15.2
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'zig-x86_64-windows-0.15.2.zip'
+          $expected = '3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c'
+          Invoke-WebRequest -Uri 'https://ziglang.org/download/0.15.2/zig-x86_64-windows-0.15.2.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
+            throw 'Zig archive SHA-256 mismatch'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP
+          $zig = Join-Path $env:RUNNER_TEMP 'zig-x86_64-windows-0.15.2'
+          if ((& (Join-Path $zig 'zig.exe') version) -ne '0.15.2') {
+            throw 'Unexpected Zig version'
+          }
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $zig
+
+      - name: Build application and validation tools
+        run: zig build install tools --summary all
+
+      - name: Check distribution documents and source
+        run: .\zig-out\bin\chatpalette-tools.exe source-check .
+
+      - name: Run shortcut unit tests
+        run: zig build test-shortcuts --summary all
+
+      - name: Run validation tool unit tests
+        run: zig build test-tools --summary all
