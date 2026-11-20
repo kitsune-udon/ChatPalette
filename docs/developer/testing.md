@@ -30,9 +30,11 @@ zig build test-tools --summary all
 zig build test-app-headless --summary all
 ```
 
-本体のうち、Win32のウィンドウを作成したり入力フックを試したりする単体試験は、対話可能なWindowsデスクトップから `zig build test-app-desktop --summary all` で実行します。`test-app-headless` の集計では、これらの試験がスキップとして表示されます。全168件を一度に実行するには、対話デスクトップから `zig build test --summary all` を使います。
+本体のうち、Win32のウィンドウを作成したり入力フックを試したりする単体試験は、対話可能なWindowsデスクトップから `zig build test-app-desktop --summary all` で実行します。`test-app-headless` の集計では、これらの試験がスキップとして表示されます。すべての単体試験を一度に実行するには、対話デスクトップから `zig build test --summary all` を使います。
 
 対話デスクトップを使う試験を追加する場合は、試験名を `desktop: ` で始め、冒頭で `requireDesktop()` を呼び出します。
+
+配信者情報の取得試験は、本体の非対話単体試験に含まれます。ローカルHTTPサーバーが応答本文を少しずつ送り、全体の期限でWinHTTP要求を取り消せることと、次の取得が成功することを確認します。
 
 ### 修正箇所に絞って検証する
 

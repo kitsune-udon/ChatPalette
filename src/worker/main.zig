@@ -4,6 +4,28 @@ const win = @import("windows.zig");
 const pages = @import("pages.zig");
 const reactions = @import("reactions.zig");
 const metadata = @import("metadata.zig");
+const resolution = @import("../resolve_deadline.zig");
+
+const ResolveTarget = struct {
+    worker: *Worker,
+    window: *uia.Window,
+    video: uia.Video,
+    page: ?*win.Element,
+    deadline: u64,
+    known_token: ?[32]u8,
+    reply: *Reply,
+
+    pub fn confirm(self: ResolveTarget, has_metadata: bool) !bool {
+        try resolution.check(self.deadline);
+        if (!try self.worker.sameVideo(self.window, self.video)) return false;
+        if (self.page) |doc| {
+            try resolution.check(self.deadline);
+            if (!try self.worker.client.documentIsActive(self.window, doc)) return false;
+            if (has_metadata) self.reply.page = self.known_token orelse try self.worker.bindPage(self.window, doc, self.video, self.deadline);
+        }
+        return true;
+    }
+};
 const keyboard = @import("keyboard.zig");
 const eq = std.mem.eql;
 
@@ -73,6 +95,7 @@ pub const Request = struct {
     reaction: []const u8 = "",
     x: []const u8 = "",
     y: []const u8 = "",
+    resolve_deadline: ?u64 = null,
 
     fn documentBinding(self: Request) ?uia.DocumentLookup {
         if (!eq(u8, self.page, "bind")) return null;
@@ -122,10 +145,14 @@ fn parseRequest(frame: []const u8) !Request {
             req.x = value;
         } else if (std.ascii.eqlIgnoreCase(key, "Y")) {
             req.y = value;
+        } else if (std.ascii.eqlIgnoreCase(key, "Deadline")) {
+            if (req.resolve_deadline != null) return error.DuplicateResolveDeadline;
+            req.resolve_deadline = try decimal(u64, value);
         }
     }
     _ = try decimal(u64, req.seq);
     req.hwnd = try decimal(usize, req.window);
+    if ((req.mode == .resolve) != (req.resolve_deadline != null)) return error.InvalidResolveDeadline;
     return req;
 }
 
@@ -216,6 +243,7 @@ pub const Worker = struct {
         self.prepared_input = null;
         defer if (prepared_input) |prepared| win.release(prepared.element);
         const committed_state = req.mode.inputOutcome();
+        if (req.resolve_deadline) |deadline| try resolution.check(deadline);
         if (req.mode == .unsupported) return;
         if (req.mode == .reaction_configure) {
             try self.registry.configure(req.payload);
@@ -299,18 +327,22 @@ pub const Worker = struct {
         switch (req.mode) {
             .browser_context => reply.state = "ok",
             .resolve => {
-                const value = try self.cache.resolve(video);
-                if (!try self.sameVideo(window, video)) {
-                    reply.state = "changed";
-                    return;
-                }
-                if (page) |doc| if (!try self.client.documentIsActive(window, doc)) {
+                const value = try self.cache.resolve(video, req.resolve_deadline.?, ResolveTarget{
+                    .worker = self,
+                    .window = window,
+                    .video = video,
+                    .page = page,
+                    .deadline = req.resolve_deadline.?,
+                    .known_token = if (existing) |saved| saved.token else null,
+                    .reply = reply,
+                }) orelse {
                     reply.state = "changed";
                     return;
                 };
                 reply.state = "ok";
                 reply.author = value.author;
                 reply.channel = value.channel;
+                return;
             },
             .verify_input, .verify_chat => {
                 const focus_proof = if (req.mode == .verify_chat) proof else null;
@@ -337,7 +369,7 @@ pub const Worker = struct {
                 eq(u8, reply.state, "captured") or eq(u8, reply.state, "ready") or eq(u8, reply.state, "operated") or
                 (committed_state != null and eq(u8, reply.state, committed_state.?)))
             {
-                reply.page = if (existing) |saved| saved.token else self.bindPage(window, doc, video);
+                reply.page = if (existing) |saved| saved.token else try self.bindPage(window, doc, video, null);
             }
         }
     }
@@ -350,12 +382,13 @@ pub const Worker = struct {
         return null;
     }
 
-    fn bindPage(self: *Worker, window: *uia.Window, doc: *win.Element, video: uia.Video) [32]u8 {
+    fn bindPage(self: *Worker, window: *uia.Window, doc: *win.Element, video: uia.Video, deadline: ?u64) ![32]u8 {
         for (self.page_proofs) |entry| {
             const saved = entry orelse continue;
             if (saved.hwnd == window.hwnd and eq(u8, &saved.video, &video) and
                 (self.client.same(saved.element, doc) catch false)) return saved.token;
         }
+        if (deadline) |value| try resolution.check(value);
         var bytes: [16]u8 = undefined;
         std.crypto.random.bytes(&bytes);
         const token = std.fmt.bytesToHex(bytes, .lower);
@@ -669,6 +702,11 @@ fn serve(pipe: Handle, ready: Handle) !void {
             }
             result.detail = @errorName(failure);
         };
+        if (req.resolve_deadline) |deadline| {
+            resolution.check(deadline) catch {
+                result = .{ .detail = "ResolveDeadlineExceeded" };
+            };
+        }
         var reply: [4 + max_frame]u8 = undefined;
         const body = serialize(&reply, req, &result) catch blk: {
             // Preserve the outcome of an issued action even when diagnostic
@@ -772,7 +810,10 @@ test "page proofs appear only in opted-in frames and a fresh worker rejects old 
 test "only a new browser context proof can inspect a background document" {
     const bind = try parseRequest("Seq=1\nWindow=1234\nMode=browser_context\nPageToken=bind\n");
     try std.testing.expectEqual(@as(?uia.DocumentLookup, .browser_context), bind.documentBinding());
-    const resolve = try parseRequest("Seq=1\nWindow=1234\nMode=resolve\nPageToken=bind\n");
+    const resolve = try parseRequest("Seq=1\nWindow=1234\nMode=resolve\nPageToken=bind\nDeadline=12345\n");
+    try std.testing.expectEqual(@as(?u64, 12345), resolve.resolve_deadline);
+    try std.testing.expectError(error.InvalidResolveDeadline, parseRequest("Seq=1\nWindow=1234\nMode=resolve\n"));
+    try std.testing.expectError(error.DuplicateResolveDeadline, parseRequest("Seq=1\nWindow=1234\nMode=resolve\nDeadline=1\ndeadline=2\n"));
     try std.testing.expectEqual(@as(?uia.DocumentLookup, .foreground), resolve.documentBinding());
     const legacy: Request = .{ .mode = .browser_context, .hwnd = 1234 };
     try std.testing.expect(legacy.documentBinding() == null);

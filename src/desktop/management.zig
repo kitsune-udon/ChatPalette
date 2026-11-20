@@ -638,6 +638,7 @@ pub const Management = struct {
             return;
         }
         const channel_notice: ?[]const u8 = switch (err) {
+            error.ChannelLookupDeadline => ResolveFailure.deadline.message(),
             error.ChannelLookupNetwork => ResolveFailure.network.message(),
             error.ChannelLookupMetadata => ResolveFailure.metadata.message(),
             error.ChannelLookupAutomation => ResolveFailure.automation.message(),

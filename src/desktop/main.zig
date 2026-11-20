@@ -662,6 +662,7 @@ const App = struct {
         if (!reply.is("ok")) {
             if (diagnostic.ResolveFailure.fromWorker(reply.field("Detail"))) |reason| {
                 channel.failure = switch (reason) {
+                    .deadline => error.ChannelLookupDeadline,
                     .network => error.ChannelLookupNetwork,
                     .metadata => error.ChannelLookupMetadata,
                     .automation => error.ChannelLookupAutomation,
@@ -795,7 +796,7 @@ const App = struct {
         const response = self.request(.resolve, windows.number(context.target), "", &.{}) catch |failure| {
             if (!self.paletteContextCurrent(context) or !self.foreground(foreground_window)) return;
             self.report(self.cleanupNotice(failure) orelse if (failure == error.WorkerTimeout)
-                "配信者を確認する補助プロセスの応答が時間内に届きませんでした。"
+                diagnostic.ResolveFailure.deadline.message()
             else
                 "補助プロセスと通信できず、配信者情報を確認できませんでした。");
             return;
@@ -1193,6 +1194,7 @@ const App = struct {
         self.last_mode = mode;
         self.last_elapsed = win.GetTickCount64() - started;
         const reply = exchanged catch |failure| {
+            if (mode == .resolve and failure == error.WorkerTimeout) self.last_resolve_failure = .deadline;
             self.last_state = if (self.worker.request_may_have_arrived) "unknown" else "unavailable";
             self.last_worker_failure = .{
                 .cause = failure,
@@ -1614,6 +1616,10 @@ const App = struct {
             .automatic => detected: {
                 const reply = self.requestOnPage(.resolve, target, &video, &page_token, &.{}) catch |failure| {
                     if (!self.commandCurrent(command) or !source.scope.current(self.snapshot.data.preferences)) return false;
+                    if (failure == error.WorkerTimeout and self.cleanupNotice(failure) == null) {
+                        self.report(self.resolveFailureNotice());
+                        return false;
+                    }
                     return failure;
                 };
                 defer reply.deinit();
@@ -1727,7 +1733,10 @@ const App = struct {
         const hwnd = windows.number(target);
         if (!self.foreground(hwnd)) return error.ForegroundChanged;
         if (auto_profile) self.palette.detected_profile = false;
-        const context = try self.requestOnPage(if (auto_profile) .resolve else .browser_context, hwnd, "", "bind", &.{});
+        const context = self.requestOnPage(if (auto_profile) .resolve else .browser_context, hwnd, "", "bind", &.{}) catch |failure| {
+            if (auto_profile and failure == error.WorkerTimeout and self.cleanupNotice(failure) == null) return error.ProfileLookupFailed;
+            return failure;
+        };
         defer context.deinit();
         if (self.modal or self.manager.isEditing()) return;
         if (!self.foreground(hwnd) or !self.paletteTargetCurrent(owner) or !plan.current(self)) return error.TargetChanged;
@@ -2902,7 +2911,7 @@ test "desktop: modeless help releases its original palette after shortcut editin
 test "desktop: management channel lookup distinguishes current failures and drops obsolete notifications" {
     try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
-        const Case = enum { no_target, no_result, network, metadata, automation, transport_error, timeout, changed_page, retargeted, stopped };
+        const Case = enum { no_target, no_result, network, metadata, automation, deadline, transport_error, timeout, changed_page, retargeted, stopped };
         threadlocal var scenario: Case = .no_target;
         threadlocal var requests: usize = 0;
         threadlocal var alternate: win.HWND = null;
@@ -2924,6 +2933,7 @@ test "desktop: management channel lookup distinguishes current failures and drop
                 .network => "State=unavailable\nDetail=HttpResponseFailed",
                 .metadata => "State=unavailable\nDetail=MissingAuthor",
                 .automation => "State=unavailable\nDetail=AutomationUnavailable",
+                .deadline => "State=unavailable\nDetail=ResolveDeadlineExceeded",
                 .transport_error => return error.WorkerWaitFailed,
                 .timeout => return error.WorkerTimeout,
                 .changed_page => "State=changed\nDetail=old detail",
@@ -2986,6 +2996,7 @@ test "desktop: management channel lookup distinguishes current failures and drop
         .{ .scenario = .no_result, .expected = "通知：チャンネルを確認できませんでした。YouTubeの動画を開いてやり直してください。" },
         .{ .scenario = .network, .expected = "通知：YouTubeから配信者情報を受け取れませんでした。" },
         .{ .scenario = .metadata, .expected = "通知：YouTubeから受け取った配信者情報を確認できませんでした。" },
+        .{ .scenario = .deadline, .expected = "通知：配信者情報を時間内に取得できませんでした。もう一度お試しください。" },
         .{ .scenario = .automation, .expected = "通知：ブラウザーから動画情報を確認できませんでした。" },
         .{ .scenario = .transport_error, .expected = "通知：補助プロセスと通信できず、チャンネルを確認できませんでした。" },
         .{ .scenario = .timeout, .expected = "通知：チャンネルを確認する補助プロセスの応答が時間内に届きませんでした。" },

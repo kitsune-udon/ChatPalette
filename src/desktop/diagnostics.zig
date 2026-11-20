@@ -214,12 +214,14 @@ pub const WorkerFailure = struct {
 };
 
 pub const ResolveFailure = enum {
+    deadline,
     network,
     metadata,
     automation,
 
     pub fn fromWorker(detail: []const u8) ?ResolveFailure {
         const reasons = std.StaticStringMap(ResolveFailure).initComptime(.{
+            .{ "ResolveDeadlineExceeded", .deadline },
             .{ "HttpOpenFailed", .network },
             .{ "HttpSetupFailed", .network },
             .{ "HttpConnectionFailed", .network },
@@ -236,6 +238,7 @@ pub const ResolveFailure = enum {
 
     pub fn message(self: ResolveFailure) []const u8 {
         return switch (self) {
+            .deadline => "配信者情報を時間内に取得できませんでした。もう一度お試しください。",
             .network => "YouTubeから配信者情報を受け取れませんでした。",
             .metadata => "YouTubeから受け取った配信者情報を確認できませんでした。",
             .automation => "ブラウザーから動画情報を確認できませんでした。",
@@ -333,6 +336,7 @@ pub const Snapshot = struct {
 
 test "resolve diagnostics classify known failures without preserving reply text" {
     try std.testing.expectEqual(ResolveFailure.network, ResolveFailure.fromWorker("HttpResponseFailed").?);
+    try std.testing.expectEqual(ResolveFailure.deadline, ResolveFailure.fromWorker("ResolveDeadlineExceeded").?);
     try std.testing.expectEqual(ResolveFailure.metadata, ResolveFailure.fromWorker("MissingAuthor").?);
     try std.testing.expectEqual(ResolveFailure.automation, ResolveFailure.fromWorker("AutomationUnavailable").?);
     try std.testing.expect(ResolveFailure.fromWorker("HttpResponseFailed C:/private/data") == null);
