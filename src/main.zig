@@ -47,9 +47,12 @@ test "the executable chooses its role before initializing a desktop instance" {
 }
 
 test {
+    _ = desktop;
     _ = @import("desktop/shortcuts.zig");
     _ = @import("desktop/operations.zig");
     _ = @import("desktop/worker_client.zig");
     _ = @import("storage/store.zig");
     _ = worker;
+    // Zig analyzes anonymous discovery blocks even with a test name filter.
+    if (@import("app_test_options").mode == .desktop) return error.SkipZigTest;
 }

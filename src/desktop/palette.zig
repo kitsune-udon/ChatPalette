@@ -775,7 +775,8 @@ test "palette matches across name and text and folds Unicode case" {
     try std.testing.expect(!matchesQuery("別", item));
 }
 
-test "palette keeps unchanged native labels and replaces their displayed ID mapping" {
+test "desktop: palette keeps unchanged native labels and replaces their displayed ID mapping" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         fn countResets(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, reference: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
             const resets: *usize = @ptrFromInt(reference);
@@ -807,7 +808,8 @@ test "palette keeps unchanged native labels and replaces their displayed ID mapp
     try std.testing.expectEqual(@as(win.LRESULT, 2), win.SendMessageW(palette.profile, win.CB_GETCURSEL, 0, 0));
 }
 
-test "compact palette leaves room for the registration row and the bottom guidance" {
+test "desktop: compact palette leaves room for the registration row and the bottom guidance" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         fn resizeClient(palette: *Palette, width: i32, height: i32) !void {
             const dpi = palette.dpi;
@@ -869,7 +871,8 @@ test "compact palette leaves room for the registration row and the bottom guidan
     }
 }
 
-test "short palette can scroll to every operation and clears its offsets when enlarged" {
+test "desktop: short palette can scroll to every operation and clears its offsets when enlarged" {
+    try @import("test_mode.zig").requireDesktop();
     var palette: Palette = .{};
     defer palette.close();
     try palette.open(null);
@@ -896,7 +899,8 @@ test "short palette can scroll to every operation and clears its offsets when en
     try std.testing.expectEqual(@as(u32, 0), style & (win.WS_HSCROLL | win.WS_VSCROLL));
 }
 
-test "palette defers hidden saves and restores the visible list position" {
+test "desktop: palette defers hidden saves and restores the visible list position" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         resets: usize = 0,
         commands: usize = 0,
@@ -967,7 +971,8 @@ test "palette defers hidden saves and restores the visible list position" {
     try t.expectEqualStrings("fixture-40", (palette.selectedRow() orelse return error.LostPaletteSelection).item.id);
 }
 
-test "palette searches beyond the visible 500 rows and retains the selected ID after reorder" {
+test "desktop: palette searches beyond the visible 500 rows and retains the selected ID after reorder" {
+    try @import("test_mode.zig").requireDesktop();
     var memory = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer memory.deinit();
     var palette: Palette = .{};
@@ -997,7 +1002,8 @@ test "palette searches beyond the visible 500 rows and retains the selected ID a
     try std.testing.expectEqualStrings("item-501", palette.selectedRow().?.item.id);
 }
 
-test "palette sort preserves native preview and action identities in all five orders" {
+test "desktop: palette sort preserves native preview and action identities in all five orders" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         palette: *Palette,
         inputs: usize = 0,
@@ -1154,7 +1160,8 @@ test "palette sort preserves native preview and action identities in all five or
     }
 }
 
-test "scheduled palette search delays only large current scopes and settles before input or editing" {
+test "desktop: scheduled palette search delays only large current scopes and settles before input or editing" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         inputs: usize = 0,
         edits: usize = 0,
@@ -1277,7 +1284,8 @@ test "scheduled palette search delays only large current scopes and settles befo
     try std.testing.expectEqual(@as(usize, 2), probe.inputs);
 }
 
-test "palette defers reentrant search and publishes matching native text and identity" {
+test "desktop: palette defers reentrant search and publishes matching native text and identity" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         palette: *Palette,
         trigger: usize = 0,
@@ -1433,7 +1441,8 @@ test "palette defers reentrant search and publishes matching native text and ide
     }
 }
 
-test "resetting the imported library clears the native search and drops the old selection" {
+test "desktop: resetting the imported library clears the native search and drops the old selection" {
+    try @import("test_mode.zig").requireDesktop();
     var palette: Palette = .{};
     defer palette.close();
     try palette.open(null);

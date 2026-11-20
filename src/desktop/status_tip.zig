@@ -62,7 +62,8 @@ pub const StatusTip = struct {
     }
 };
 
-test "status messages expire from their latest replacement, unless persistent or cleared" {
+test "desktop: status messages expire from their latest replacement, unless persistent or cleared" {
+    try @import("test_mode.zig").requireDesktop();
     var tip: StatusTip = .{};
     defer tip.close();
     const foreground = win.GetForegroundWindow();

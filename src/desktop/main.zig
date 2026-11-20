@@ -2362,7 +2362,8 @@ test "diagnostics publish version and runtime conditions without sharing user da
     try testing.expectEqual(diagnostic.Distribution.running_unknown, app.diagnosticSnapshot(5000).distribution);
 }
 
-test "a page acknowledgement requires the expected video and reports the rejection" {
+test "desktop: a page acknowledgement requires the expected video and reports the rejection" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     var app: App = .{
         .executable = windows.wide(""),
@@ -2395,7 +2396,8 @@ test "a page acknowledgement requires the expected video and reports the rejecti
     }
 }
 
-test "palette operation buttons follow the worker wait, search publication and stop" {
+test "desktop: palette operation buttons follow the worker wait, search publication and stop" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         const inspect = win.WM_APP + 155;
         var observed_waits: usize = 0;
@@ -2500,7 +2502,8 @@ fn expectModeless(condition: bool, comptime message: []const u8, args: anytype) 
     return error.TestUnexpectedResult;
 }
 
-test "modeless diagnostics and reaction details leave waiting and palette ownership intact" {
+test "desktop: modeless diagnostics and reaction details leave waiting and palette ownership intact" {
+    try @import("test_mode.zig").requireDesktop();
     const ActivationProbe = struct {
         threadlocal var activated: win.HWND = null;
 
@@ -2650,7 +2653,8 @@ test "modeless diagnostics and reaction details leave waiting and palette owners
         win.IsWindow(help_window) == 0 and win.IsWindow(palette) == 0, "normal app quit left a document or palette alive", .{});
 }
 
-test "modeless help releases its original palette after shortcut editing" {
+test "desktop: modeless help releases its original palette after shortcut editing" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         app: *App,
         help: win.HWND,
@@ -2835,7 +2839,8 @@ test "modeless help releases its original palette after shortcut editing" {
     try expectModeless(win.IsWindow(reopened) == 0 and win.IsWindowEnabled(parent) != 0, "destroying help left a window or parent lock", .{});
 }
 
-test "management channel lookup distinguishes current failures and drops obsolete notifications" {
+test "desktop: management channel lookup distinguishes current failures and drops obsolete notifications" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         const Case = enum { no_target, no_result, network, metadata, automation, transport_error, timeout, changed_page, retargeted, stopped };
         threadlocal var scenario: Case = .no_target;
@@ -2970,7 +2975,8 @@ test "slot lookup failures distinguish verification from a lost input acknowledg
     }
 }
 
-test "desktop records the communication cause and an unconfirmed worker exit together" {
+test "desktop: desktop records the communication cause and an unconfirmed worker exit together" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const Probe = struct {
         fn request(client: *transport.Client, alloc: std.mem.Allocator, executable: [:0]const u16, mode: transport.Mode, hwnd: usize, expected: []const u8, fields: []const transport.Field, dispatch_messages: transport.Pump) !transport.Reply {
@@ -3196,7 +3202,8 @@ test "diagnostics derive phases from pending and live reaction work" {
     try testing.expectEqual(diagnostic.Phase.finished, app.diagnosticReactionPhase(5000));
 }
 
-test "reaction progress preserves palette input and settings notices" {
+test "desktop: reaction progress preserves palette input and settings notices" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     var app: App = .{ .executable = undefined, .db = undefined, .snapshot = undefined, .history = undefined, .running_digest = null };
     try app.palette.open(null);
@@ -3240,7 +3247,8 @@ test "stop invalidates a reaction context even before a preparation or send job 
     try std.testing.expect(!app.reactionContextCurrent(next));
 }
 
-test "a due reaction posts an immediate continuation to the current generation" {
+test "desktop: a due reaction posts an immediate continuation to the current generation" {
+    try @import("test_mode.zig").requireDesktop();
     const handle = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 16, 16, null, null, win.GetModuleHandleW(null), null) orelse
         return error.TestReactionWindow;
     defer _ = win.DestroyWindow(handle);
@@ -3252,7 +3260,8 @@ test "a due reaction posts an immediate continuation to the current generation" 
     try std.testing.expectEqual(@as(win.BOOL, 0), win.PeekMessageW(&message, handle, win.WM_TIMER, win.WM_TIMER, win.PM_REMOVE));
 }
 
-test "queued timers from finished reactions and preparations cannot finish later operations" {
+test "desktop: queued timers from finished reactions and preparations cannot finish later operations" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const handle = win.CreateWindowExW(0, windows.wide("STATIC"), windows.wide(""), 0, 0, 0, 16, 16, null, null, win.GetModuleHandleW(null), null) orelse
         return error.TestReactionWindow;
@@ -3300,7 +3309,8 @@ test "queued timers from finished reactions and preparations cannot finish later
     try testing.expect(app.reaction == null and app.reaction_timer == null);
 }
 
-test "a stop reentered from progress rendering leaves the terminal controls and retires the clock" {
+test "desktop: a stop reentered from progress rendering leaves the terminal controls and retires the clock" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const Reentry = struct {
         fn stopDuringText(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, id: win.UINT_PTR, data: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
@@ -3376,7 +3386,8 @@ test "a stop reentered from progress rendering leaves the terminal controls and 
     try testing.expectEqual(feedback.Reason.stopped, app.reaction_result.?.reason);
 }
 
-test "reaction buttons reconcile a stop while starting and a replacement while releasing" {
+test "desktop: reaction buttons reconcile a stop while starting and a replacement while releasing" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const Reentry = struct {
         app: *App,
@@ -3537,7 +3548,8 @@ test "registration diagnostics retain the outcome of saving and synchronizing" {
     }
 }
 
-test "automatic profile selection persists the match before exposing its input and preserves queued shortcuts" {
+test "desktop: automatic profile selection persists the match before exposing its input and preserves queued shortcuts" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const heap = testing.allocator;
     var directory = testing.tmpDir(.{});
@@ -3749,7 +3761,8 @@ test "unchanged reaction defaults and detection mode skip database writes" {
     try testing.expectEqual(!prefs.auto_mode, saved.data.preferences.auto_mode);
 }
 
-test "return from management keeps its window open until the palette can be shown" {
+test "desktop: return from management keeps its window open until the palette can be shown" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const heap = testing.allocator;
     const Probe = struct {
@@ -3848,7 +3861,8 @@ test "return from management keeps its window open until the palette can be show
     try testing.expectEqualStrings("profile", app.snapshot.data.preferences.input_profile_id);
 }
 
-test "saved library edits and imports report view failures and recover without replaying the save" {
+test "desktop: saved library edits and imports report view failures and recover without replaying the save" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const heap = testing.allocator;
     const Fault = struct {

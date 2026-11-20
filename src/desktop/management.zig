@@ -1470,7 +1470,8 @@ fn editorProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam
     return 0;
 }
 
-test "management retries restoring the original disabled parent without repeating its saved edit" {
+test "desktop: management retries restoring the original disabled parent without repeating its saved edit" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         block: bool = true,
         enable_attempts: usize = 0,
@@ -1547,7 +1548,8 @@ test "management retries restoring the original disabled parent without repeatin
     try t.expectEqual(@as(usize, 3), probe.enable_attempts);
 }
 
-test "management notice wraps scrolls and supports selecting its complete text" {
+test "desktop: management notice wraps scrolls and supports selecting its complete text" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         copied: bool = false,
         first: win.DWORD = 0,
@@ -1690,7 +1692,8 @@ fn testHost(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.L
     }
 }
 
-test "native owner-data rows stay published until explicit refresh" {
+test "desktop: native owner-data rows stay published until explicit refresh" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const heap = testing.allocator;
     var directory = testing.tmpDir(.{});
@@ -1780,7 +1783,8 @@ fn readTestCell(list: win.HWND, column: c_int, buffer: []u16) ![]const u16 {
     return buffer[0..end];
 }
 
-test "native owner-data ListView searches support the legacy text flags" {
+test "desktop: native owner-data ListView searches support the legacy text flags" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const heap = testing.allocator;
     var directory = testing.tmpDir(.{});
@@ -1898,7 +1902,8 @@ test "native owner-data ListView searches support the legacy text flags" {
     try testing.expectEqual(@as(?usize, null), view.selectedIndex());
 }
 
-test "management creates its controls before publishing the first selected row once" {
+test "desktop: management creates its controls before publishing the first selected row once" {
+    try @import("test_mode.zig").requireDesktop();
     const t = std.testing;
     const Counter = struct {
         fn count(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM, _: win.UINT_PTR, context: win.DWORD_PTR) callconv(.winapi) win.LRESULT {
@@ -1940,7 +1945,8 @@ test "management creates its controls before publishing the first selected row o
     try t.expectEqual(true, win.IsWindowEnabled(edit) != 0);
 }
 
-test "management stores list changes, restores selection by ID, and keeps the input profile separate" {
+test "desktop: management stores list changes, restores selection by ID, and keeps the input profile separate" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const heap = testing.allocator;
     var directory = testing.tmpDir(.{});
@@ -2087,7 +2093,8 @@ const NativeManagementReads = struct {
     }
 };
 
-test "move editor saves the displayed destination ID across profile deletion" {
+test "desktop: move editor saves the displayed destination ID across profile deletion" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const heap = testing.allocator;
     const CloseDuringBuild = struct {
@@ -2232,7 +2239,8 @@ const LinkFixture = struct {
     }
 };
 
-test "channel linking uses the displayed identity and drops results after cancel or replacement" {
+test "desktop: channel linking uses the displayed identity and drops results after cancel or replacement" {
+    try @import("test_mode.zig").requireDesktop();
     const test_alloc = std.testing.allocator;
     var fixture_dir = std.testing.tmpDir(.{});
     defer fixture_dir.cleanup();
