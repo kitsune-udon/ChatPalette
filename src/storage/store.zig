@@ -1808,4 +1808,5 @@ test "DB5 and JSON2 accept 128 MiB files and reject the first excess byte" {
 test {
     _ = recovery;
     _ = sqlite;
+    if (@import("app_test_options").mode == .desktop) return error.SkipZigTest;
 }

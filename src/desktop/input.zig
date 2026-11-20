@@ -129,7 +129,8 @@ pub fn clear(allocator: std.mem.Allocator, target: win.HWND) !void {
     try keys.clear(allocator, @ptrCast(target));
 }
 
-test "shared keyboard hook publishes bindings only after acquisition and retries once per owner" {
+test "desktop: shared keyboard hook publishes bindings only after acquisition and retries once per owner" {
+    try @import("test_mode.zig").requireDesktop();
     const Fixture = struct {
         fn context() Context {
             return .{ .window = 0, .browser = false, .stoppable = false };

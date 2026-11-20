@@ -1035,4 +1035,5 @@ test {
     _ = pages;
     _ = reactions;
     _ = metadata;
+    if (@import("app_test_options").mode == .desktop) return error.SkipZigTest;
 }

@@ -46,3 +46,6 @@ jobs:
 
       - name: Run validation tool unit tests
         run: zig build test-tools --summary all
+
+      - name: Run headless application unit tests
+        run: zig build test-app-headless --summary all

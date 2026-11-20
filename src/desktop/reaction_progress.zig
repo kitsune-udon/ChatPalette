@@ -263,7 +263,8 @@ test "reaction results show the settings of the job that produced them" {
     try std.testing.expect(std.mem.indexOf(u8, shortcut_job.summary(&buffer), "適用：標準設定 / ランダム（毎回）") != null);
 }
 
-test "reaction overlay keeps construction private and recovers from native child failure" {
+test "desktop: reaction overlay keeps construction private and recovers from native child failure" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         const Mode = enum { fail_child, cancel_open, construct, close };
         threadlocal var active: ?*@This() = null;

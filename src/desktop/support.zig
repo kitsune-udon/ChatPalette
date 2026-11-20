@@ -946,7 +946,8 @@ pub fn selectJson(parent: win.HWND, export_data: bool) !?[]const u8 {
     return try std.unicode.utf16LeToUtf8Alloc(allocator, name[0..end]);
 }
 
-test "support retries a disabled owner without changing the displayed document or its successor" {
+test "desktop: support retries a disabled owner without changing the displayed document or its successor" {
+    try @import("test_mode.zig").requireDesktop();
     const Probe = struct {
         fail: bool = true,
         successor: win.HWND = null,
@@ -1020,7 +1021,8 @@ test "support retries a disabled owner without changing the displayed document o
     }
 }
 
-test "closing a modal support window dispatches the next parent command outside the modal loop" {
+test "desktop: closing a modal support window dispatches the next parent command outside the modal loop" {
+    try @import("test_mode.zig").requireDesktop();
     const testing = std.testing;
     const Probe = struct {
         const ready_message = win.WM_APP + 91;

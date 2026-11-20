@@ -1,27 +1,25 @@
 const std = @import("std");
 const test_runner = @import("tools/test_runner.zig");
+const AppTestMode = enum { all, headless, desktop };
 
 pub fn build(b: *std.Build) void {
     const target = b.resolveTargetQuery(.{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu });
     const optimize = b.option(std.builtin.OptimizeMode, "optimize", "Optimize mode") orelse .ReleaseSafe;
     const version = b.addOptions();
     version.addOption([]const u8, "version", std.mem.trim(u8, @embedFile("VERSION"), " \r\n\t"));
+    const default_test_options = b.addOptions();
+    default_test_options.addOption(AppTestMode, "mode", .all);
+    const headless_test_options = b.addOptions();
+    headless_test_options.addOption(AppTestMode, "mode", .headless);
+    const desktop_test_options = b.addOptions();
+    desktop_test_options.addOption(AppTestMode, "mode", .desktop);
     const shortcut_domain = b.createModule(.{
         .root_source_file = b.path("src/domain/shortcuts.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const app_module = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    app_module.addOptions("app_info", version);
-    app_module.addImport("shortcut_domain", shortcut_domain);
-    for ([_][]const u8{ "user32", "shell32", "comctl32", "comdlg32", "gdi32", "ole32", "oleaut32", "winhttp" }) |library|
-        app_module.linkSystemLibrary(library, .{});
+    const app_module = createAppModule(b, target, optimize, version, shortcut_domain, default_test_options);
     const app = b.addExecutable(.{ .name = "ChatPalette", .root_module = app_module });
     app.subsystem = .Windows;
     const app_install = b.addInstallArtifact(app, .{});
@@ -34,6 +32,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     product.addImport("shortcut_domain", shortcut_domain);
+    product.addOptions("app_test_options", default_test_options);
     const tool_support = b.createModule(.{
         .root_source_file = b.path("tools/support.zig"),
         .target = target,
@@ -111,6 +110,17 @@ pub fn build(b: *std.Build) void {
     }
 
     const app_tests = b.addTest(.{ .name = "chatpalette-app-tests", .root_module = app_module });
+    const headless_app_tests = b.addTest(.{
+        .name = "chatpalette-app-headless-tests",
+        .root_module = createAppModule(b, target, optimize, version, shortcut_domain, headless_test_options),
+    });
+    const desktop_app_tests = b.addTest(.{
+        .name = "chatpalette-app-desktop-tests",
+        .root_module = createAppModule(b, target, optimize, version, shortcut_domain, desktop_test_options),
+        .filters = &.{"test.desktop: "},
+    });
+    b.step("test-app-headless", "Run app unit tests that do not require a desktop").dependOn(&b.addRunArtifact(headless_app_tests).step);
+    b.step("test-app-desktop", "Run app unit tests that require a desktop").dependOn(&b.addRunArtifact(desktop_app_tests).step);
     const tool_tests = b.addTest(.{ .name = "chatpalette-tools-tests", .root_module = tools_module });
     const test_step = b.step("test", "Run native tests on Windows x64");
     const shortcut_tests = b.addTest(.{ .name = "chatpalette-shortcut-tests", .root_module = shortcut_domain });
@@ -128,6 +138,28 @@ pub fn build(b: *std.Build) void {
     }
 
     addFocusedCheck(b, tools, app_install, &installs);
+}
+
+fn createAppModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    version: *std.Build.Step.Options,
+    shortcut_domain: *std.Build.Module,
+    test_options: *std.Build.Step.Options,
+) *std.Build.Module {
+    const module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    module.addOptions("app_info", version);
+    module.addOptions("app_test_options", test_options);
+    module.addImport("shortcut_domain", shortcut_domain);
+    for ([_][]const u8{ "user32", "shell32", "comctl32", "comdlg32", "gdi32", "ole32", "oleaut32", "winhttp" }) |library|
+        module.linkSystemLibrary(library, .{});
+    return module;
 }
 
 fn addFocusedCheck(
