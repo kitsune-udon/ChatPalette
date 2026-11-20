@@ -1,47 +1,38 @@
 # ChatPalette
 
-YouTubeのチャット・コメントへ、保存した1行の弾幕を呼び出して入力するWindowsアプリです。共通・配信者別の弾幕、チャンネルに合わせた自動選択、ライブ配信のリアクションを扱います。
-
-弾幕は入力だけを行います。内容を確認してYouTube側で送信してください。送信キーとリアクションの実行は送信を伴います。
+ChatPaletteは、YouTubeのライブチャットや動画のコメント・返信欄に、よく使う1行の文（弾幕）を入力するWindowsアプリです。どのチャンネルでも使う弾幕と、配信者ごとに使う弾幕を登録できます。
 
 ## 最初の弾幕を使う
 
-1. AutoHotkey **v2**を用意し、配布物を書き込めるフォルダーへ展開します。
-2. 構成を変えずに`main.ahk`を起動します。
-3. YouTube動画のチャット・コメント欄をクリックします。
-4. **Ctrl＋Alt＋Q**でパレットを開き、「弾幕を追加・編集」を押します。
-5. 「共通の弾幕」→「追加…」で名前と本文を保存します。例：名前「拍手」、本文「👏👏👏👏👏👏」。
-6. 「パレットへ戻る」で弾幕を選び、「選んだ弾幕を入力」を押します。
+0.8.0の弾幕や設定を引き継ぐ方は、先に[更新手順](docs/user/maintenance.md#更新を反映する)を確認してください。初めて使う場合は空のライブラリから始まります。
 
-初回の弾幕・配信者は0件です。入力できない場合は、YouTubeの入力欄をクリックしてパレットを開き直します。キーは初期割当で、「ショートカットを管理」で変更できます。
+1. GitHubの配布ページから `ChatPalette-<版番号>.zip` をダウンロードし、書き込みできる空のフォルダーに展開します。[配布ページ](https://github.com/kitsune-udon/ChatPalette/releases)
+2. 展開先の **`ChatPalette.exe`** を起動します。YouTubeで使いたいチャット欄かコメント欄をクリックし、初期キーの **Ctrl＋Alt＋Q** でパレットを開きます。
+3. 「弾幕を追加・編集」を開き、「共通の弾幕」を選んで「追加…」を押します。たとえば弾幕名に「拍手」、本文に「👏👏👏」と入力して「保存」を押します。
+4. 「パレットへ戻る」を押し、一覧から「拍手」を選んで「選んだ弾幕を入力」を押します。
+5. YouTubeの入力欄に「👏👏👏」が入ります。内容を確認し、送信したいときにYouTubeで送信します。
+
+パレットを閉じた後もCtrl＋Alt＋Qで呼び出せます。アプリを終了するには「管理・ヘルプ」かタスクトレイの「終了」を選びます。
 
 ## 必要な環境
 
 | 項目 | 条件 |
 |---|---|
-| OS | Windows標準SQLite API・JSON関数を利用できること。検証環境はWindows 11 |
-| 実行環境 | AutoHotkey v2、Windows PowerShell 5.1。追加のSQLiteは不要 |
-| ブラウザー | Chrome・Edge・Firefox・Brave・Opera・Vivaldiを判定。UI Automationで対象を識別できること |
-| 保存先 | アプリのフォルダーへ書き込めること |
-
-全ブラウザー・全バージョン、Windows 10各版、32bit・ARMは未検証です。PowerShell 7への切替機能はありません。
+| OS | Windows 11 x64。配布ZIPに同梱のZig版をそのまま起動できます |
+| ブラウザー | Chrome・Edge・Firefox・Brave・Opera・Vivaldiを識別します。操作できる範囲は、ブラウザーの版やYouTubeの画面によって変わります |
+| 保存先 | 展開先に書き込み権限が必要です。弾幕や設定は `ChatPalette.exe` と同じフォルダーの `data/settings.db` に保存します |
 
 ## 操作と設定
 
-- [弾幕・配信者を追加、連携、整理する](docs/user/guide.md)
-- [リアクションを準備、実行、停止する](docs/user/reactions.md)
-- [キー・初期値・保存範囲を調べる](docs/user/reference.md)
-- [更新・バックアップ・復元・トラブル対処](docs/user/maintenance.md)
-- [開発・検証・配布](docs/developer/guide.md)／[文書一覧](docs/index.md)
+- **配信者ごとに弾幕を切り替える** — チャンネルを連携すると、開いている動画に合わせてパレットの一覧が切り替わります。[弾幕と配信者](docs/user/guide.md)
+- **ライブ配信でリアクションを送る** — ブラウザーごとにボタンを登録し、「② 送らずに確認」で認識を試してから実行します。[リアクションの設定・送信・停止](docs/user/reactions.md)
+- **よく使う操作をキーに割り当てる** — 弾幕の入力と、現在のチャットへEnterを送る操作には、それぞれ別のキーがあります。[初期キーと割当の変更](docs/user/reference.md#ショートカット)
+- **バックアップ・復元する、問題を調べる** — JSONの書き出し、設定の引き継ぎ、起動や入力で困ったときの確認先をまとめています。[保守とトラブル対処](docs/user/maintenance.md)
 
-設定は`data/settings.db`へ保存します。対応形式はDB5・JSON2だけです。旧形式の更新・復旧は[保守手順](docs/user/maintenance.md#更新を反映する)を確認してください。個人の`data/`を配布物やGitへ含めません。
-
-「管理・ヘルプ」のJSON入出力でバックアップ・復元できます。インポートは全件置換で、置換前の値を自動バックアップします。画面の×は常駐を続けます。終了には「管理・ヘルプ」またはトレイの「終了」を使います。
-
-版は[VERSION](VERSION)、変更は[変更履歴](CHANGELOG.md)を参照してください。
+この配布物の版は [VERSION](VERSION)、版ごとの変更点は[変更履歴](CHANGELOG.md)で確認できます。ソースからビルドする場合は、リポジトリの `docs/index.md` から開発・検証手順を参照してください。[文書一覧（GitHub）](https://github.com/kitsune-udon/ChatPalette/blob/main/docs/index.md) [既存の data/settings.db で開発ビルドを起動する手順](https://github.com/kitsune-udon/ChatPalette/blob/main/docs/developer/guide.md#既存の設定で開発ビルドを起動する)
 
 ## ライセンスとYouTubeとの関係
 
-[MIT License](LICENSE)。Copyright (c) 2026 kitsune-udon(kitsune.udon.delicious@gmail.com)
+ChatPaletteはMITライセンスで配布しています。[ライセンス全文と著作権表示](LICENSE)
 
 非公式のツールで、Google LLC・YouTubeとの提携・承認・後援関係はありません。YouTubeはGoogle LLCの商標です。

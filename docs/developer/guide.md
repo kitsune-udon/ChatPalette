@@ -1,79 +1,157 @@
 # 開発・配布手順
 
-[文書一覧](../index.md) · [設計](architecture.md) · [検証](testing.md)
-
 ## 作業を始める
 
-Windows、AutoHotkey v2、Windows PowerShell 5.1、Gitを用意します。追加のSQLiteやパッケージ取得は不要です。検証環境はWindows 11・64bit版AutoHotkey v2です。他環境の対応を主張するには、その環境で検証してください。
+Windows 11 x64でGitとWindows x86_64版のZig 0.15.2を用意します。ビルド先は `x86_64-windows-gnu`、既定の最適化は `ReleaseSafe` です。アプリはWindows標準のSQLiteとUI Automationを使います。
 
-通常利用するアプリとは別フォルダーで開発します。通常起動・`--smoke`・`--quiet`は`#SingleInstance Force`により同じパスのアプリを置き換えます。構文確認には、実行も置き換えも行わないAutoHotkey標準の`/Validate`を使います。`--check`は廃止しました。
-
-リポジトリ直下で実行します。AutoHotkeyのパスは環境に合わせて変更してください。
+リポジトリ直下のPowerShellで次を実行します。
 
 ```powershell
-& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' /ErrorStdOut /Validate .\main.ahk
-& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' /ErrorStdOut .\main.ahk --smoke
-& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' .\main.ahk
-& 'C:\Program Files\AutoHotkey\v2\AutoHotkey64.exe' .\main.ahk --quiet
+zig version
+zig build install tools
+.\zig-out\bin\chatpalette-tools.exe source-check .
 ```
 
-`--smoke`は設定と画面を初期化して終了します。`--quiet`はパレットを表示せず常駐します。未知・複数の引数はデータ初期化前に拒否します。検査・配布・計測コマンドも未知の引数名を拒否します。
+バージョンが `0.15.2`、ソース検査の結果が `PASS` であることを確認します。本体は `zig-out/bin/ChatPalette.exe`、検証CLIと試験用EXEは同じ `bin/` にできます。別の出力先へビルドするには `--prefix` を指定します。
+
+### 既存の設定で開発ビルドを起動する
+
+リポジトリ直下の `ChatPalette.exe` を起動すると、その隣にある `data/settings.db` を読み込みます。起動中のChatPaletteを終了してから、リポジトリ直下のPowerShellで実行します。
+
+~~~powershell
+zig build install
+if ($LASTEXITCODE -ne 0) { throw '本体のビルドに失敗しました' }
+Copy-Item -LiteralPath .\zig-out\bin\ChatPalette.exe -Destination .\ChatPalette.exe -Force
+.\ChatPalette.exe
+~~~
+
+再ビルドで更新されるのは `zig-out/bin/ChatPalette.exe` です。**再ビルドするたびに、起動中のアプリを終了して生成したEXEを直下へコピーし直してください。**
+
+独立した開発用データで試す場合は `.\zig-out\bin\ChatPalette.exe` を直接起動します。この場合は `zig-out/bin/data/settings.db` を使います。通常起動と `--quiet` は、同じフォルダーの本体が既に動いていれば引き継ぎます。`--quiet` はパレットを閉じたまま常駐します。`--smoke` は設定の読み込みと画面の初期化を確認して終了します。同じフォルダーで本体が稼働している場合は、常駐を続けたまま検査を中止し、`InstanceAlreadyRunning` と終了コード1を返します。
 
 ## 変更箇所を選ぶ
 
-| 対象 | 最初に読む場所 |
+| 変更したい箇所 | 最初に読む場所 |
 |---|---|
-| 画面・文言 | [src/ui/](../../src/ui) |
-| 弾幕・配信者の編集 | [library_service.ahk](../../src/library/library_service.ahk) |
-| 初期値・選択肢 | [settings_schema.ahk](../../src/settings/settings_schema.ahk) |
-| 保存・入出力 | [src/settings/](../../src/settings)、[src/storage/](../../src/storage) |
-| キー | [src/shortcuts/](../../src/shortcuts) |
-| 入力対象の確認 | [src/input/](../../src/input)、[input_target.ps1](../../src/browser/input_target.ps1) |
-| リアクション | [reaction_controller.ahk](../../src/reactions/reaction_controller.ahk)、[reaction_automation.ps1](../../src/browser/reaction_automation.ps1) |
-| ワーカー通信 | [worker_client.ahk](../../src/browser/worker_client.ahk) |
+| 起動モード、本体とワーカーの振り分け | [src/main.zig](../../src/main.zig) |
+| 画面、常駐、キーボード入力 | [src/desktop/](../../src/desktop) |
+| キー割当の共通定義 | [src/domain/shortcuts.zig](../../src/domain/shortcuts.zig) |
+| 弾幕、配信者、設定DB、JSON入出力 | [src/storage/](../../src/storage) |
+| 動画・入力欄の判定、リアクション | [src/worker/](../../src/worker) |
+| 本体とワーカーの通信 | [worker_client.zig](../../src/desktop/worker_client.zig) |
+| ビルド、検査、配布 | [build.zig](../../build.zig)、[tools/](../../tools) |
+| 統合試験と試験用ブラウザーページ | [tests/integration/](../../tests/integration) |
 
-変更前に[状態の所有](architecture.md#状態を混ぜない)、[保存](architecture.md#永続化の契約)、[画面更新](architecture.md#キャッシュと画面更新)の契約を確認します。
+単体試験は対象のZigモジュール内にあります。画面とワーカーにまたがる変更では、操作先をどこで確かめ、どの時点で保存するかを確認してください。[設計と状態の所有](architecture.md)
 
 ## テストを実行する
 
-[変更とテストの対応表](testing.md#変更とテストの対応)から対象を選び、[共通ランナー](testing.md#自動テストを実行する)を使います。画面・ブラウザーの変更は、実画面の確認も追加します。配布検証は全テストを含むため、直前に同じ全検査を重ねる必要はありません。
+`zig build test` は本体、キー割当、検証ツールの単体試験を実行します。製品EXEを介した試験は `zig build check` で選べます。たとえばワーカー通信を変えた場合は、製品と試験器をビルドしてワーカーを再起動できるところまで確かめます。
+
+```powershell
+zig build check -Dtest-case=worker-lifecycle -Dtest-results=zig-out/check-worker-01
+```
+
+結果は新しいフォルダーへ書き出します。再実行するときは末尾の番号を変えてください。試験名、実機とSandboxの使い分け、失敗時に確認するログは検証ガイドにあります。[検証ガイド](testing.md#試験環境を選ぶ)
 
 ## 文字コードとGit
 
-`.ahk`・`.ps1`はUTF-8 BOM付き・CRLF、Markdown・Git設定・LICENSE・VERSIONはUTF-8 BOMなし・LFです。`.editorconfig`と`.gitattributes`を維持します。GitはBOMを付加しません。
+Zig、Markdown、JSON、Git設定、`LICENSE`、`VERSION` はUTF-8（BOMなし）・LFで保存します。編集には `.editorconfig` と `.gitattributes` の設定を使います。
 
-`data/`、`dist/`、`tests/.tmp/`はGit対象外です。利用者のDBをテストへコピーしません。変更後に`git status --short`と`git diff --check`で差分を確認します。
+`zig-out/` と `.zig-cache/` はビルド出力、`dist/` は候補と検証記録です。これらと利用者の `data/` はGitの対象外です。試験には合成データを使います。
 
 ## リリース手順
 
-1. `VERSION`と未公開の変更履歴を更新し、対象差分を確認します。版番号はSemVer 2.0.0を使います。
-2. Sandboxの準備後、次を実行します。
-3. 終了コード0、全テストの`PASS`、ZIPと同名の`.validation.json`を確認します。
-4. 実ブラウザーの確認を別レポートに残します。公開するZIPのハッシュを検証記録と照合します。
-5. 公開時はタグのコミット、Releaseの版・添付名・サイズ・SHA-256を照合します。タグpush後の添付失敗は不足分を続行し、公開タグを作り直しません。
+1. 候補のコミットをクリーンな作業コピーで開き、`VERSION` の版番号と `CHANGELOG.md` の変更内容を確認します。`freeze` でゲストの試験まで実行するには、Windows Sandboxと `wsb.exe` が必要です。`wsb list` で稼働中のセッションが0件であることを確認します。
+2. 次のコマンドで候補を固定します。`$zig` にはWindows x86_64版Zig 0.15.2の `zig.exe` 本体を指定します。`freeze` はバージョンと実行ファイルのSHA-256を検査します。
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-release.ps1 -Sandbox -OutputDirectory .\dist
+$zig = (Get-Command zig.exe).Source
+$version = (Get-Content -Raw VERSION).Trim()
+$candidate = ".\dist\candidate-$version"
+& $zig build tools
+if ($LASTEXITCODE -ne 0) { throw '検証ツールのビルドに失敗しました。' }
+.\zig-out\bin\chatpalette-tools.exe freeze . $zig $candidate
 ```
 
-検証入口は配布対象を固定し、同じコピーでソース検査・全テスト・ZIP生成を行います。ゲストへのコピー直後と検証後、梱包前にマニフェストを照合します。ZIPの全エントリーと`SHA256SUMS`自体も検証前のマニフェストに照合し、欠落・追加・内容変更・重複名・大小文字違いを拒否します。
+3. `freeze` が終了コード0を返したら、候補フォルダーの `ChatPalette-<版>.zip` と `ChatPalette-<版>.validation.json` を確認します。後者の `ArchiveSHA256` がZIPのハッシュです。`evidence/` には試験結果とログが入ります。
+4. 同じZIPを使ってクリーン展開、実ブラウザーでの動作、更新と切り戻しを確かめます。公開直前にZIPのハッシュをもう一度照合し、公開後はタグのコミットとReleaseの添付名・サイズ・SHA-256を照合します。タグの公開後に添付だけ失敗した場合は、同じ版へ不足分を添付します。[環境ごとの検証手順](testing.md#全体を検証する)
 
-検証記録は版、UTC日時、テスト群数、`TestEnvironment`、ZIPとソースマニフェストのSHA-256を含みます。ZIPだけが存在しても成功ではありません。出力は一時ファイルから確定し、既存ZIP・レポートを上書きしません。失敗時の資料とSandboxの成功時資料は保持するため、Sandboxを終了してから整理します。
+`freeze` はビルド入力を作業コピーから採取し、そのコピーだけで本体と試験器を再ビルドします。キー割当とツールの単体試験はホストで、本体の単体試験、起動、ワーカーの故障と復旧、スモーク試験は消音したWindows Sandboxで実行します。ランナーは自分が起動したセッションIDを照合して終了します。既存の出力先は上書きしません。
+
+`freeze` の末尾に `--prepare-only` を付けると、ホスト試験とSandboxの準備まで進み、作業記録の場所を出力します。梱包だけを予行する `release` は `.rehearsal.json` を作成します。
 
 ### 配布物の範囲
 
-[release-files.ps1](../../scripts/release-files.ps1)の許可リストが正本です。コード・文書・ライセンス・開発設定・テスト・合成データを含み、`data/`・`.git/`・一時資料を含みません。必須ファイルの欠落はコピー前に拒否します。
+| 確認するもの | 内容 |
+|---|---|
+| `SOURCE-SHA256SUMS` | `build.zig`、任意の `build.zig.zon`、`src/`・`tools/`・`tests/integration/` のZigファイル、同梱する文書などのハッシュ |
+| `ChatPalette-<版>.zip` | `ChatPalette.exe`、`README.md`、`VERSION`、`CHANGELOG.md`、`LICENSE`、`docs/user/` の利用ガイド、`SHA256SUMS` |
+| `SHA256SUMS` | ZIPに収めたEXEと文書などのハッシュ。候補フォルダーにも同じマニフェストがある |
 
-[build-release.ps1](../../scripts/build-release.ps1)単独のZIPは検証済み配布物ではありません。`SHA256SUMS`は内容照合用で、発行者の署名ではありません。配布はソース形式で、AutoHotkey v2とWindows PowerShell 5.1が必要です。
+`chatpalette-tools.exe verify <候補ZIP> <候補フォルダーのSHA256SUMS>` は中身を照合し、ZIP全体のSHA-256を返します。配布対象の追加・削除は許可リストに反映してください。公開する添付に個人データやローカルの作業パスが入っていないことも確認します。[配布対象の定義](../../tools/release.zig)
+
+### 公開版0.9.0を照合する
+
+リポジトリルートで実行し、固定タグの配布ZIPと検証JSONを取得します。検証JSONとZIP内の配布マニフェストをSHA-256で照合してから、検証CLIでZIPの中身を確認します。[公開版0.9.0](https://github.com/kitsune-udon/ChatPalette/releases/tag/v0.9.0)
+
+~~~powershell
+zig build tools
+if ($LASTEXITCODE -ne 0) { throw '検証CLIのビルドに失敗しました' }
+$work = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ('ChatPalette-verify-' + [guid]::NewGuid()))
+$zip = Join-Path $work.FullName 'ChatPalette-0.9.0.zip'
+$validation = Join-Path $work.FullName 'ChatPalette-0.9.0.validation.json'
+$download = 'https://github.com/kitsune-udon/ChatPalette/releases/download/v0.9.0'
+Invoke-WebRequest "$download/ChatPalette-0.9.0.validation.json" -OutFile $validation
+if ((Get-FileHash -LiteralPath $validation).Hash -ine 'a819680a481e1eceeeafe35ad284648140b02e1fb1c3ed66bf9c03ad3b5772cf') {
+    throw '検証JSONのSHA-256が一致しません'
+}
+$expected = Get-Content -Raw -LiteralPath $validation | ConvertFrom-Json
+Invoke-WebRequest "$download/ChatPalette-0.9.0.zip" -OutFile $zip
+if ((Get-FileHash -LiteralPath $zip).Hash -ine $expected.ArchiveSHA256) { throw 'ZIPのSHA-256が一致しません' }
+tar -xf $zip -C $work.FullName SHA256SUMS
+if ($LASTEXITCODE -ne 0) { throw '配布マニフェストの展開に失敗しました' }
+$manifest = Join-Path $work.FullName 'SHA256SUMS'
+if ((Get-FileHash -LiteralPath $manifest).Hash -ine $expected.ArchiveManifestSHA256) {
+    throw '配布マニフェストのSHA-256が一致しません'
+}
+.\zig-out\bin\chatpalette-tools.exe verify $zip $manifest
+if ($LASTEXITCODE -ne 0) { throw 'ZIPの検証に失敗しました' }
+~~~
+
+固定時のソースマニフェストを再生成するには、同じPowerShellで以下を実行します。公開コミットで使っていた対象（native配下のZigファイル、ビルド設定、配布文書）をパス順に並べ、小文字SHA-256とCRLFで記録します。
+
+~~~powershell
+$source = Join-Path $work.FullName 'source'
+git -c core.autocrlf=false clone --quiet --depth 1 --branch v0.9.0 https://github.com/kitsune-udon/ChatPalette.git $source
+if ($LASTEXITCODE -ne 0) { throw '公開タグの取得に失敗しました' }
+if ((git -C $source rev-parse HEAD) -ne '528a05ebdfa22990bc14f718c3fa5a39ea830d9d') {
+    throw '公開コミットが一致しません'
+}
+$paths = [Collections.Generic.List[string]]::new()
+$paths.AddRange([string[]]@(
+    'build.zig', 'CHANGELOG.md', 'LICENSE', 'README.md', 'VERSION',
+    'docs/user/guide.md', 'docs/user/maintenance.md', 'docs/user/reactions.md', 'docs/user/reference.md'
+))
+if (Test-Path -LiteralPath (Join-Path $source 'build.zig.zon') -PathType Leaf) { $paths.Add('build.zig.zon') }
+Get-ChildItem -LiteralPath (Join-Path $source 'native') -File -Recurse -Force | Where-Object Extension -ceq '.zig' | ForEach-Object {
+    $paths.Add($_.FullName.Substring($source.Length + 1).Replace('\', '/'))
+}
+$paths.Sort([StringComparer]::Ordinal)
+$lines = foreach ($path in $paths) {
+    (Get-FileHash -LiteralPath (Join-Path $source $path)).Hash.ToLowerInvariant() + '  ' + $path
+}
+$sourceManifest = Join-Path $work.FullName 'SOURCE-SHA256SUMS'
+[IO.File]::WriteAllText($sourceManifest, ($lines -join ([string][char]13 + [char]10)) + [char]13 + [char]10)
+if ((Get-FileHash -LiteralPath $sourceManifest).Hash -ine $expected.SourceManifestSHA256) {
+    throw 'ソースマニフェストのSHA-256が一致しません'
+}
+~~~
+
+公開時の試験経緯は移行記録を参照してください。[移行記録](../history/zig-migration-evidence.md)
 
 ## 文書を更新する規則
 
-[Plain Language Guidelines](https://digital.gov/guides/plain-language/principles)に従い、読者の目的を先に書きます。一文で一つの内容を伝え、操作する人と動詞を明示します。長い段落を手順・表へ分け、重複と不要な実装履歴を除きます。
+操作は利用者ガイド、初期値と上限はリファレンス、復旧は保守手順、内部の状態とデータ形式は設計書に記載します。同じ手順が別の場所でも必要なら、説明を持つページへリンクします。[文書一覧](../index.md)
 
-利用手順は利用者ページ、値は[リファレンス](../user/reference.md)、復旧は[保守](../user/maintenance.md)、内部契約は[設計](architecture.md)へ集約します。実装・テストとUIラベルを照合し、公開済みの変更履歴は保持します。未公開の履歴は最終的な結果ごとにまとめます。
-
-文書だけの変更は内容・相対リンク・見出し・配布対象を確認します。操作の意味が変わる場合は、その操作も検証します。未実施の検証を成功と書きません。`docs/`内の`.md`は配布対象です。別形式や直下の新規資料は許可リストを確認します。
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check-source.ps1
-```
+UIラベルと操作順を実装に照らし、相対リンクと見出しを確認します。配布文書を変えたら `chatpalette-tools.exe source-check .` でZIP内の参照先も検査します。開発文書と履歴のリンクはリポジトリ内で確認します。公開済みの変更履歴から旧版の手順を案内するときは、その版の固定タグへリンクします。最後に `git diff --check` と `git status --short` で差分を確認します。
