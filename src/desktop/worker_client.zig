@@ -1,4 +1,5 @@
 const std = @import("std");
+const resolve_deadline = @import("../resolve_deadline.zig");
 const windows = @import("win.zig");
 const win = windows.api;
 const allocator = std.heap.page_allocator;
@@ -218,6 +219,7 @@ pub const Client = struct {
         comptime observe: StopWait,
     ) !Reply {
         if (self.active) return error.WorkerBusy;
+        const deadline = if (mode == .resolve) resolve_deadline.now() + resolve_deadline.total_ms else null;
         self.active = true;
         defer self.active = false;
         self.request_may_have_arrived = false;
@@ -228,19 +230,39 @@ pub const Client = struct {
             return error.WorkerExited;
         }
         self.sequence +%= 1;
-        errdefer self.stopWithWait(observe) catch |failure| {
-            self.cleanup_failure = failure;
-        };
+        errdefer |failure| {
+            if (mode == .resolve and failure == error.WorkerTimeout) {
+                // Return the timeout without blocking on process teardown.
+                self.abortTimedOutResolve();
+            } else self.stopWithWait(observe) catch |cleanup| {
+                self.cleanup_failure = cleanup;
+            };
+        }
         var buffer: [max_payload + 4]u8 = undefined;
-        const request_bytes = try formatRequest(&buffer, self.sequence, hwnd, mode, expected, fields);
-        return self.exchange(alloc, mode, request_bytes, hwnd, pump);
+        const work_deadline = if (deadline) |value| value - resolve_deadline.reply_reserve_ms else null;
+        const request_bytes = try formatRequest(&buffer, self.sequence, hwnd, mode, expected, fields, work_deadline);
+        return self.exchange(alloc, mode, request_bytes, hwnd, pump, deadline);
     }
 
-    fn exchange(self: *Client, alloc: std.mem.Allocator, mode: Mode, request_bytes: []const u8, hwnd: usize, pump: Pump) !Reply {
+    fn abortTimedOutResolve(self: *Client) void {
+        self.registrations_current = false;
+        if (self.pipe) |pipe| _ = win.CloseHandle(pipe);
+        self.pipe = null;
+        if (self.signal) |signal| _ = win.CloseHandle(signal);
+        self.signal = null;
+        if (self.running() and win.TerminateProcess(self.process, 1) == 0 and self.running())
+            self.cleanup_failure = error.WorkerDidNotExit;
+        // Keep the owned process handle until ensure or stop can confirm exit.
+    }
+
+    fn exchange(self: *Client, alloc: std.mem.Allocator, mode: Mode, request_bytes: []const u8, hwnd: usize, pump: Pump, deadline: ?u64) !Reply {
         var timer = try std.time.Timer.start();
         const limit = mode.deadlineMs() * std.time.ns_per_ms;
         var sent = false;
-        while (timer.read() < limit) {
+        while (true) {
+            if (deadline) |value| {
+                if (resolve_deadline.remaining(value, resolve_deadline.now()) == 0) break;
+            } else if (timer.read() >= limit) break;
             if (!self.running()) return error.WorkerExited;
             if (!sent) {
                 var pid: win.ULONG = undefined;
@@ -255,12 +277,13 @@ pub const Client = struct {
                 }
             } else if (try self.read(alloc)) |reply| {
                 errdefer reply.deinit();
+                if (deadline) |value| if (resolve_deadline.remaining(value, resolve_deadline.now()) == 0)
+                    return error.WorkerTimeout;
                 if (!reply.matches(self.sequence, hwnd)) return error.MismatchedWorkerReply;
                 return reply;
             }
-            const remaining = limit -| timer.read();
-            if (remaining == 0) break;
-            const wait_ms = std.math.divCeil(u64, remaining, std.time.ns_per_ms) catch unreachable;
+            const wait_ms = if (deadline) |value| resolve_deadline.remaining(value, resolve_deadline.now()) else std.math.divCeil(u64, limit -| timer.read(), std.time.ns_per_ms) catch unreachable;
+            if (wait_ms == 0) break;
             try pump(self.signal, @intCast(@min(50, wait_ms)));
         }
         return error.WorkerTimeout;
@@ -339,12 +362,14 @@ fn spawnWorker(launch: Launch, name: []const u8) !win.HANDLE {
     return child.hProcess;
 }
 
-fn formatRequest(buffer: *[max_payload + 4]u8, sequence: u64, hwnd: usize, mode: Mode, expected: []const u8, fields: []const Field) ![]const u8 {
+fn formatRequest(buffer: *[max_payload + 4]u8, sequence: u64, hwnd: usize, mode: Mode, expected: []const u8, fields: []const Field, work_deadline: ?u64) ![]const u8 {
     if (std.mem.indexOfAny(u8, expected, "\r\n") != null) return error.InvalidWorkerField;
     var output = std.Io.Writer.fixed(buffer[4..]);
     output.print("Seq={d}\nWindow={d}\nMode={s}\nVideo={s}\n", .{ sequence, hwnd, @tagName(mode), expected }) catch return error.InvalidWorkerRequestSize;
+    if (work_deadline) |deadline| output.print("Deadline={d}\n", .{deadline}) catch return error.InvalidWorkerRequestSize;
     for (fields) |field| {
         if (field.name.len == 0 or std.mem.indexOfAny(u8, field.value, "\r\n") != null) return error.InvalidWorkerField;
+        if (std.ascii.eqlIgnoreCase(field.name, "Deadline")) return error.InvalidWorkerField;
         for (field.name) |ch| if (!std.ascii.isAlphabetic(ch)) return error.InvalidWorkerField;
         output.print("{s}={s}\n", .{ field.name, field.value }) catch return error.InvalidWorkerRequestSize;
     }
@@ -506,17 +531,20 @@ pub const LifecycleProbe = struct {
 
 test "host frames use the production field names, byte count and ownership checks" {
     var storage: [max_payload + 4]u8 = undefined;
-    const bytes = try formatRequest(&storage, 12, 84, .verify_chat, "ZigTest0001", &.{.{ .name = "FocusToken", .value = "once" }});
+    const bytes = try formatRequest(&storage, 12, 84, .verify_chat, "ZigTest0001", &.{.{ .name = "FocusToken", .value = "once" }}, null);
     try std.testing.expectEqual(bytes.len - 4, std.mem.readInt(u32, bytes[0..4], .little));
     try std.testing.expectEqualStrings("Seq=12\nWindow=84\nMode=verify_chat\nVideo=ZigTest0001\nFocusToken=once\n", bytes[4..]);
     const reply = Reply{ .alloc = undefined, .payload = "Seq=12\nWindow=84\nState=ok\nVideo=ZigTest0001\nDetail=chat" };
     try std.testing.expect(reply.matches(12, 84) and reply.is("ok"));
     try std.testing.expect(!reply.matches(12, 85));
-    try std.testing.expectError(error.InvalidWorkerField, formatRequest(&storage, 12, 84, .reaction_send, "ZigTest0001\nState=ok", &.{}));
+    try std.testing.expectError(error.InvalidWorkerField, formatRequest(&storage, 12, 84, .reaction_send, "ZigTest0001\nState=ok", &.{}, null));
     const too_large = [_]u8{'x'} ** max_payload;
     try std.testing.expectError(error.InvalidWorkerRequestSize, formatRequest(&storage, 12, 84, .verify_input, "", &.{
         .{ .name = "Payload", .value = &too_large },
-    }));
+    }, null));
+    const resolve = try formatRequest(&storage, 13, 84, .resolve, "", &.{}, 1234);
+    try std.testing.expectEqualStrings("Seq=13\nWindow=84\nMode=resolve\nVideo=\nDeadline=1234\n", resolve[4..]);
+    try std.testing.expectError(error.InvalidWorkerField, formatRequest(&storage, 13, 84, .resolve, "", &.{.{ .name = "deadline", .value = "9000" }}, 1234));
 }
 
 test "native child acquisition releases the pipe and the ready event at each failure boundary" {
