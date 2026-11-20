@@ -10,7 +10,7 @@
 |---|---|
 | 本体のロジック・設定DB、キー割当、検証ツール | `app-unit`、`shortcut-unit`、`tools-unit`。3群まとめて実行するには `zig build test` |
 | ワーカー通信、タイムアウト、故障後の再開 | `worker-lifecycle`。ヘッドレスで製品EXEと名前付きパイプを使う |
-| 起動時の引き継ぎ・終了、管理画面でのデータ移行 | `startup`、`transfer`。試験用の対話デスクトップで実行する |
+| 二重起動時の画面表示、別フォルダーからの起動拒否、再起動、管理画面でのデータ移行 | `startup`、`transfer`。稼働中の本体を終了し、試験用の対話デスクトップで実行する |
 | 入力欄の識別、Enterやリアクションの操作回数 | `brave-fixture`。オフラインのWindows SandboxでBraveと合成ページを使う |
 | 日本語IME、DPI、常駐アプリとのキー競合 | 対象の設定を備えた試験用デスクトップ。IMEの開閉・文字列・Enter回数は `ime-input` |
 | 配布ZIPの初回起動、保存、再起動 | `sandbox-package`。開発ツールのないオフラインのWindows Sandboxで候補ZIPを展開する |

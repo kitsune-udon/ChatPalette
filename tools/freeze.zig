@@ -19,10 +19,18 @@ const startup_trials = [_]struct { name: []const u8, exit_code: u32, folder: []c
     .{ .name = "03-smoke-a", .exit_code = 0, .folder = "a" },
     .{ .name = "04-smoke-b", .exit_code = 0, .folder = "b" },
     .{ .name = "05-quiet-a", .exit_code = 0, .folder = "a", .must_be_ready = true },
-    .{ .name = "06-quiet-b", .exit_code = 0, .folder = "b", .must_be_ready = true },
-    .{ .name = "07-check-rejection", .exit_code = 1, .folder = "a" },
-    .{ .name = "08-smoke-takeover", .exit_code = 0, .folder = "a" },
-    .{ .name = "09-corrupt-db-smoke", .exit_code = 1, .folder = "b" },
+    .{ .name = "06-duplicate-quiet", .exit_code = 0, .folder = "a" },
+    .{ .name = "07-recall-palette", .exit_code = 0, .folder = "a" },
+    .{ .name = "08-other-quiet-rejected", .exit_code = 1, .folder = "b" },
+    .{ .name = "09-other-normal-rejected", .exit_code = 1, .folder = "b" },
+    .{ .name = "10-busy-smoke", .exit_code = 1, .folder = "a" },
+    .{ .name = "11-other-smoke-rejected", .exit_code = 1, .folder = "b" },
+    .{ .name = "12-check-rejection", .exit_code = 1, .folder = "a" },
+    .{ .name = "13-quiet-b-after-exit", .exit_code = 0, .folder = "b", .must_be_ready = true },
+    .{ .name = "14-other-quiet-reverse", .exit_code = 1, .folder = "a" },
+    .{ .name = "15-corrupt-db-smoke", .exit_code = 1, .folder = "b" },
+    .{ .name = "16-concurrent-quiet-first", .exit_code = 0, .folder = "a" },
+    .{ .name = "17-concurrent-quiet-second", .exit_code = 0, .folder = "a" },
 };
 
 const StartupReport = struct {
@@ -37,9 +45,11 @@ const StartupReport = struct {
     invalid_database_sha256_after: ?[]const u8,
     invalid_arguments_leave_no_data: bool,
     worker_leaves_no_data: bool,
-    quiet_instances_are_independent: bool,
-    rejected_check_leaves_both_hosts_running: bool,
-    takeover_leaves_other_host_running: bool,
+    same_folder_recalled_existing_palette: bool,
+    rejected_launches_preserved_resident: bool,
+    alternate_folder_startup_after_exit: bool,
+    explicit_restart_replaced_resident: bool,
+    concurrent_launch_kept_one_resident: bool,
     trials: []const Trial,
 
     const Trial = struct {
@@ -68,8 +78,9 @@ fn unchangedDigest(before: ?[]const u8, after: ?[]const u8) bool {
 fn validateStartup(report: StartupReport, app_sha: files.HexDigest) !void {
     if (!std.mem.eql(u8, report.executable_sha256, &app_sha)) return error.StartupTestExecutableMismatch;
     if (!report.passed or report.failure != null or !report.invalid_arguments_leave_no_data or
-        !report.worker_leaves_no_data or !report.quiet_instances_are_independent or
-        !report.rejected_check_leaves_both_hosts_running or !report.takeover_leaves_other_host_running or
+        !report.worker_leaves_no_data or !report.same_folder_recalled_existing_palette or
+        !report.rejected_launches_preserved_resident or !report.alternate_folder_startup_after_exit or
+        !report.explicit_restart_replaced_resident or !report.concurrent_launch_kept_one_resident or
         !unchangedDigest(report.database_a_sha256_before, report.database_a_sha256_after) or
         !unchangedDigest(report.database_b_sha256_before, report.database_b_sha256_after) or
         !unchangedDigest(report.invalid_database_sha256_before, report.invalid_database_sha256_after) or
@@ -508,9 +519,11 @@ test "startup release evidence requires unchanged databases and every expected t
         .invalid_database_sha256_after = &db_sha,
         .invalid_arguments_leave_no_data = true,
         .worker_leaves_no_data = true,
-        .quiet_instances_are_independent = true,
-        .rejected_check_leaves_both_hosts_running = true,
-        .takeover_leaves_other_host_running = true,
+        .same_folder_recalled_existing_palette = true,
+        .rejected_launches_preserved_resident = true,
+        .alternate_folder_startup_after_exit = true,
+        .explicit_restart_replaced_resident = true,
+        .concurrent_launch_kept_one_resident = true,
         .trials = &trials,
     };
     try validateStartup(report, app);

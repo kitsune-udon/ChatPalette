@@ -27,7 +27,9 @@ Copy-Item -LiteralPath .\zig-out\bin\ChatPalette.exe -Destination .\ChatPalette.
 
 再ビルドで更新されるのは `zig-out/bin/ChatPalette.exe` です。**再ビルドするたびに、起動中のアプリを終了して生成したEXEを直下へコピーし直してください。**
 
-独立した開発用データで試す場合は `.\zig-out\bin\ChatPalette.exe` を直接起動します。この場合は `zig-out/bin/data/settings.db` を使います。通常起動と `--quiet` は、同じフォルダーの本体が既に動いていれば引き継ぎます。`--quiet` はパレットを閉じたまま常駐します。`--smoke` は設定の読み込みと画面の初期化を確認して終了します。同じフォルダーで本体が稼働している場合は、常駐を続けたまま検査を中止し、`InstanceAlreadyRunning` と終了コード1を返します。
+独立した開発用データで試す場合は `.\zig-out\bin\ChatPalette.exe` を直接起動します。この場合は `zig-out/bin/data/settings.db` を使います。同じWindowsセッションで、本体を常駐できるのは1つです。同じフォルダーから通常起動すると既存の画面を呼び出します。`--quiet` はパレットを閉じたまま常駐し、同じフォルダーで稼働中なら画面を変えずに終了します。別のフォルダーに切り替える場合は稼働中の本体を終了してください。
+
+`--smoke` は設定の読み込みと画面の初期化を確認して終了します。本体が稼働中なら、同じフォルダーでは `InstanceAlreadyRunning`、別フォルダーでは `OtherInstanceAlreadyRunning` と終了コード1を返します。セッション単位の排他に対応していない旧版と比較する場合も、先に稼働中の本体を終了してください。
 
 ## 変更箇所を選ぶ
 
