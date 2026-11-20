@@ -955,6 +955,77 @@ test "focused input publishes only the verified element and rejects failed ances
         try node.expectReleased();
 }
 
+test "resolve drops the old channel when the video changes during metadata fetch" {
+    const provider = @import("uia_test_provider.zig");
+    const sdk = win.sdk;
+    const t = std.testing;
+    const Fixture = struct {
+        threadlocal var address: *provider.Node = undefined;
+        threadlocal var first_requests: usize = 0;
+        const first_video = "ZigTest0001";
+        const second_video = "ZigTest0002";
+        const first_url = "https://www.youtube.com/watch?v=" ++ first_video;
+        const second_url = "https://www.youtube.com/watch?v=" ++ second_video;
+
+        fn fetch(allocator: std.mem.Allocator, video: uia.Video, _: u64) !metadata.Metadata {
+            const first = std.mem.eql(u8, &video, first_video);
+            if (!first and !std.mem.eql(u8, &video, second_video)) return error.UnexpectedVideo;
+            if (first) {
+                first_requests += 1;
+                if (first_requests == 1) address.value = provider.text(second_url);
+            }
+            const author = try allocator.dupe(u8, if (first) "First" else "Second");
+            errdefer allocator.free(author);
+            return .{
+                .author = author,
+                .channel = try allocator.dupe(u8, if (first) "/@first" else "/@second"),
+            };
+        }
+    };
+    var root: provider.Node = .{ .kind = sdk.UIA_WindowControlTypeId, .handle = provider.hwnd };
+    var address: provider.Node = .{
+        .kind = sdk.UIA_EditControlTypeId,
+        .id = provider.text("addressEditBox"),
+        .value = provider.text(Fixture.first_url),
+        .parent = &root,
+        .editable = true,
+        .focused = false,
+    };
+    Fixture.first_requests = 0;
+    Fixture.address = &address;
+    provider.setCandidates(&root, &.{&address});
+    var worker: Worker = .{ .client = provider.client(), .cache = .{ .allocator = t.allocator, .fetch = Fixture.fetch } };
+    worker.client.windows[0] = provider.window();
+    worker.client.window_count = 1;
+    defer worker.cache.deinit();
+    defer if (worker.client.windows[0].address) |cached| win.release(cached.element);
+
+    const req: Request = .{
+        .mode = .resolve,
+        .hwnd = provider.hwnd,
+        .resolve_deadline = resolution.now() + resolution.total_ms,
+    };
+    var obsolete: Reply = .{};
+    try worker.execute(t.allocator, req, &obsolete);
+    try t.expectEqualStrings("changed", obsolete.state);
+    try t.expectEqualStrings("", obsolete.author);
+    try t.expectEqualStrings("", obsolete.channel);
+    try t.expectEqual(@as(usize, 0), worker.cache.entries.count());
+
+    var current: Reply = .{};
+    try worker.execute(t.allocator, req, &current);
+    try t.expectEqualStrings("ok", current.state);
+    try t.expectEqualStrings(Fixture.second_video, &current.video.?);
+    try t.expectEqualStrings("/@second", current.channel);
+
+    address.value = provider.text(Fixture.first_url);
+    var retried: Reply = .{};
+    try worker.execute(t.allocator, req, &retried);
+    try t.expectEqualStrings("ok", retried.state);
+    try t.expectEqualStrings("/@first", retried.channel);
+    try t.expectEqual(@as(usize, 2), Fixture.first_requests);
+}
+
 test "address lookup checks document ownership, editing focus, and cached navigation" {
     const provider = @import("uia_test_provider.zig");
     const sdk = win.sdk;
