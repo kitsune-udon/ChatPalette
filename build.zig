@@ -78,6 +78,11 @@ pub fn build(b: *std.Build) void {
             .libraries = &.{ "user32", "ole32", "oleaut32" },
         },
         .{
+            .name = "chatpalette-upgrade-rollback-test",
+            .source = "tests/integration/upgrade_rollback_test.zig",
+            .libraries = &.{"user32"},
+        },
+        .{
             .name = "chatpalette-browser-fixture",
             .source = "tests/integration/browser_fixture.zig",
             .libraries = &.{ "user32", "ole32", "oleaut32", "winhttp", "iphlpapi", "ws2_32" },
