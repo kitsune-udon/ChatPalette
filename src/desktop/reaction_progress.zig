@@ -130,7 +130,7 @@ pub const Overlay = struct {
         wc.hInstance = win.GetModuleHandleW(null);
         wc.lpfnWndProc = handle;
         wc.lpszClassName = class;
-        wc.hbrBackground = win.GetSysColorBrush(win.COLOR_WINDOW);
+        wc.hbrBackground = windows.surfaceBrush();
         wc.hCursor = win.LoadCursorW(null, @ptrFromInt(32512));
         if (win.RegisterClassW(&wc) == 0 and win.GetLastError() != win.ERROR_CLASS_ALREADY_EXISTS) return error.RegisterReactionProgress;
         const border: win.DWORD = win.WS_BORDER;
@@ -242,10 +242,11 @@ test "reaction progress positions inside the browser monitor work area" {
 }
 
 fn control(parent: win.HWND, dpi: windows.Dpi, comptime kind: []const u8, comptime text: []const u8, x: c_int, y: c_int, width: c_int, height: c_int, id: usize) !win.HWND {
-    return win.CreateWindowExW(0, windows.wide(kind), windows.wide(text), win.WS_CHILD | win.WS_VISIBLE, dpi.pixels(x), dpi.pixels(y), dpi.pixels(width), dpi.pixels(height), parent, if (id != 0) @ptrFromInt(id) else null, win.GetModuleHandleW(null), null) orelse error.CreateReactionProgressControl;
+    return win.CreateWindowExW(0, windows.wide(kind), windows.wide(text), win.WS_CHILD | win.WS_VISIBLE | win.WS_CLIPSIBLINGS, dpi.pixels(x), dpi.pixels(y), dpi.pixels(width), dpi.pixels(height), parent, if (id != 0) @ptrFromInt(id) else null, win.GetModuleHandleW(null), null) orelse error.CreateReactionProgressControl;
 }
 
 fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+    if (windows.handleCtlColor(message, wparam)) |brush| return brush;
     return switch (message) {
         win.WM_MOUSEACTIVATE => win.MA_NOACTIVATE,
         win.WM_CLOSE => blk: {

@@ -56,20 +56,31 @@ pub fn recallOwnedWindow(window: api.HWND) void {
     _ = api.SetForegroundWindow(target);
 }
 
-/// Match the legacy desktop: draw at system DPI and let Windows scale across monitors.
+/// Enable Per-Monitor DPI v2 awareness, falling back to system DPI awareness.
 pub fn enableSystemDpi() !void {
-    const context = api.DPI_AWARENESS_CONTEXT_SYSTEM_AWARE;
-    if (api.AreDpiAwarenessContextsEqual(api.GetThreadDpiAwarenessContext(), context) != 0) return;
-    if (api.SetProcessDpiAwarenessContext(context) != 0) return;
+    const pmv2 = api.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
+    if (api.AreDpiAwarenessContextsEqual(api.GetThreadDpiAwarenessContext(), pmv2) != 0) return;
+    if (api.SetProcessDpiAwarenessContext(pmv2) != 0) return;
+    const system_ctx = api.DPI_AWARENESS_CONTEXT_SYSTEM_AWARE;
+    if (api.AreDpiAwarenessContextsEqual(api.GetThreadDpiAwarenessContext(), system_ctx) != 0) return;
+    if (api.SetProcessDpiAwarenessContext(system_ctx) != 0) return;
     if (api.GetLastError() != api.ERROR_ACCESS_DENIED) return error.SetSystemDpiAwareness;
-    // Windows may have locked the process default before our entry point. Let
-    // its unaware modes provide 96-unit coordinates. For a per-monitor process
-    // default, create the desktop windows on a system-aware UI thread.
     switch (api.GetAwarenessFromDpiAwarenessContext(api.GetThreadDpiAwarenessContext())) {
-        api.DPI_AWARENESS_UNAWARE, api.DPI_AWARENESS_SYSTEM_AWARE => {},
-        api.DPI_AWARENESS_PER_MONITOR_AWARE => _ = api.SetThreadDpiAwarenessContext(context),
+        api.DPI_AWARENESS_UNAWARE, api.DPI_AWARENESS_SYSTEM_AWARE, api.DPI_AWARENESS_PER_MONITOR_AWARE => {},
         else => return error.SetSystemDpiAwareness,
     }
+}
+
+pub fn surfaceBrush() api.HBRUSH {
+    return api.GetSysColorBrush(api.COLOR_3DFACE);
+}
+
+pub fn handleCtlColor(message: api.UINT, wparam: api.WPARAM) ?api.LRESULT {
+    if (message != api.WM_CTLCOLORSTATIC and message != api.WM_CTLCOLORBTN) return null;
+    const hdc: api.HDC = @ptrFromInt(wparam);
+    _ = api.SetBkColor(hdc, api.GetSysColor(api.COLOR_3DFACE));
+    _ = api.SetTextColor(hdc, api.GetSysColor(api.COLOR_WINDOWTEXT));
+    return @bitCast(number(surfaceBrush()));
 }
 
 pub const Dpi = struct {
@@ -78,6 +89,34 @@ pub const Dpi = struct {
     pub fn system() Dpi {
         const dpi = api.GetDpiForSystem();
         return if (dpi == 0) .{} else .{ .value = dpi };
+    }
+
+    pub fn forWindow(hwnd: api.HWND) Dpi {
+        if (hwnd == null) return system();
+        const dpi = api.GetDpiForWindow(hwnd);
+        return if (dpi == 0) system() else .{ .value = dpi };
+    }
+
+    pub fn fromDpiChanged(wparam: api.WPARAM) Dpi {
+        const dpi: u32 = low(wparam);
+        return if (dpi == 0) system() else .{ .value = dpi };
+    }
+
+    pub fn applyDpiChanged(hwnd: api.HWND, wparam: api.WPARAM, lparam: api.LPARAM) Dpi {
+        const next = fromDpiChanged(wparam);
+        if (lparam != 0) {
+            const rect: *const api.RECT = @ptrFromInt(@as(usize, @bitCast(lparam)));
+            _ = api.SetWindowPos(
+                hwnd,
+                null,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                api.SWP_NOZORDER | api.SWP_NOACTIVATE,
+            );
+        }
+        return next;
     }
 
     pub fn pixels(self: Dpi, units: i32) i32 {
@@ -92,24 +131,62 @@ pub const Dpi = struct {
     fn fontHeight(self: Dpi) i32 {
         return -api.MulDiv(10, @intCast(self.value), 72);
     }
+
+    fn headingHeight(self: Dpi) i32 {
+        return -api.MulDiv(11, @intCast(self.value), 72);
+    }
+
+    fn captionHeight(self: Dpi) i32 {
+        return -api.MulDiv(9, @intCast(self.value), 72);
+    }
 };
 
 pub const GuiFont = struct {
     handle: api.HFONT = null,
+    heading: api.HFONT = null,
+    caption: api.HFONT = null,
+    line_height: i32 = 16,
 
     pub fn init(dpi: Dpi) !GuiFont {
-        const font = api.CreateFontW(dpi.fontHeight(), 0, 0, 0, api.FW_NORMAL, 0, 0, 0, api.DEFAULT_CHARSET, api.OUT_DEFAULT_PRECIS, api.CLIP_DEFAULT_PRECIS, api.DEFAULT_QUALITY, api.DEFAULT_PITCH, wide("Yu Gothic UI")) orelse
-            return error.CreateDesktopFont;
-        return .{ .handle = font };
+        const body = createFont(dpi.fontHeight(), api.FW_NORMAL) orelse return error.CreateDesktopFont;
+        errdefer _ = api.DeleteObject(body);
+        const heading = createFont(dpi.headingHeight(), api.FW_SEMIBOLD) orelse return error.CreateDesktopFont;
+        errdefer _ = api.DeleteObject(heading);
+        const caption = createFont(dpi.captionHeight(), api.FW_NORMAL) orelse return error.CreateDesktopFont;
+        errdefer _ = api.DeleteObject(caption);
+        return .{
+            .handle = body,
+            .heading = heading,
+            .caption = caption,
+            .line_height = measureLineHeight(body, dpi.pixels(16)),
+        };
+    }
+
+    pub fn reinit(self: *GuiFont, dpi: Dpi) !void {
+        const next = try GuiFont.init(dpi);
+        self.deinit();
+        self.* = next;
     }
 
     pub fn deinit(self: *GuiFont) void {
         if (self.handle) |font| _ = api.DeleteObject(font);
-        self.handle = null;
+        if (self.heading) |font| _ = api.DeleteObject(font);
+        if (self.caption) |font| _ = api.DeleteObject(font);
+        self.* = .{};
     }
 
     pub fn apply(self: GuiFont, window: api.HWND) void {
         _ = api.SendMessageW(window, api.WM_SETFONT, number(self.handle), 1);
+    }
+
+    pub fn applyHeading(self: GuiFont, window: api.HWND) void {
+        if (window == null) return;
+        _ = api.SendMessageW(window, api.WM_SETFONT, number(self.heading orelse self.handle), 1);
+    }
+
+    pub fn applyCaption(self: GuiFont, window: api.HWND) void {
+        if (window == null) return;
+        _ = api.SendMessageW(window, api.WM_SETFONT, number(self.caption orelse self.handle), 1);
     }
 
     pub fn applyChildren(self: GuiFont, window: api.HWND) void {
@@ -119,6 +196,35 @@ pub const GuiFont = struct {
     fn applyChild(child: api.HWND, font: api.LPARAM) callconv(.winapi) api.BOOL {
         _ = api.SendMessageW(child, api.WM_SETFONT, @bitCast(font), 1);
         return 1;
+    }
+
+    fn createFont(height: i32, weight: c_int) api.HFONT {
+        return api.CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            api.DEFAULT_CHARSET,
+            api.OUT_DEFAULT_PRECIS,
+            api.CLIP_DEFAULT_PRECIS,
+            api.CLEARTYPE_QUALITY,
+            api.DEFAULT_PITCH,
+            wide("Yu Gothic UI"),
+        );
+    }
+
+    fn measureLineHeight(font: api.HFONT, fallback: i32) i32 {
+        const dc = api.GetDC(null) orelse return fallback;
+        defer _ = api.ReleaseDC(null, dc);
+        const previous = api.SelectObject(dc, font);
+        defer _ = api.SelectObject(dc, previous);
+        var metrics = std.mem.zeroes(api.TEXTMETRICW);
+        if (api.GetTextMetricsW(dc, &metrics) == 0) return fallback;
+        return @max(1, metrics.tmHeight + metrics.tmExternalLeading);
     }
 };
 
@@ -204,4 +310,14 @@ test "desktop DPI converts 96-unit layout and ten-point fonts at Windows scale f
         try std.testing.expectEqual(record.step, dpi.pixels(24));
         try std.testing.expectEqual(record.font_height, dpi.fontHeight());
     }
+    try std.testing.expectEqual(@as(u32, 144), Dpi.fromDpiChanged((@as(usize, 144) << 16) | 144).value);
+    var fonts = try GuiFont.init(.{ .value = 96 });
+    defer fonts.deinit();
+    try std.testing.expect(fonts.handle != null);
+    try std.testing.expect(fonts.heading != null);
+    try std.testing.expect(fonts.caption != null);
+    try std.testing.expect(fonts.line_height > 0);
+    const old_height = fonts.line_height;
+    try fonts.reinit(.{ .value = 192 });
+    try std.testing.expect(fonts.line_height >= old_height);
 }

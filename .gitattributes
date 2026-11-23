@@ -3,6 +3,8 @@
 # Zig build inputs use LF.
 *.zig text eol=lf
 *.zig.zon text eol=lf
+*.rc text eol=lf
+*.manifest text eol=lf
 
 # Documentation and repository configuration
 *.md text eol=lf

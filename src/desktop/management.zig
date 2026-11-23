@@ -249,6 +249,7 @@ pub const Management = struct {
         self.back = try control(self.window, "BUTTON", "パレットへ戻る", win.WS_TABSTOP, .back);
         self.load_defaults = try control(self.window, "BUTTON", "標準設定を読み込んで戻る", win.WS_TABSTOP, .load_defaults);
         self.font.applyChildren(self.window);
+        self.font.applyCaption(self.undo_hint);
         self.resize();
     }
 
@@ -1402,7 +1403,7 @@ fn register(name: [:0]const u16, callback: win.WNDPROC) !void {
     info.lpfnWndProc = callback;
     info.hInstance = win.GetModuleHandleW(null);
     info.hCursor = win.LoadCursorW(null, @ptrFromInt(32512));
-    info.hbrBackground = win.GetSysColorBrush(win.COLOR_WINDOW);
+    info.hbrBackground = windows.surfaceBrush();
     info.lpszClassName = name;
     if (win.RegisterClassW(&info) == 0 and win.GetLastError() != win.ERROR_CLASS_ALREADY_EXISTS)
         return error.RegisterManagementWindow;
@@ -1414,7 +1415,7 @@ fn control(parent: win.HWND, comptime kind: []const u8, comptime value: []const 
 
 fn controlText(parent: win.HWND, kind: [:0]const u16, value: [:0]const u16, flags: u32, id: ?Id) !win.HWND {
     const menu: win.HMENU = if (id) |which| @ptrFromInt(@intFromEnum(which)) else null;
-    const child_visible: u32 = @intCast(win.WS_CHILD | win.WS_VISIBLE);
+    const child_visible: u32 = @intCast(win.WS_CHILD | win.WS_VISIBLE | win.WS_CLIPSIBLINGS);
     const hwnd = win.CreateWindowExW(0, kind, value, child_visible | flags, 0, 0, 1, 1, parent, menu, win.GetModuleHandleW(null), null) orelse return error.CreateManagementControl;
     try viewport.trackFocus(hwnd, parent, flags);
     return hwnd;
@@ -1479,8 +1480,16 @@ fn dataFromWindow(hwnd: win.HWND, message: win.UINT, lparam: win.LPARAM) ?*Manag
 }
 
 fn viewProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+    if (windows.handleCtlColor(message, wparam)) |brush| return brush;
     const self = dataFromWindow(hwnd, message, lparam) orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
+        win.WM_DPICHANGED => {
+            self.dpi = windows.Dpi.applyDpiChanged(hwnd, wparam, lparam);
+            self.font.reinit(self.dpi) catch {};
+            self.font.applyChildren(hwnd);
+            self.font.applyCaption(self.undo_hint);
+            self.resize();
+        },
         win.WM_SIZE => if (!self.viewport.updating and wparam != win.SIZE_MINIMIZED) {
             const revision = self.viewport.scroll_revision;
             self.resize();
@@ -1503,9 +1512,16 @@ fn viewProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: 
 }
 
 fn editorProcedure(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPARAM) callconv(.winapi) win.LRESULT {
+    if (windows.handleCtlColor(message, wparam)) |brush| return brush;
     const self = dataFromWindow(hwnd, message, lparam) orelse return win.DefWindowProcW(hwnd, message, wparam, lparam);
     if (self.dialog.window != hwnd) return win.DefWindowProcW(hwnd, message, wparam, lparam);
     switch (message) {
+        win.WM_DPICHANGED => {
+            self.dpi = windows.Dpi.applyDpiChanged(hwnd, wparam, lparam);
+            self.font.reinit(self.dpi) catch {};
+            self.font.applyChildren(hwnd);
+            self.resizeEditor();
+        },
         win.WM_SIZE => if (!self.dialog.viewport.updating and wparam != win.SIZE_MINIMIZED) {
             const revision = self.dialog.viewport.scroll_revision;
             self.resizeEditor();

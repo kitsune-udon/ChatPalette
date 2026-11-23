@@ -144,7 +144,7 @@ const Dialog = struct {
         wc.hInstance = win.GetModuleHandleW(null);
         wc.lpszClassName = class_name;
         wc.lpfnWndProc = handle;
-        wc.hbrBackground = win.GetSysColorBrush(win.COLOR_WINDOW);
+        wc.hbrBackground = windows.surfaceBrush();
         wc.hCursor = win.LoadCursorW(null, @ptrFromInt(32512));
         if (win.RegisterClassW(&wc) == 0 and win.GetLastError() != win.ERROR_CLASS_ALREADY_EXISTS)
             return error.RegisterSupportDialog;
@@ -432,7 +432,7 @@ const Dialog = struct {
         if (!self.itemsDirty()) windows.setText(self.item_status, "弾幕の割当を保存しました。");
     }
 
-    fn place(self: Dialog, hwnd: win.HWND, x: c_int, y: c_int, width: c_int, height: c_int) void {
+    fn place(self: *Dialog, hwnd: win.HWND, x: c_int, y: c_int, width: c_int, height: c_int) void {
         self.viewport.place(self.dpi, hwnd, x, y, width, height);
     }
 
@@ -656,6 +656,7 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
         const parameters: *const win.CREATESTRUCTW = @ptrFromInt(@as(usize, @bitCast(lparam)));
         _ = win.SetWindowLongPtrW(hwnd, win.GWLP_USERDATA, @bitCast(@intFromPtr(parameters.lpCreateParams)));
     }
+    if (windows.handleCtlColor(message, wparam)) |brush| return brush;
     const pointer: usize = @bitCast(win.GetWindowLongPtrW(hwnd, win.GWLP_USERDATA));
     if (pointer == 0) return win.DefWindowProcW(hwnd, message, wparam, lparam);
     const dialog: *Dialog = @ptrFromInt(pointer);
@@ -666,6 +667,13 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
     }
     if (message == win.WM_CLOSE) {
         dialog.requestClose();
+        return 0;
+    }
+    if (message == win.WM_DPICHANGED) {
+        dialog.dpi = windows.Dpi.applyDpiChanged(hwnd, wparam, lparam);
+        dialog.font.reinit(dialog.dpi) catch {};
+        dialog.font.applyChildren(hwnd);
+        dialog.resize();
         return 0;
     }
     if (message == win.WM_SIZE) {
@@ -728,7 +736,7 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
 }
 
 fn control(parent: win.HWND, comptime kind: []const u8, text: []const u8, id: usize, styles: win.DWORD) !win.HWND {
-    const common: win.DWORD = win.WS_CHILD | win.WS_VISIBLE;
+    const common: win.DWORD = win.WS_CHILD | win.WS_VISIBLE | win.WS_CLIPSIBLINGS;
     const hwnd = win.CreateWindowExW(0, windows.wide(kind), windows.wide(""), common | styles, 0, 0, 1, 1, parent, if (id == 0) null else @ptrFromInt(id), win.GetModuleHandleW(null), null) orelse return error.CreateSupportControl;
     windows.setText(hwnd, text);
     try viewport.trackFocus(hwnd, parent, styles);

@@ -12,7 +12,8 @@ pub const StatusTip = struct {
             self.close();
             return;
         }
-        const dpi = windows.Dpi.system();
+        const foreground = win.GetForegroundWindow();
+        const dpi = windows.Dpi.forWindow(foreground);
         if (self.window == null) {
             const style = @as(win.DWORD, 0x8000_0000) | @as(win.DWORD, win.WS_BORDER) | @as(win.DWORD, win.SS_NOPREFIX);
             self.window = win.CreateWindowExW(

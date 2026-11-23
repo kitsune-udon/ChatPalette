@@ -4,6 +4,7 @@ const windows = @import("win.zig");
 const shortcuts = @import("shortcuts.zig");
 const reaction_progress = @import("reaction_progress.zig");
 const viewport = @import("viewport.zig");
+const layout_ui = @import("layout.zig");
 const results = @import("palette_results.zig");
 const Viewport = viewport.Viewport;
 const win = windows.api;
@@ -49,8 +50,8 @@ const notice_row = 34;
 const reaction_detail_rows = interval_hint_row + 3 * notice_row - 24;
 const minimum_width = 344;
 const compact_width = 535;
-const minimum_height = 394 + sort_row + reaction_detail_rows + list_labels;
-const compact_minimum_height = 426 + sort_row + reaction_detail_rows + list_labels;
+const minimum_height = 620;
+const compact_minimum_height = 652;
 
 pub const ReactionOptions = struct { kind: u8, count: u32, interval: u32 };
 pub const reaction_counts = storage.Preferences.reaction_counts;
@@ -146,7 +147,7 @@ pub const Palette = struct {
         window_class.lpfnWndProc = handle;
         window_class.hInstance = win.GetModuleHandleW(null);
         window_class.hCursor = win.LoadCursorW(null, @ptrFromInt(32512));
-        window_class.hbrBackground = win.GetSysColorBrush(win.COLOR_WINDOW);
+        window_class.hbrBackground = windows.surfaceBrush();
         window_class.lpszClassName = class;
         if (win.RegisterClassW(&window_class) == 0 and win.GetLastError() != win.ERROR_CLASS_ALREADY_EXISTS)
             return error.RegisterPalette;
@@ -194,8 +195,21 @@ pub const Palette = struct {
         self.reaction_notice = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         self.settings_notice = try control(self.window, "STATIC", "", win.SS_NOPREFIX, null);
         self.search_hint = try control(self.window, "STATIC", "", 0, null);
-        self.font.applyChildren(self.window);
+        self.applyFonts();
         self.resize();
+    }
+
+    fn applyFonts(self: *Palette) void {
+        self.font.applyChildren(self.window);
+        self.font.applyHeading(self.reaction_heading);
+        for ([_]win.HWND{
+            self.input_context,
+            self.search_hint,
+            self.interval_hint,
+            self.message,
+            self.reaction_notice,
+            self.settings_notice,
+        }) |caption| self.font.applyCaption(caption);
     }
 
     pub fn close(self: *Palette) void {
@@ -656,66 +670,111 @@ pub const Palette = struct {
         return if (self.input_notice_visible) input_notice_height else 0;
     }
 
-    fn place(self: Palette, hwnd: win.HWND, x: i32, y: i32, width: i32, height: i32) void {
-        self.viewport.place(self.dpi, hwnd, x, y, width, height);
+    fn placeRect(self: *Palette, hwnd: win.HWND, rect: layout_ui.Rect) void {
+        self.viewport.placeRect(self.dpi, hwnd, rect);
     }
 
-    fn layout(self: Palette, width: i32, height: i32) void {
-        const padding: i32 = 12;
-        const full = width - 2 * padding;
+    fn layout(self: *Palette, width: i32, height: i32) void {
+        const Space = layout_ui.Space;
+        const Metrics = layout_ui.Metrics;
+        const area = (layout_ui.Rect{ .x = 0, .y = 0, .width = width, .height = height }).inset(Space.md);
         const compact = width < compact_width;
-        const extra: i32 = if (compact) 32 else 0;
-        const context_row: i32 = 21;
-        const registration_row: i32 = 21;
         const input_notice_row = self.inputNoticeHeight();
-        const list_height = @max(height - 324 - extra - registration_row - context_row - sort_row - reaction_detail_rows - list_labels - input_notice_row, 28);
-        const search_top = 51 + context_row + search_label_row + input_notice_row;
-        const sort_top = search_top + 34 + search_hint_height;
-        const list_top = sort_top + sort_row;
-        const below_list = list_top - 85 + list_height + preview_label_row;
-        self.place(self.mode, padding, 12, 112, 180);
-        self.place(self.profile, 134, 12, width - 264, 242);
-        self.place(self.support_button, width - 122, 11, 110, 29);
-        self.place(self.input_context, padding, 43, full, 21);
-        const link_width: i32 = 132;
-        if (self.input_notice_visible) self.place(self.input_notice, padding, 51 + context_row, full, input_notice_row - 4);
-        self.place(self.search_label, padding, search_top - search_label_row, full, search_label_row);
-        self.place(self.search, padding, search_top, full - link_width - 8, 27);
-        self.place(self.link_button, width - padding - link_width, search_top, link_width, 27);
-        self.place(self.search_hint, padding, search_top + 31, full, search_hint_height);
-        self.place(self.sort_label, padding, sort_top + 3, 74, 24);
-        self.place(self.sort_selector, padding + 80, sort_top, 160, 160);
-        self.place(self.list, padding, list_top, full, list_height);
-        self.place(self.preview_label, padding, 93 + below_list - preview_label_row, full, preview_label_row);
-        self.place(self.preview, padding, 93 + below_list, full, 48);
-        self.place(self.insert_button, padding, 149 + below_list, 164, 30);
-        self.place(self.manage_button, padding + 173, 149 + below_list, 148, 30);
-        self.place(self.reaction_heading, padding, 188 + below_list, full, 20);
-        self.place(self.reaction_registration, padding, 209 + below_list, full, registration_row);
-        const kind_width: i32 = if (compact) 134 else 142;
-        const count_width: i32 = if (compact) 80 else 100;
-        const interval_x = padding + kind_width + count_width + 16;
-        const controls_top = below_list + registration_row;
-        self.place(self.reaction_kind, padding, 209 + controls_top, kind_width, 210);
-        self.place(self.reaction_count, padding + kind_width + 8, 209 + controls_top, count_width, 190);
-        self.place(self.reaction_interval, interval_x, 209 + controls_top, @min(112, width - interval_x - padding), 235);
-        self.place(self.interval_hint, padding, 239 + controls_top, full, 22);
-        const buttons_top = 242 + controls_top + interval_hint_row;
-        self.place(self.start_button, padding, buttons_top, 186, 27);
-        self.place(self.stop_button, padding + 192, buttons_top, 58, 27);
-        const defaults_x: i32 = if (compact) padding else padding + 255;
-        self.place(self.save_defaults, defaults_x, buttons_top + extra, 111, 27);
-        self.place(self.load_defaults, defaults_x + 117, buttons_top + extra, 135, 27);
-        const notices_top = buttons_top + extra + 34;
-        self.place(self.message, padding, notices_top, full, notice_row - 2);
-        self.place(self.reaction_notice, padding, notices_top + notice_row, full, notice_row - 2);
-        self.place(self.settings_notice, padding, notices_top + 2 * notice_row, full, notice_row - 2);
+        var stack = layout_ui.VStack.init(area, Space.xs);
+
+        // Top bar: mode + profile + support
+        {
+            var top_row = layout_ui.HStack.init(stack.row(Metrics.button), Space.sm);
+            self.placeRect(self.mode, layout_ui.comboDropdown(top_row.fixed(112).withHeight(Metrics.combo), 160));
+            self.placeRect(self.support_button, top_row.fixedRight(110));
+            self.placeRect(self.profile, layout_ui.comboDropdown(top_row.fill().withHeight(Metrics.combo), 216));
+        }
+
+        // Context & optional input notice
+        self.placeRect(self.input_context, stack.row(20));
+        if (stack.optionalRow(self.input_notice_visible, input_notice_row - 4)) |notice_rect| {
+            self.placeRect(self.input_notice, notice_rect);
+        }
+
+        stack.spacer(Space.xs);
+        // Search section
+        self.placeRect(self.search_label, stack.row(Metrics.label));
+        {
+            var search_row = layout_ui.HStack.init(stack.row(Metrics.input), Space.sm);
+            self.placeRect(self.link_button, search_row.fixedRight(132));
+            self.placeRect(self.search, search_row.fill());
+        }
+        self.placeRect(self.search_hint, stack.row(search_hint_height));
+
+        // Sort bar
+        {
+            var sort_bar = layout_ui.HStack.init(stack.row(Metrics.combo), Space.sm);
+            self.placeRect(self.sort_label, sort_bar.fixed(74));
+            self.placeRect(self.sort_selector, layout_ui.comboDropdown(sort_bar.fixed(160), 140));
+        }
+
+        // Reserve space for everything below the list so the list flexibly fills available height.
+        const defaults_extra: i32 = if (compact) Metrics.button + Space.xs else 0;
+        const reserved_below: i32 =
+            Space.xs + Metrics.label + Space.xs + 48 + // preview label + preview box
+            Space.sm + Metrics.button + // insert / manage buttons
+            Space.md + Metrics.heading + Space.xs + 20 + // reaction heading + registration
+            Space.xs + Metrics.combo + Space.xs + 20 + // reaction combos + interval hint
+            Space.xs + Metrics.button + defaults_extra + // start / stop / defaults
+            Space.sm + 3 * (notice_row - 2) + 2 * Space.xs; // 3 status/notice lines
+
+        const list_height = stack.remaining(area.y + area.height, reserved_below, 28);
+        self.placeRect(self.list, stack.row(list_height));
+
+        // Preview & primary actions
+        self.placeRect(self.preview_label, stack.row(Metrics.label));
+        self.placeRect(self.preview, stack.row(48));
+        stack.spacer(Space.xs);
+        {
+            var action_row = layout_ui.HStack.init(stack.row(Metrics.button), Space.sm);
+            self.placeRect(self.insert_button, action_row.fixed(164));
+            self.placeRect(self.manage_button, action_row.fixed(148));
+        }
+
+        // Reaction section
+        stack.spacer(Space.sm);
+        self.placeRect(self.reaction_heading, stack.row(Metrics.heading));
+        self.placeRect(self.reaction_registration, stack.row(20));
+        {
+            var rx_row = layout_ui.HStack.init(stack.row(Metrics.combo), Space.sm);
+            const kind_width: i32 = if (compact) 134 else 142;
+            const count_width: i32 = if (compact) 80 else 100;
+            self.placeRect(self.reaction_kind, layout_ui.comboDropdown(rx_row.fixed(kind_width), 184));
+            self.placeRect(self.reaction_count, layout_ui.comboDropdown(rx_row.fixed(count_width), 164));
+            self.placeRect(self.reaction_interval, layout_ui.comboDropdown(rx_row.fixed(112), 208));
+        }
+        self.placeRect(self.interval_hint, stack.row(20));
+        {
+            var btn_row = layout_ui.HStack.init(stack.row(Metrics.button), Space.sm);
+            self.placeRect(self.start_button, btn_row.fixed(186));
+            self.placeRect(self.stop_button, btn_row.fixed(58));
+            if (!compact) {
+                self.placeRect(self.save_defaults, btn_row.fixed(112));
+                self.placeRect(self.load_defaults, btn_row.fixed(136));
+            }
+        }
+        if (compact) {
+            var defaults_row = layout_ui.HStack.init(stack.row(Metrics.button), Space.sm);
+            self.placeRect(self.save_defaults, defaults_row.fixed(112));
+            self.placeRect(self.load_defaults, defaults_row.fixed(136));
+        }
+
+        // Status & notices
+        stack.spacer(Space.xs);
+        self.placeRect(self.message, stack.row(notice_row - 2));
+        self.placeRect(self.reaction_notice, stack.row(notice_row - 2));
+        self.placeRect(self.settings_notice, stack.row(notice_row - 2));
     }
 };
 
 fn control(parent: win.HWND, comptime kind: []const u8, comptime text: []const u8, styles: win.DWORD, id: ?Id) !win.HWND {
     const menu: win.HMENU = if (id) |value| @ptrFromInt(@intFromEnum(value)) else null;
-    const common: win.DWORD = win.WS_CHILD | win.WS_VISIBLE;
+    const common: win.DWORD = win.WS_CHILD | win.WS_VISIBLE | win.WS_CLIPSIBLINGS;
     const hwnd = win.CreateWindowExW(0, windows.wide(kind), windows.wide(text), common | styles, 0, 0, 1, 1, parent, menu, win.GetModuleHandleW(null), null) orelse return error.CreatePaletteControl;
     try viewport.trackFocus(hwnd, parent, styles);
     return hwnd;
@@ -737,6 +796,7 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
         const parameters: *const win.CREATESTRUCTW = @ptrFromInt(@as(usize, @bitCast(lparam)));
         _ = win.SetWindowLongPtrW(hwnd, win.GWLP_USERDATA, @bitCast(@intFromPtr(parameters.lpCreateParams)));
     }
+    if (windows.handleCtlColor(message, wparam)) |brush| return brush;
     const ptr: usize = @bitCast(win.GetWindowLongPtrW(hwnd, win.GWLP_USERDATA));
     if (ptr == 0) return win.DefWindowProcW(hwnd, message, wparam, lparam);
     const palette: *Palette = @ptrFromInt(ptr);
@@ -753,6 +813,12 @@ fn handle(hwnd: win.HWND, message: win.UINT, wparam: win.WPARAM, lparam: win.LPA
         } else {
             palette.was_presented = true;
             if (palette.saved_refresh_pending) palette.refresh(palette.data);
+        },
+        win.WM_DPICHANGED => {
+            palette.dpi = windows.Dpi.applyDpiChanged(hwnd, wparam, lparam);
+            palette.font.reinit(palette.dpi) catch {};
+            palette.applyFonts();
+            palette.resize();
         },
         win.WM_SIZE => if (!palette.viewport.updating and wparam != win.SIZE_MINIMIZED) {
             const revision = palette.viewport.scroll_revision;

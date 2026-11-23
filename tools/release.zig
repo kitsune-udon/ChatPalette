@@ -6,6 +6,18 @@ const max_file_bytes = 256 * 1024 * 1024;
 const manifest_limit = 4 * 1024 * 1024;
 const app_name = "ChatPalette.exe";
 pub const source_roots = [_][]const u8{ "src", "tools", "tests/integration" };
+pub const resource_extensions = [_][]const u8{ ".rc", ".manifest" };
+
+pub fn isSourceFile(root: []const u8, basename: []const u8) bool {
+    const extension = std.fs.path.extension(basename);
+    if (std.mem.eql(u8, extension, ".zig")) return true;
+    if (std.mem.eql(u8, root, "src")) {
+        for (resource_extensions) |ext| {
+            if (std.mem.eql(u8, extension, ext)) return true;
+        }
+    }
+    return false;
+}
 pub const packaged_files = [_][]const u8{
     "CHANGELOG.md",
     "LICENSE",
@@ -61,7 +73,7 @@ fn sourcePaths(alloc: std.mem.Allocator, project: std.fs.Dir) ![]const []const u
         var walk = try dir.walk(alloc);
         defer walk.deinit();
         while (try walk.next()) |entry| {
-            if (entry.kind != .file or !std.mem.eql(u8, std.fs.path.extension(entry.basename), ".zig")) continue;
+            if (entry.kind != .file or !isSourceFile(root, entry.basename)) continue;
             const path = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ root, entry.path });
             std.mem.replaceScalar(u8, path, '\\', '/');
             try paths.append(alloc, path);
@@ -341,6 +353,8 @@ test "candidate packaging requires tested bytes and excludes the user's data" {
     try temporary.dir.makeDir("data");
     try files.writeNew(temporary.dir, "data/settings.db", "private");
     try files.writeNew(temporary.dir, "src/main.zig", "pub fn main() void {}");
+    try files.writeNew(temporary.dir, "src/app.rc", "1 24 \"app.manifest\"\n");
+    try files.writeNew(temporary.dir, "src/app.manifest", "<assembly/>\n");
     try files.writeNew(temporary.dir, "tools/main.zig", "pub fn main() void {}");
     try files.writeNew(temporary.dir, "tests/integration/startup_test.zig", "pub fn main() void {}");
     try files.writeNew(temporary.dir, "tests/.tmp/old.zig", "old test output");
@@ -389,6 +403,8 @@ test "candidate packaging requires tested bytes and excludes the user's data" {
     try requireSources(scratch, temporary.dir, source_manifest);
     try std.testing.expectError(error.FileNotFound, snapshot.access("data/settings.db", .{}));
     try snapshot.access("src/main.zig", .{});
+    try snapshot.access("src/app.rc", .{});
+    try snapshot.access("src/app.manifest", .{});
     try snapshot.access("tools/main.zig", .{});
     try snapshot.access("tests/integration/startup_test.zig", .{});
     try std.testing.expectError(error.FileNotFound, snapshot.access("tests/.tmp/old.zig", .{}));

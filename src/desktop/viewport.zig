@@ -1,5 +1,6 @@
 const std = @import("std");
 const windows = @import("win.zig");
+const layout_mod = @import("layout.zig");
 const win = windows.api;
 
 pub const wm_focus_changed = win.WM_APP + 55;
@@ -49,6 +50,7 @@ pub const Viewport = struct {
     pending_scroll: ?Position = null,
     posted: bool = false,
     scroll_revision: u64 = 0,
+    batch: win.HDWP = null,
     const Position = struct { x: i32, y: i32 };
 
     pub fn arrange(self: *Viewport, window: win.HWND, owner: anytype, comptime draw: fn (@TypeOf(owner)) void) void {
@@ -67,7 +69,12 @@ pub const Viewport = struct {
             }
             var before: win.RECT = undefined;
             const measured = win.GetWindowRect(window, &before) != 0;
+            self.batch = win.BeginDeferWindowPos(32);
             draw(owner);
+            if (self.batch) |hdwp| {
+                _ = win.EndDeferWindowPos(hdwp);
+                self.batch = null;
+            }
             if (self.owner != window) return;
             if (win.IsWindow(window) == 0) {
                 self.* = .{};
@@ -129,11 +136,27 @@ pub const Viewport = struct {
         return content;
     }
 
-    pub fn place(self: Viewport, dpi: windows.Dpi, hwnd: win.HWND, x: i32, y: i32, width: i32, height: i32) void {
+    pub fn place(self: *Viewport, dpi: windows.Dpi, hwnd: win.HWND, x: i32, y: i32, width: i32, height: i32) void {
         if (hwnd == null) return;
         const left = dpi.pixels(x);
         const top = dpi.pixels(y);
-        _ = win.MoveWindow(hwnd, left - self.x, top - self.y, dpi.pixels(x + width) - left, dpi.pixels(y + height) - top, 1);
+        const px_x = left - self.x;
+        const px_y = top - self.y;
+        const px_w = dpi.pixels(x + width) - left;
+        const px_h = dpi.pixels(y + height) - top;
+        if (self.batch) |hdwp| {
+            const next = win.DeferWindowPos(hdwp, hwnd, null, px_x, px_y, px_w, px_h, win.SWP_NOZORDER | win.SWP_NOACTIVATE);
+            if (next != null) {
+                self.batch = next;
+                return;
+            }
+            self.batch = null;
+        }
+        _ = win.MoveWindow(hwnd, px_x, px_y, px_w, px_h, 1);
+    }
+
+    pub fn placeRect(self: *Viewport, dpi: windows.Dpi, hwnd: win.HWND, rect: layout_mod.Rect) void {
+        self.place(dpi, hwnd, rect.x, rect.y, rect.width, rect.height);
     }
 
     pub fn scroll(self: *Viewport, window: win.HWND, bar: c_int, wparam: win.WPARAM, dpi: windows.Dpi) bool {

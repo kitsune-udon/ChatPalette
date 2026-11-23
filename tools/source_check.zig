@@ -117,10 +117,8 @@ fn legacyBuildInput(path: []const u8) bool {
 
 fn snapshottedInput(path: []const u8) bool {
     if (std.mem.eql(u8, path, "build.zig") or std.mem.eql(u8, path, "build.zig.zon")) return true;
-    if (std.mem.endsWith(u8, path, ".zig")) {
-        inline for (release.source_roots) |root| {
-            if (std.mem.startsWith(u8, path, root ++ "/")) return true;
-        }
+    inline for (release.source_roots) |root| {
+        if (std.mem.startsWith(u8, path, root ++ "/") and release.isSourceFile(root, std.fs.path.basename(path))) return true;
     }
     for (release.packaged_files) |name| if (std.mem.eql(u8, path, name)) return true;
     return false;
@@ -132,7 +130,10 @@ fn checkInput(alloc: std.mem.Allocator, directory: []const u8, input: []const u8
     std.mem.replaceScalar(u8, path, '\\', '/');
     if (build_graph and legacyBuildInput(path)) return error.LegacyBuildDependency;
     switch (kind) {
-        .graph => if (!std.ascii.eqlIgnoreCase(std.fs.path.extension(path), ".zig")) return,
+        .graph => {
+            const ext = std.fs.path.extension(path);
+            if (!std.ascii.eqlIgnoreCase(ext, ".zig") and !std.ascii.eqlIgnoreCase(ext, ".rc") and !std.ascii.eqlIgnoreCase(ext, ".manifest")) return;
+        },
         .import => if (std.mem.indexOfAny(u8, input, "/\\") == null and std.fs.path.extension(input).len == 0) return,
         .embed => {},
     }
@@ -347,6 +348,10 @@ fn checkSourceTree(alloc: std.mem.Allocator, project: std.fs.Dir, source_root: [
             defer alloc.free(path);
             std.mem.replaceScalar(u8, path, '\\', '/');
             try checkZigFile(alloc, entry.dir, entry.basename, path, .zig);
+        } else if (release.isSourceFile(source_root, entry.basename)) {
+            const bytes = try entry.dir.readFileAlloc(alloc, entry.basename, 1024 * 1024);
+            defer alloc.free(bytes);
+            try utf8(bytes);
         } else if (legacyExtension(extension)) {
             std.debug.print("{s}/{s}\n", .{ source_root, entry.path });
             return error.LegacyExecutableSource;
@@ -392,6 +397,7 @@ test "the active build and optional package manifest reject legacy source or com
     try checkZig(alloc, "build.zig",
         \\const description = "Build tools";
         \\const shape = .{ .source = "tests/integration/browser_fixture.zig" };
+        \\const resource = .{ .file = "src/desktop/app.rc" };
         \\const version = @embedFile("VERSION");
     , .zig);
     try std.testing.expectError(error.LegacyBuildDependency, checkZig(alloc, "build.zig",

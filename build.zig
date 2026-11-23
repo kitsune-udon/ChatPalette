@@ -162,6 +162,7 @@ fn createAppModule(
     module.addOptions("app_info", version);
     module.addOptions("app_test_options", test_options);
     module.addImport("shortcut_domain", shortcut_domain);
+    module.addWin32ResourceFile(.{ .file = b.path("src/desktop/app.rc") });
     for ([_][]const u8{ "user32", "shell32", "comctl32", "comdlg32", "gdi32", "ole32", "oleaut32", "winhttp" }) |library|
         module.linkSystemLibrary(library, .{});
     return module;

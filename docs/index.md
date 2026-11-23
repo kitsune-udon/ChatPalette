@@ -21,6 +21,7 @@
 | 配布候補を固定し、ZIPと検証結果を照合する | [リリース手順](developer/guide.md#リリース手順) |
 | 生成済みEXEでリポジトリ直下の本体を更新する | [生成済みEXEをルートにコピーする](developer/guide.md#生成済みexeをルートにコピーする) |
 | 本体とワーカーの役割、入力・設定保存の流れを読む | [設計と状態の所有](developer/architecture.md) |
+| デスクトップUIの描画基盤・レイアウト設計と刷新計画を読む | [UI/UX設計と刷新計画（UI_UPDATE_20261123）](developer/UI_UPDATE_20261123.md) |
 | 変更に合う試験を選び、WindowsやSandboxで実行する | [検証ガイド](developer/testing.md) |
 | 0.8.0と現行版に同じ要求を送り、ワーカーの応答や所要時間を比べる | [ワーカーの比較手順](developer/worker-comparison.md) |
 

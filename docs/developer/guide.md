@@ -100,7 +100,7 @@ if ($LASTEXITCODE -ne 0) { throw '配布候補の固定に失敗しました。'
 
 | 確認するもの | 内容 |
 |---|---|
-| `SOURCE-SHA256SUMS` | `build.zig`、任意の `build.zig.zon`、`src/`・`tools/`・`tests/integration/` のZigファイル、同梱する文書などのハッシュ |
+| `SOURCE-SHA256SUMS` | `build.zig`、任意の `build.zig.zon`、`src/`・`tools/`・`tests/integration/` のZigファイル、`src/` のWindowsリソースファイル（`.rc`・`.manifest`）、同梱する文書などのハッシュ |
 | `ChatPalette-<版>.zip` | `ChatPalette.exe`、`README.md`、`VERSION`、`CHANGELOG.md`、`LICENSE`、`docs/user/` の利用ガイド、`SHA256SUMS` |
 | `SHA256SUMS` | ZIPに収めたEXEと文書などのハッシュ。候補フォルダーにも同じマニフェストがある |
 
